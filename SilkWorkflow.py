@@ -117,9 +117,13 @@ class SilkBoundarySpline(AN.ControlPoly4_3L,
 						"B1 - Boundary",
 						"Input interpretation mode").BoundaryMode = mode
 		obj.addProperty("App::PropertyBool",
+						"ShowControlPoly",
+						"B2 - Preview",
+						"Display the control polyline").ShowControlPoly = True
+		obj.addProperty("App::PropertyBool",
 						"ShowPreviewCurve",
 						"B2 - Preview",
-						"Overlay a cubic curve preview").ShowPreviewCurve = True
+						"Overlay a cubic curve preview").ShowPreviewCurve = False
 		obj.addProperty("Part::PropertyPartShape",
 						"PolyShape",
 						"B3 - Cache",
@@ -193,17 +197,24 @@ class SilkBoundarySpline(AN.ControlPoly4_3L,
 				obj.recompute()
 
 	def _update_display_shape(self, obj):
-		poly_shape = Part.Shape(obj.Legs)
-		obj.PolyShape = poly_shape
+		shapes = []
+		if obj.ShowControlPoly:
+			poly_shape = Part.Shape(obj.Legs)
+			obj.PolyShape = poly_shape
+			shapes.append(poly_shape)
+		else:
+			obj.PolyShape = Part.Shape()
 		if obj.ShowPreviewCurve:
 			weighted = [[obj.Poles[i], obj.Weights[i]] for i in range(len(obj.Poles))]
 			curve = AN.Bezier_Cubic_curve(weighted).toShape()
 			obj.CurveShape = curve
-			comp = Part.Compound([poly_shape, curve])
-			obj.Shape = comp
+			shapes.append(curve)
 		else:
 			obj.CurveShape = Part.Shape()
-			obj.Shape = poly_shape
+		if shapes:
+			obj.Shape = Part.Compound(shapes) if len(shapes) > 1 else shapes[0]
+		else:
+			obj.Shape = Part.Shape()
 
 	def execute(self, obj):
 		if self.boundary_mode == '3L':
