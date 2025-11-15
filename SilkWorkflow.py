@@ -276,6 +276,12 @@ class SilkBoundaryViewProvider:
 	def onDelete(self, feature, subelements):
 		return True
 
+	def canDropObject(self, x):
+		return False
+
+	def getDefaultRepresentation(self):
+		return 'Shaded'
+
 
 class CreateBoundarySplineCommand:
 	def GetResources(self):
