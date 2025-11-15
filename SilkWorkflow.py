@@ -121,11 +121,11 @@ class SilkBoundarySpline(AN.ControlPoly4_3L,
 		obj.addProperty("App::PropertyBool",
 						"ShowControlPoly",
 						"B2 - Preview",
-						"Display the control polyline").ShowControlPoly = True
+						"Display the control polyline").ShowControlPoly = False
 		obj.addProperty("App::PropertyBool",
 						"ShowPreviewCurve",
 						"B2 - Preview",
-						"Overlay a cubic curve preview").ShowPreviewCurve = False
+						"Overlay a cubic curve preview").ShowPreviewCurve = True
 		obj.addProperty("Part::PropertyPartShape",
 						"PolyShape",
 						"B3 - Cache",
