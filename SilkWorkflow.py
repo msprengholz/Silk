@@ -53,6 +53,8 @@ def _create_boundary_feature(mode, payload):
 	obj = doc.addObject("Part::FeaturePython", _make_boundary_label(mode))
 	SilkBoundarySpline(obj, mode, payload)
 	SilkBoundaryViewProvider(obj.ViewObject)
+	obj.ViewObject.DisplayMode = "Flat Lines"
+	obj.ViewObject.Visibility = True
 	obj.ViewObject.LineColor = obj.PolyColor
 	return obj
 
