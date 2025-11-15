@@ -195,6 +195,8 @@ class SilkBoundarySpline(AN.ControlPoly4_3L,
 		elif self.boundary_mode == 'GridEdge':
 			if prop in ("Grid", "EdgeIndex"):
 				obj.recompute()
+		if prop in ("ShowControlPoly", "ShowPreviewCurve"):
+			self._update_display_shape(obj)
 
 	def _update_display_shape(self, obj):
 		shapes = []
