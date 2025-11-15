@@ -535,7 +535,13 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 
 	def execute(self, obj):
 		builder = self._current_builder()
-		builder.execute(self, obj)
+		try:
+			builder.execute(self, obj)
+		except NameError as err:
+			if getattr(err, "name", "") == "please_read_message_above":
+				FreeCAD.Console.PrintError("SilkSurfacePatch: boundary endpoints do not match. Check boundary ordering and tolerances.\n")
+				return
+			raise
 		self._sync_boundaries(obj)
 		self._update_shape(obj)
 
