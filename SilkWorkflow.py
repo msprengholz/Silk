@@ -576,49 +576,49 @@ class SilkPatchViewProvider:
 		return True
 
 
-	class CreateSurfacePatchCommand:
-		def GetResources(self):
-			return {'Pixmap': '',
-					'MenuText': 'Silk SurfacePatch',
-					'ToolTip': PATCH_TIP}
+class CreateSurfacePatchCommand:
+	def GetResources(self):
+		return {'Pixmap': '',
+				'MenuText': 'Silk SurfacePatch',
+				'ToolTip': PATCH_TIP}
 
-		def _collect_boundaries(self):
-			bounds = []
-			created = []
-			selection = Gui.Selection.getSelectionEx()
-			if not selection:
-				selection = [type('Sel', (object,), {'Object': o, 'SubObjects': []}) for o in Gui.Selection.getSelection()]
-			for sel in selection:
-				obj = sel.Object
-				if obj is None:
-					continue
-				if _is_boundary(obj):
+	def _collect_boundaries(self):
+		bounds = []
+		created = []
+		selection = Gui.Selection.getSelectionEx()
+		if not selection:
+			selection = [type('Sel', (object,), {'Object': o, 'SubObjects': []}) for o in Gui.Selection.getSelection()]
+		for sel in selection:
+			obj = sel.Object
+			if obj is None:
+				continue
+			if _is_boundary(obj):
+				bounds.append(obj)
+				continue
+			if hasattr(obj, "object_type") and isinstance(obj.object_type, str):
+				if obj.object_type.startswith("ControlPoly4"):
 					bounds.append(obj)
 					continue
-				if hasattr(obj, "object_type") and isinstance(obj.object_type, str):
-					if obj.object_type.startswith("ControlPoly4"):
-						bounds.append(obj)
-						continue
-				if obj.TypeId == 'Sketcher::SketchObject':
-					if obj.GeometryCount == 3:
-						mode = '3L'
-						payload = {'Sketch': obj}
-					else:
-						mode = 'FirstElement'
-						payload = {'Sketch': obj}
-					new_boundary = _create_boundary_feature(mode, payload)
-					created.append(new_boundary)
-					bounds.append(new_boundary)
-					continue
-				grid_edge = _grid_edge_from_selection(sel)
-				if grid_edge:
-					grid_obj, edge_idx = grid_edge
-					new_boundary = _create_boundary_feature('GridEdge', {'Grid': grid_obj, 'EdgeIndex': edge_idx})
-					created.append(new_boundary)
-					bounds.append(new_boundary)
-			if created:
-				FreeCAD.ActiveDocument.recompute()
-			return bounds
+			if obj.TypeId == 'Sketcher::SketchObject':
+				if obj.GeometryCount == 3:
+					mode = '3L'
+					payload = {'Sketch': obj}
+				else:
+					mode = 'FirstElement'
+					payload = {'Sketch': obj}
+				new_boundary = _create_boundary_feature(mode, payload)
+				created.append(new_boundary)
+				bounds.append(new_boundary)
+				continue
+			grid_edge = _grid_edge_from_selection(sel)
+			if grid_edge:
+				grid_obj, edge_idx = grid_edge
+				new_boundary = _create_boundary_feature('GridEdge', {'Grid': grid_obj, 'EdgeIndex': edge_idx})
+				created.append(new_boundary)
+				bounds.append(new_boundary)
+		if created:
+			FreeCAD.ActiveDocument.recompute()
+		return bounds
 
 	def Activated(self):
 		bounds = self._collect_boundaries()
