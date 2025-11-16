@@ -90,8 +90,12 @@ class Silk (Workbench):
 					"SilkPose",
 					"Silk_CreateBoundarySpline",
 					"Silk_CreateSurfacePatch",
-					"Silk_CreateSurfaceBlend"] 
-					
+					"Silk_CreateSurfaceBlend",
+					"Silk_DebugTrimBoundary",
+					"Silk_DebugPatchEdge",
+					"Silk_DebugBlendExecute",
+					"Silk_DebugBlendSteps"] 
+
 		
 		self.appendToolbar("Silk Commands",self.list) # creates a new toolbar with your commands
 		self.appendMenu("Silk",self.list) # creates a new menu
