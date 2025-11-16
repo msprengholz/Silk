@@ -1722,14 +1722,56 @@ class BlendStepLogger:
             return None, None
 
     def trim_patch_edge(self, patch, edge, span):
-        self.log("Trimming patch %s edge %d with span %s" % (patch.Label, edge, span))
-        segment = {"u_start": span[0], "u_end": span[1]}
-        result = patch.Proxy.get_edge_segment_grid(
-            patch, edge, segment.get("id", ""), False
-        )
+        self.log(f"Trimming patch {patch.Label} edge {edge} with span {span}")
+        entry = self._edge_entry(patch, edge)
+        result = None
+        if entry["segments"]:
+            seg_id = entry["segments"][0]["id"]
+            result = patch.Proxy.get_edge_segment_grid(patch, edge, seg_id, False)
+        if result is None:
+            result = self._manual_edge_segment(patch, edge, entry, span)
         if result is None:
             self.error("  ERROR: no grid returned")
         else:
             grid = result["grid"]
-            self.log("  OK: grid size %dx%d" % (len(grid), len(grid[0])))
+            self.log(f"  OK: grid size {len(grid)}x{len(grid[0])}")
         return result
+
+    def _edge_entry(self, patch, edge):
+        edges = getattr(patch, "EdgeSegments", {}) or {}
+        entry = edges.get(str(edge), {}).copy()
+        defaults = EDGE_PARAM_INFO.get(edge, {})
+        entry.setdefault("axis", defaults.get("axis"))
+        entry.setdefault("perp", defaults.get("perp"))
+        entry.setdefault("perp_value", defaults.get("perp_value"))
+        entry.setdefault("rotation", defaults.get("rotation", 0))
+        entry.setdefault("reversed", False)
+        entry.setdefault("segments", [])
+        return entry
+
+    def _manual_edge_segment(self, patch, edge, entry, span):
+        names = list(getattr(patch, "Boundaries", []))
+        if edge >= len(names):
+            return None
+        boundary = names[edge]
+        if boundary is None or boundary.Proxy is None:
+            return None
+        segment = {"u_start": span[0], "u_end": span[1]}
+        poles, weights = boundary.Proxy.compute_segment_trim(boundary, segment)
+        reverse = entry.get("reversed", False)
+        if reverse:
+            poles = list(reversed(poles))
+            weights = list(reversed(weights))
+        grid = _grid_from_list(patch.Poles)
+        wgrid = _weights_from_list(patch.Weights)
+        axis = entry.get("axis", "u")
+        grid, wgrid = _trim_surface_interval(grid, wgrid, axis, span[0], span[1])
+        rotation = entry.get("rotation", 0)
+        grid = _rotate_grid_ccw(grid, rotation)
+        wgrid = _rotate_grid_ccw(wgrid, rotation)
+        if reverse:
+            for row in grid:
+                row.reverse()
+            for row in wgrid:
+                row.reverse()
+        return {"grid": grid, "weights": wgrid}
