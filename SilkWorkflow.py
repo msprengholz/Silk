@@ -1384,6 +1384,7 @@ Gui.addCommand('Silk_CreateSurfaceBlend', CreateBlendPatchCommand())
 Gui.addCommand('Silk_DebugTrimBoundary', DebugTrimBoundary())
 Gui.addCommand('Silk_DebugPatchEdge', DebugPatchEdge())
 Gui.addCommand('Silk_DebugBlendExecute', DebugBlendExecute())
+Gui.addCommand('Silk_DebugBlendSteps', DebugBlendSteps())
 class DebugBlendSteps:
     def GetResources(self):
         return {'Pixmap': '',
