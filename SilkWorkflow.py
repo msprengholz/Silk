@@ -1385,65 +1385,74 @@ Gui.addCommand('Silk_DebugTrimBoundary', DebugTrimBoundary())
 Gui.addCommand('Silk_DebugPatchEdge', DebugPatchEdge())
 Gui.addCommand('Silk_DebugBlendExecute', DebugBlendExecute())
 class DebugBlendSteps:
-	def GetResources(self):
-		return {'Pixmap': '',
-				'MenuText': 'Silk Debug: Blend Steps',
-				'ToolTip': 'Run individual blend steps (trim, grid, rows) for selected patches.'}
+    def GetResources(self):
+        return {'Pixmap': '',
+                'MenuText': 'Silk Debug: Blend Steps',
+                'ToolTip': 'Run individual blend steps (trim, grid, rows) for selected patches.'}
 
-	def Activated(self):
-		selection = Gui.Selection.getSelection()
-		if not selection:
-			print("Select two SurfacePatches or one SilkBlend object.")
-			return
-		if len(selection) == 1 and isinstance(selection[0].Proxy, SilkBlendPatch):
-			self._run_from_blend(selection[0])
-		elif len(selection) == 2 and all(getattr(obj, "SilkRole", "") == "SilkSurfacePatch" for obj in selection):
-			self._run_from_patches(selection[0], selection[1])
-		else:
-			print("Select either one SilkBlend or two SurfacePatches.")
+    def Activated(self):
+        selection = Gui.Selection.getSelection()
+        if not selection:
+            print("Select two SurfacePatches or one SilkBlend object.")
+            return
+        if len(selection) == 1:
+            blend = selection[0]
+            if isinstance(blend.Proxy, SilkBlendPatch):
+                self._run_from_blend(blend)
+                return
+        if len(selection) == 2:
+            patchCandidates = [obj for obj in selection if getattr(obj, "SilkRole", "") == "SilkSurfacePatch"]
+            if len(patchCandidates) == 2:
+                self._run_from_patches(patchCandidates[0], patchCandidates[1])
+                return
+        print("Select either one SilkBlend object or two SilkSurfacePatches.")
 
-	def _run_from_blend(self, blend):
-		logger = BlendStepLogger()
-		logger.load_from_blend(blend)
-		if not logger.patchA or not logger.patchB:
-			logger.error("Blend has no patches.")
-			return
-		self._run_steps(logger)
+    def _run_from_blend(self, blend):
+        logger = BlendStepLogger()
+        logger.load_from_blend(blend)
+        if not logger.patchA or not logger.patchB:
+            logger.error("Blend has no patches.")
+            return
+        logger.trimA = (blend.TrimStartA, blend.TrimEndA)
+        logger.trimB = (blend.TrimStartB, blend.TrimEndB)
+        self._run_steps(logger)
 
-	def _run_from_patches(self, patch0, patch1):
-		logger = BlendStepLogger()
-		logger.patchA = patch0
-		logger.patchB = patch1
-		logger.edgeA = 0
-		logger.edgeB = 2
-		self._run_steps(logger)
+    def _run_from_patches(self, patch0, patch1):
+        logger = BlendStepLogger()
+        logger.patchA = patch0
+        logger.patchB = patch1
+        logger.edgeA = 0
+        logger.edgeB = 2
+        logger.trimA = (0.0, 1.0)
+        logger.trimB = (0.0, 1.0)
+        self._run_steps(logger)
 
-	def _run_steps(self, logger):
-		logger.log("=== Blend Step Debug ===")
-		logger.log("Patch A: %s edge %d span %s" % (logger.patchA.Label, logger.edgeA, logger.trimA))
-		logger.log("Patch B: %s edge %d span %s" % (logger.patchB.Label, logger.edgeB, logger.trimB))
-		gridA = logger.trim_patch_edge(logger.patchA, logger.edgeA, logger.trimA)
-		gridB = logger.trim_patch_edge(logger.patchB, logger.edgeB, logger.trimB)
-		if not gridA or not gridB:
-			logger.error("Edge grids missing, aborting.")
-			return
-		rows_a = gridA['grid']
-		rows_b = gridB['grid']
-		weights_a = gridA['weights']
-		weights_b = gridB['weights']
-		logger.log("Blending rows...")
-		for i in range(4):
-			logger.log(" row %d" % i)
-			try:
-				row = AN.blend_poly_2x4_1x6(
-					rows_a[i], weights_a[i],
-					rows_b[i], weights_b[i],
-					1.0, 1.0, 1.0, 1.0
-				)
-				logger.log("  OK: row length %d" % len(row[0]))
-			except Exception as exc:
-				logger.error("  ERROR: %s" % exc)
-		logger.log("=== End Blend Step Debug ===")
+    def _run_steps(self, logger):
+        logger.log("=== Blend Step Debug ===")
+        logger.log("Patch A: %s edge %d span %s" % (logger.patchA.Label, logger.edgeA, logger.trimA))
+        logger.log("Patch B: %s edge %d span %s" % (logger.patchB.Label, logger.edgeB, logger.trimB))
+        gridA = logger.trim_patch_edge(logger.patchA, logger.edgeA, logger.trimA)
+        gridB = logger.trim_patch_edge(logger.patchB, logger.edgeB, logger.trimB)
+        if not gridA or not gridB:
+            logger.error("Edge grids missing, aborting.")
+            return
+        rows_a = gridA['grid']
+        rows_b = gridB['grid']
+        weights_a = gridA['weights']
+        weights_b = gridB['weights']
+        logger.log("Blending rows...")
+        for i in range(4):
+            logger.log(" row %d" % i)
+            try:
+                row = AN.blend_poly_2x4_1x6(
+                    rows_a[i], weights_a[i],
+                    rows_b[i], weights_b[i],
+                    1.0, 1.0, 1.0, 1.0
+                )
+                logger.log("  OK: row length %d" % len(row[0]))
+            except Exception as exc:
+                logger.error("  ERROR: %s" % exc)
+        logger.log("=== End Blend Step Debug ===")
 class BlendStepLogger:
 	def __init__(self):
 		self.patchA = None
