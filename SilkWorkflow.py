@@ -2,7 +2,7 @@
 #    (c) Edward Mills 2016-2024
 #    edwardvmills@gmail.com
 #
-#    NURBS Surface modeling tools focused on low degree and seam continuity (FreeCAD Workbench)
+#    NURBS Surface modeling tools for design/engineering (FreeCAD Workbench)
 #
 #    Silk is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -41,12 +41,17 @@ Silk specific metadata, and stores an optional visualization BSpline."""
 PATCH_TIP = """Create a SurfacePatch object from three or four BoundarySplines.
 All selected inputs must share endpoints just like the classic ControlGrid tools."""
 
-SEGMENT_TIP = """Select one Silk BoundarySpline and two Point_onCurve objects referencing it.
-The command will store the normalized trim span so it can be reused for blending."""
+SEGMENT_TIP = (
+    "Select one Silk BoundarySpline and two Point_onCurve objects referencing it.\n"
+    "The command will store the normalized trim span so it can be reused for blending."
+)
 
-BLEND_TIP = """Select two Silk BoundarySplines (one from each patch) that meet at the shared edge.
-They should be the orthogonal boundaries you trimmed for the blend. The tool will create a
-blend patch linking their parent SurfacePatch objects."""
+BLEND_TIP = (
+    "Select two Silk BoundarySplines (one from each patch) "
+    "that meet at the shared edge.\n"
+    "They should be the orthogonal boundaries you trimmed for the blend. "
+    "The tool will create a blend patch linking their parent SurfacePatch objects."
+)
 
 
 def _is_boundary(obj):
@@ -916,7 +921,8 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
         except NameError as err:
             if getattr(err, "name", "") == "please_read_message_above":
                 FreeCAD.Console.PrintError(
-                    "SilkSurfacePatch: boundary endpoints do not match. Check boundary ordering and tolerances.\n"
+                    "SilkSurfacePatch: boundary endpoints do not match. "
+                    "Check boundary ordering and tolerances.\n"
                 )
                 return
             raise
@@ -1526,11 +1532,11 @@ class CreateBlendPatchCommand:
 
 class DebugTrimBoundary:
     def GetResources(self):
-        return {
-            "Pixmap": "",
-            "MenuText": "Silk Debug: Trim Boundary",
-            "ToolTip": "Trim the selected BoundarySpline using current TrimStart/TrimEnd values and print info.",
-        }
+        tip = (
+            "Trim the selected BoundarySpline using current TrimStart/TrimEnd values "
+            "and print info."
+        )
+        return {"Pixmap": "", "MenuText": "Silk Debug: Trim Boundary", "ToolTip": tip}
 
     def Activated(self):
         selection = Gui.Selection.getSelection()
@@ -1579,11 +1585,8 @@ class DebugPatchEdge:
 
 class DebugBlendExecute:
     def GetResources(self):
-        return {
-            "Pixmap": "",
-            "MenuText": "Silk Debug: Blend Execute",
-            "ToolTip": "Run SilkBlend execute with logging for the selected blend object.",
-        }
+        tip = "Run SilkBlend execute with logging for the selected blend object."
+        return {"Pixmap": "", "MenuText": "Silk Debug: Blend Execute", "ToolTip": tip}
 
     def Activated(self):
         selection = Gui.Selection.getSelection()
@@ -1599,11 +1602,8 @@ class DebugBlendExecute:
 
 class DebugBlendSteps:
     def GetResources(self):
-        return {
-            "Pixmap": "",
-            "MenuText": "Silk Debug: Blend Steps",
-            "ToolTip": "Run individual blend steps (trim, grid, rows) for selected patches.",
-        }
+        tip = "Run individual blend steps (trim, grid, rows) for selected patches."
+        return {"Pixmap": "", "MenuText": "Silk Debug: Blend Steps", "ToolTip": tip}
 
     def Activated(self):
         selection = Gui.Selection.getSelection()
