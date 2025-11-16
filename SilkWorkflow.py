@@ -1021,6 +1021,7 @@ class SilkBlendPatch:
 		obj.addProperty("App::PropertyFloatList", "ScaleInnerA", "C1 - Inputs", "Inner scale for patch A").ScaleInnerA = [1.0, 1.0, 1.0, 1.0]
 		obj.addProperty("App::PropertyFloatList", "ScaleInnerB", "C1 - Inputs", "Inner scale for patch B").ScaleInnerB = [1.0, 1.0, 1.0, 1.0]
 		obj.addProperty("App::PropertyBool", "AutoG3", "C1 - Inputs", "Use G3 blending if supported").AutoG3 = False
+		obj.addProperty("App::PropertyBool", "EnableBlend", "C1 - Inputs", "Enable recompute of this blend").EnableBlend = False
 		obj.addProperty("App::PropertyVectorList", "Poles", "C2 - Outputs", "Blend control poles").Poles = []
 		obj.addProperty("App::PropertyFloatList", "Weights", "C2 - Outputs", "Blend weights").Weights = []
 		obj.addProperty("Part::PropertyPartShape", "GridShape", "C3 - Display", "Blend control grid").GridShape = Part.Shape()
@@ -1135,6 +1136,8 @@ class SilkBlendPatch:
 		return result, grid_entry
 
 	def execute(self, obj):
+		if not obj.EnableBlend:
+			return
 		if obj.PatchA is None or obj.PatchB is None:
 			return
 		result_a = self._resolve_segment(obj, 'A')
@@ -1184,6 +1187,9 @@ class SilkBlendPatch:
 		obj.Shape = Part.Compound([obj.SurfaceShape, obj.GridShape])
 
 	def debug_execute(self, obj):
+		if not obj.EnableBlend:
+			FreeCAD.Console.PrintMessage("Blend execution disabled (EnableBlend = False).\n")
+			return
 		FreeCAD.Console.PrintMessage("Resolving blend segments...\n")
 		result_a = self._resolve_segment(obj, 'A')
 		result_b = self._resolve_segment(obj, 'B')
