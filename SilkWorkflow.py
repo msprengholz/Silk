@@ -18,9 +18,11 @@
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import division
+import copy
 import FreeCAD
 import FreeCADGui as Gui
 import Part
+from FreeCAD import Base
 
 from popup import tipsDialog
 import Silk_tooltips
@@ -38,6 +40,9 @@ Silk specific metadata, and stores an optional visualization BSpline."""
 
 PATCH_TIP = """Create a SurfacePatch object from three or four BoundarySplines.
 All selected inputs must share endpoints just like the classic ControlGrid tools."""
+
+SEGMENT_TIP = """Select one Silk BoundarySpline and two Point_onCurve objects referencing it.
+The command will store the normalized trim span so it can be reused for blending."""
 
 
 def _is_boundary(obj):
@@ -73,6 +78,116 @@ EDGE_POLE_SEQUENCE = {
 	2: [15, 14, 13, 12],
 	3: [12, 8, 4, 0],
 }
+
+EDGE_PARAM_INFO = {
+	0: {'axis': 'u', 'perp': 'v', 'perp_value': 0.0},
+	1: {'axis': 'v', 'perp': 'u', 'perp_value': 1.0},
+	2: {'axis': 'u', 'perp': 'v', 'perp_value': 1.0},
+	3: {'axis': 'v', 'perp': 'u', 'perp_value': 0.0},
+}
+
+
+def _clamp_01(value):
+	try:
+		val = float(value)
+	except (TypeError, ValueError):
+		val = 0.0
+	return max(0.0, min(1.0, val))
+
+
+def _to_homogeneous(vec, weight):
+	return (vec.x * weight, vec.y * weight, vec.z * weight, weight)
+
+
+def _lerp_homogeneous(a, b, t):
+	return tuple((1 - t) * a[i] + t * b[i] for i in range(4))
+
+
+def _from_homogeneous(entry, eps=1e-12):
+	w = entry[3]
+	if abs(w) < eps:
+		w = eps
+	return Base.Vector(entry[0] / w, entry[1] / w, entry[2] / w), w
+
+
+def _split_rational_bezier(poles, weights, t):
+	t = _clamp_01(t)
+	n = len(poles)
+	if n == 0:
+		return ([], []), ([], [])
+	homo = [_to_homogeneous(poles[i], weights[i]) for i in range(n)]
+	levels = [homo]
+	for r in range(1, n):
+		prev = levels[-1]
+		curr = []
+		for i in range(len(prev) - 1):
+			curr.append(_lerp_homogeneous(prev[i], prev[i + 1], t))
+		levels.append(curr)
+	left = [level[0] for level in levels]
+	right = [level[-1] for level in reversed(levels)]
+	left_pairs = [_from_homogeneous(item) for item in left]
+	right_pairs = [_from_homogeneous(item) for item in right]
+	left_poles = [pair[0] for pair in left_pairs]
+	left_weights = [pair[1] for pair in left_pairs]
+	right_poles = [pair[0] for pair in right_pairs]
+	right_weights = [pair[1] for pair in right_pairs]
+	return (left_poles, left_weights), (right_poles, right_weights)
+
+
+def _trim_rational_segment(poles, weights, u_start, u_end):
+	u_start = _clamp_01(u_start)
+	u_end = _clamp_01(u_end)
+	if u_end <= u_start:
+		raise ValueError("segment end must be greater than start")
+	current_poles = list(poles)
+	current_weights = list(weights)
+	if u_start > 0.0:
+		_, right = _split_rational_bezier(current_poles, current_weights, u_start)
+		current_poles, current_weights = right
+	if u_end < 1.0:
+		den = 1.0 - u_start
+		t = (u_end - u_start) / den if den > 1e-12 else 0.0
+		left, _ = _split_rational_bezier(current_poles, current_weights, t)
+		current_poles, current_weights = left
+	return current_poles, current_weights
+
+
+def _weighted_poles(poles, weights):
+	return [[poles[i], weights[i]] for i in range(len(poles))]
+
+
+def _make_segment_copy(segment):
+	return {
+		'id': segment.get('id'),
+		'label': segment.get('label'),
+		'u_start': segment.get('u_start'),
+		'u_end': segment.get('u_end'),
+	}
+
+
+def _segment_list(obj):
+	segs = getattr(obj, "BlendSegments", [])
+	return segs if isinstance(segs, list) else []
+
+
+def _next_segment_id(obj):
+	counter = getattr(obj, "SegmentCounter", 1)
+	seg_id = "{}_seg{}".format(obj.Name, counter)
+	obj.SegmentCounter = counter + 1
+	return seg_id
+
+
+def _create_segment_entry(obj, u_start, u_end, label=None, initial=False):
+	if initial:
+		seg_id = "{}_seg0".format(obj.Name)
+	else:
+		seg_id = _next_segment_id(obj)
+	return {
+		'id': seg_id,
+		'label': label or seg_id,
+		'u_start': _clamp_01(u_start),
+		'u_end': _clamp_01(u_end),
+	}
 
 
 def _grid_edge_from_selection(sel_ex):
@@ -150,6 +265,11 @@ class SilkBoundarySpline(AN.ControlPoly4_3L,
 						"BlendSegments",
 						"B4 - Blending",
 						"Stored blend segments for this boundary").BlendSegments = []
+		obj.addProperty("App::PropertyInteger",
+						"SegmentCounter",
+						"B4 - Blending",
+						"Next segment identifier").SegmentCounter = 1
+		obj.BlendSegments = [_create_segment_entry(obj, 0.0, 1.0, "Full", initial=True)]
 		obj.Proxy = self
 
 	def _init_inputs(self, obj, payload):
@@ -184,6 +304,51 @@ class SilkBoundarySpline(AN.ControlPoly4_3L,
 							"control segments").Legs
 		else:
 			raise ValueError("Unsupported BoundarySpline mode {}".format(self.boundary_mode))
+
+	def onDocumentRestored(self, obj):
+		if not hasattr(obj, "SegmentCounter"):
+			obj.addProperty("App::PropertyInteger",
+							"SegmentCounter",
+							"B4 - Blending",
+							"Next segment identifier").SegmentCounter = max(1, len(_segment_list(obj)))
+		segs = _segment_list(obj)
+		if not segs:
+			obj.BlendSegments = [_create_segment_entry(obj, 0.0, 1.0, "Full", initial=True)]
+
+	def get_segments(self, obj):
+		return copy.deepcopy(_segment_list(obj))
+
+	def get_segment_by_id(self, obj, seg_id):
+		for seg in _segment_list(obj):
+			if seg.get('id') == seg_id:
+				return seg
+		return None
+
+	def compute_segment_trim(self, obj, segment):
+		poles = list(obj.Poles)
+		weights = list(obj.Weights)
+		if not poles or not weights:
+			return None, None
+		u_start = segment.get('u_start', 0.0)
+		u_end = segment.get('u_end', 1.0)
+		try:
+			return _trim_rational_segment(poles, weights, u_start, u_end)
+		except ValueError:
+			return poles, weights
+
+	def compute_segment_shape(self, obj, segment):
+		poles, weights = self.compute_segment_trim(obj, segment)
+		if not poles or not weights:
+			return Part.Shape()
+		return AN.Bezier_Cubic_curve(_weighted_poles(poles, weights)).toShape()
+
+	def add_segment(self, obj, u_start, u_end, label=None):
+		segment = _create_segment_entry(obj, u_start, u_end, label)
+		segs = _segment_list(obj)
+		segs.append(segment)
+		obj.BlendSegments = segs
+		obj.touch()
+		return segment
 
 	def onChanged(self, obj, prop):
 		if self.boundary_mode == '3L':
@@ -418,19 +583,46 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 							"EdgeSegments",
 							"P4 - Blending",
 							"Per-edge blend segment references").EdgeSegments = {}
-		current = getattr(obj, "EdgeSegments", {}) or {}
 		names = self._poly_names_for()
 		updated = {}
 		for idx, name in enumerate(names):
 			boundary_obj = getattr(obj, name, None)
 			if boundary_obj is None:
 				continue
-			key = str(idx)
-			entry = current.get(key, {})
-			if entry.get('boundary') != boundary_obj.Name:
-				entry = {'boundary': boundary_obj.Name, 'segments': []}
-			updated[key] = entry
+			segments = []
+			if hasattr(boundary_obj, "Proxy") and hasattr(boundary_obj.Proxy, "get_segments"):
+				for seg in boundary_obj.Proxy.get_segments(boundary_obj):
+					segments.append(_make_segment_copy(seg))
+			info = EDGE_PARAM_INFO.get(idx, {})
+			entry = {
+				'boundary': boundary_obj.Name,
+				'reversed': self._edge_uses_reversed_boundary(obj, boundary_obj, idx),
+				'axis': info.get('axis'),
+				'perp': info.get('perp'),
+				'perp_value': info.get('perp_value'),
+				'segments': segments,
+			}
+			updated[str(idx)] = entry
 		obj.EdgeSegments = updated
+
+	def _edge_uses_reversed_boundary(self, obj, boundary, edge_index):
+		grid_poles = getattr(obj, "Poles", [])
+		seq = EDGE_POLE_SEQUENCE.get(edge_index, [])
+		if not grid_poles or not seq:
+			return False
+		try:
+			grid_edge = [grid_poles[i] for i in seq]
+		except IndexError:
+			return False
+		boundary_poles = list(getattr(boundary, "Poles", []))
+		if len(boundary_poles) != len(grid_edge):
+			return False
+		tol = getattr(AN, "default_tol", 1e-6)
+		if AN.equalVectors(boundary_poles[0], grid_edge[0], tol) and AN.equalVectors(boundary_poles[-1], grid_edge[-1], tol):
+			return False
+		if AN.equalVectors(boundary_poles[0], grid_edge[-1], tol) and AN.equalVectors(boundary_poles[-1], grid_edge[0], tol):
+			return True
+		return False
 
 	def _capture_patch_settings(self, obj):
 		settings = {}
@@ -579,6 +771,35 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 		self._sync_boundaries(obj)
 		self._update_shape(obj)
 
+	def get_edge_segment_geometry(self, obj, edge_index, segment_id):
+		names = self._poly_names_for()
+		if edge_index >= len(names):
+			return None
+		boundary = getattr(obj, names[edge_index], None)
+		if boundary is None or not hasattr(boundary, "Proxy"):
+			return None
+		segment = boundary.Proxy.get_segment_by_id(boundary, segment_id)
+		if segment is None:
+			return None
+		poles, weights = boundary.Proxy.compute_segment_trim(boundary, segment)
+		if not poles or not weights:
+			return None
+		entry = (getattr(obj, "EdgeSegments", {}) or {}).get(str(edge_index), {})
+		if entry.get('reversed'):
+			poles = list(reversed(poles))
+			weights = list(reversed(weights))
+		shape = AN.Bezier_Cubic_curve(_weighted_poles(poles, weights)).toShape()
+		return {
+			'boundary': boundary,
+			'segment': segment,
+			'poles': poles,
+			'weights': weights,
+			'shape': shape,
+			'axis': entry.get('axis'),
+			'perp': entry.get('perp'),
+			'perp_value': entry.get('perp_value'),
+		}
+
 
 class SilkPatchViewProvider:
 	def __init__(self, obj):
@@ -662,5 +883,45 @@ class CreateSurfacePatchCommand:
 		doc.recompute()
 
 
+class CreateBlendSegmentCommand:
+	def GetResources(self):
+		return {'Pixmap': '',
+				'MenuText': 'Silk Blend Segment',
+				'ToolTip': SEGMENT_TIP}
+
+	def _collect_inputs(self):
+		boundary = None
+		points = []
+		for obj in Gui.Selection.getSelection():
+			if _is_boundary(obj):
+				boundary = obj
+			elif getattr(obj, "object_type", "") == "Point_onCurve":
+				points.append(obj)
+		if boundary is None and points:
+			ref = getattr(points[0], "NL_Curve", None)
+			if ref and _is_boundary(ref):
+				boundary = ref
+		if boundary is None:
+			return None, []
+		filtered = [pt for pt in points if getattr(pt, "NL_Curve", None) == boundary]
+		return boundary, filtered
+
+	def Activated(self):
+		boundary, points = self._collect_inputs()
+		if boundary is None or len(points) < 2:
+			tipsDialog("Silk: Blend Segment", SEGMENT_TIP)
+			return
+		u_values = sorted([float(points[0].u), float(points[1].u)])
+		if boundary.Proxy is None or not hasattr(boundary.Proxy, "add_segment"):
+			FreeCAD.Console.PrintError("Selected object is not a Silk BoundarySpline.\n")
+			return
+		segment = boundary.Proxy.add_segment(boundary, u_values[0], u_values[1])
+		FreeCAD.Console.PrintMessage(
+			"Added blend segment {} to {}\n".format(segment['id'], boundary.Label)
+		)
+		FreeCAD.ActiveDocument.recompute()
+
+
 Gui.addCommand('Silk_CreateBoundarySpline', CreateBoundarySplineCommand())
 Gui.addCommand('Silk_CreateSurfacePatch', CreateSurfacePatchCommand())
+Gui.addCommand('Silk_CreateBlendSegment', CreateBlendSegmentCommand())
