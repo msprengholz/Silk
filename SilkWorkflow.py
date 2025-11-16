@@ -1257,11 +1257,6 @@ class CreateBlendPatchCommand:
 		return None
 
 
-Gui.addCommand('Silk_CreateBoundarySpline', CreateBoundarySplineCommand())
-Gui.addCommand('Silk_CreateSurfacePatch', CreateSurfacePatchCommand())
-Gui.addCommand('Silk_CreateSurfaceBlend', CreateBlendPatchCommand())
-Gui.addCommand('Silk_DebugTrimBoundary', DebugTrimBoundary())
-Gui.addCommand('Silk_DebugPatchEdge', DebugPatchEdge())
 class DebugTrimBoundary:
 	def GetResources(self):
 		return {'Pixmap': '',
@@ -1300,3 +1295,10 @@ class DebugPatchEdge:
 			print("Edge", edge, "segments:", len(segments))
 			for seg in segments:
 				print("  ", seg.get('id'), seg.get('u_start'), seg.get('u_end'))
+
+
+Gui.addCommand('Silk_CreateBoundarySpline', CreateBoundarySplineCommand())
+Gui.addCommand('Silk_CreateSurfacePatch', CreateSurfacePatchCommand())
+Gui.addCommand('Silk_CreateSurfaceBlend', CreateBlendPatchCommand())
+Gui.addCommand('Silk_DebugTrimBoundary', DebugTrimBoundary())
+Gui.addCommand('Silk_DebugPatchEdge', DebugPatchEdge())
