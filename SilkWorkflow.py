@@ -1260,3 +1260,43 @@ class CreateBlendPatchCommand:
 Gui.addCommand('Silk_CreateBoundarySpline', CreateBoundarySplineCommand())
 Gui.addCommand('Silk_CreateSurfacePatch', CreateSurfacePatchCommand())
 Gui.addCommand('Silk_CreateSurfaceBlend', CreateBlendPatchCommand())
+Gui.addCommand('Silk_DebugTrimBoundary', DebugTrimBoundary())
+Gui.addCommand('Silk_DebugPatchEdge', DebugPatchEdge())
+class DebugTrimBoundary:
+	def GetResources(self):
+		return {'Pixmap': '',
+				'MenuText': 'Silk Debug: Trim Boundary',
+				'ToolTip': 'Trim the selected BoundarySpline using current TrimStart/TrimEnd values and print info.'}
+
+	def Activated(self):
+		selection = Gui.Selection.getSelection()
+		if len(selection) != 1 or not _is_boundary(selection[0]):
+			print("Select exactly one Silk BoundarySpline.")
+			return
+		boundary = selection[0]
+		segment = {'u_start': getattr(boundary, "TrimStart", 0.0) if hasattr(boundary, "TrimStart") else 0.0,
+				   'u_end': getattr(boundary, "TrimEnd", 1.0) if hasattr(boundary, "TrimEnd") else 1.0}
+		poles, weights = boundary.Proxy.compute_segment_trim(boundary, segment)
+		print("Trimmed boundary:", boundary.Label)
+		print("  segment:", segment)
+		print("  #poles:", len(poles), "first:", poles[0], "last:", poles[-1])
+
+
+class DebugPatchEdge:
+	def GetResources(self):
+		return {'Pixmap': '',
+				'MenuText': 'Silk Debug: Patch Edge',
+				'ToolTip': 'Print edge segment info for selected SurfacePatch.'}
+
+	def Activated(self):
+		selection = Gui.Selection.getSelection()
+		if len(selection) != 1 or getattr(selection[0], "SilkRole", "") != "SilkSurfacePatch":
+			print("Select exactly one Silk SurfacePatch.")
+			return
+		patch = selection[0]
+		for edge in range(4):
+			entry = (getattr(patch, "EdgeSegments", {}) or {}).get(str(edge), {})
+			segments = entry.get('segments', [])
+			print("Edge", edge, "segments:", len(segments))
+			for seg in segments:
+				print("  ", seg.get('id'), seg.get('u_start'), seg.get('u_end'))
