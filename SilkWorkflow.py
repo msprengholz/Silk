@@ -1183,6 +1183,63 @@ class SilkBlendPatch:
 		obj.SurfaceShape = AN.NURBS_Cubic_64_surf(weighted).toShape()
 		obj.Shape = Part.Compound([obj.SurfaceShape, obj.GridShape])
 
+	def debug_execute(self, obj):
+		FreeCAD.Console.PrintMessage("Resolving blend segments...\n")
+		result_a = self._resolve_segment(obj, 'A')
+		result_b = self._resolve_segment(obj, 'B')
+		if result_a is None or result_b is None:
+			FreeCAD.Console.PrintError("Blend segments not available on selected edges.\n")
+			return
+		geom_a, grid_a = result_a
+		geom_b, grid_b = result_b
+		FreeCAD.Console.PrintMessage("Segments resolved. Building rows...\n")
+		rows_a = grid_a['grid']
+		rows_b = grid_b['grid']
+		weights_a = grid_a['weights']
+		weights_b = grid_b['weights']
+		scale_inner_a = obj.ScaleInnerA if len(obj.ScaleInnerA) == 4 else [1.0] * 4
+		scale_inner_b = obj.ScaleInnerB if len(obj.ScaleInnerB) == 4 else [1.0] * 4
+		blend_poles = []
+		blend_weights = []
+		for i in range(4):
+			FreeCAD.Console.PrintMessage("  blending row %d\n" % i)
+			if obj.AutoG3:
+				row = AN.blendG3_poly_2x4_1x6(
+					rows_a[i], weights_a[i],
+					rows_b[i], weights_b[i],
+					obj.ScaleTangentA,
+					scale_inner_a[i],
+					scale_inner_b[i],
+					obj.ScaleTangentB
+				)
+			else:
+				row = AN.blend_poly_2x4_1x6(
+					rows_a[i], weights_a[i],
+					rows_b[i], weights_b[i],
+					obj.ScaleTangentA,
+					scale_inner_a[i],
+					scale_inner_b[i],
+					obj.ScaleTangentB
+				)
+			FreeCAD.Console.PrintMessage("    row poles: %d\n" % len(row[0]))
+			blend_poles.extend(row[0])
+			blend_weights.extend(row[1])
+		FreeCAD.Console.PrintMessage("Stacking blend grid...\n")
+		obj.Poles = blend_poles
+		obj.Weights = blend_weights
+		try:
+			grid_shape = Part.Shape(AN.drawGrid(obj.Poles, 6))
+			weighted = [[obj.Poles[i], obj.Weights[i]] for i in range(len(obj.Poles))]
+			FreeCAD.Console.PrintMessage("Generating NURBS surface...\n")
+			surface_shape = AN.NURBS_Cubic_64_surf(weighted).toShape()
+		except Exception as exc:
+			FreeCAD.Console.PrintError("Blend surface creation failed: %s\n" % exc)
+			return
+		obj.GridShape = grid_shape
+		obj.SurfaceShape = surface_shape
+		obj.Shape = Part.Compound([obj.SurfaceShape, obj.GridShape])
+		FreeCAD.Console.PrintMessage("SilkBlend debug execute finished.\n")
+
 
 class SilkBlendViewProvider:
 	def __init__(self, obj):
@@ -1297,8 +1354,27 @@ class DebugPatchEdge:
 				print("  ", seg.get('id'), seg.get('u_start'), seg.get('u_end'))
 
 
+class DebugBlendExecute:
+	def GetResources(self):
+		return {'Pixmap': '',
+				'MenuText': 'Silk Debug: Blend Execute',
+				'ToolTip': 'Run SilkBlend execute with logging for the selected blend object.'}
+
+	def Activated(self):
+		selection = Gui.Selection.getSelection()
+		if len(selection) != 1 or not hasattr(selection[0], "Proxy"):
+			print("Select exactly one Silk blend object.")
+			return
+		obj = selection[0]
+		if not isinstance(obj.Proxy, SilkBlendPatch):
+			print("Selected object is not a Silk blend.")
+			return
+		obj.Proxy.debug_execute(obj)
+
+
 Gui.addCommand('Silk_CreateBoundarySpline', CreateBoundarySplineCommand())
 Gui.addCommand('Silk_CreateSurfacePatch', CreateSurfacePatchCommand())
 Gui.addCommand('Silk_CreateSurfaceBlend', CreateBlendPatchCommand())
 Gui.addCommand('Silk_DebugTrimBoundary', DebugTrimBoundary())
 Gui.addCommand('Silk_DebugPatchEdge', DebugPatchEdge())
+Gui.addCommand('Silk_DebugBlendExecute', DebugBlendExecute())
