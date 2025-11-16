@@ -80,10 +80,10 @@ EDGE_POLE_SEQUENCE = {
 }
 
 EDGE_PARAM_INFO = {
-	0: {'axis': 'u', 'perp': 'v', 'perp_value': 0.0},
-	1: {'axis': 'v', 'perp': 'u', 'perp_value': 1.0},
-	2: {'axis': 'u', 'perp': 'v', 'perp_value': 1.0},
-	3: {'axis': 'v', 'perp': 'u', 'perp_value': 0.0},
+	0: {'axis': 'v', 'perp': 'u', 'perp_value': 0.0, 'rotation': 0},
+	1: {'axis': 'u', 'perp': 'v', 'perp_value': 1.0, 'rotation': 1},
+	2: {'axis': 'v', 'perp': 'u', 'perp_value': 1.0, 'rotation': 2},
+	3: {'axis': 'u', 'perp': 'v', 'perp_value': 0.0, 'rotation': 3},
 }
 
 
@@ -188,6 +188,82 @@ def _create_segment_entry(obj, u_start, u_end, label=None, initial=False):
 		'u_start': _clamp_01(u_start),
 		'u_end': _clamp_01(u_end),
 	}
+
+
+def _grid_from_list(poles):
+	return [[poles[i * 4 + j] for j in range(4)] for i in range(4)]
+
+
+def _weights_from_list(weights):
+	return [[weights[i * 4 + j] for j in range(4)] for i in range(4)]
+
+
+def _flatten_grid(grid):
+	return [grid[i][j] for i in range(4) for j in range(4)]
+
+
+def _transpose_grid(grid):
+	return [[grid[j][i] for j in range(4)] for i in range(4)]
+
+
+def _split_surface_axis(grid, weights, axis, t):
+	if axis == 'u':
+		left_rows = []
+		left_weights = []
+		right_rows = []
+		right_weights = []
+		for i in range(4):
+			(left_curve, left_w), (right_curve, right_w) = _split_rational_bezier(grid[i], weights[i], t)
+			left_rows.append(left_curve)
+			left_weights.append(left_w)
+			right_rows.append(right_curve)
+			right_weights.append(right_w)
+		return (left_rows, left_weights), (right_rows, right_weights)
+	elif axis == 'v':
+		trans_grid = _transpose_grid(grid)
+		trans_weights = _transpose_grid(weights)
+		left_cols = []
+		left_col_weights = []
+		right_cols = []
+		right_col_weights = []
+		for i in range(4):
+			(left_curve, left_w), (right_curve, right_w) = _split_rational_bezier(trans_grid[i], trans_weights[i], t)
+			left_cols.append(left_curve)
+			left_col_weights.append(left_w)
+			right_cols.append(right_curve)
+			right_col_weights.append(right_w)
+		left = _transpose_grid(left_cols)
+		right = _transpose_grid(right_cols)
+		left_weights = _transpose_grid(left_col_weights)
+		right_weights = _transpose_grid(right_col_weights)
+		return (left, left_weights), (right, right_weights)
+	else:
+		return (grid, weights), (grid, weights)
+
+
+def _trim_surface_interval(grid, weights, axis, start, end):
+	if axis not in ('u', 'v'):
+		return grid, weights
+	start = _clamp_01(start)
+	end = _clamp_01(end)
+	if end <= start:
+		return grid, weights
+	_, right = _split_surface_axis(grid, weights, axis, start)
+	grid_after_start, weights_after_start = right
+	span = end - start
+	den = 1.0 - start
+	t = span / den if den > 1e-12 else 0.0
+	left_tuple, _ = _split_surface_axis(grid_after_start, weights_after_start, axis, t)
+	left_grid, left_weights = left_tuple
+	return left_grid, left_weights
+
+
+def _rotate_grid_ccw(grid, count):
+	count = count % 4
+	result = grid
+	for _ in range(count):
+		result = [list(row) for row in zip(*result[::-1])]
+	return result
 
 
 def _grid_edge_from_selection(sel_ex):
@@ -800,6 +876,39 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 			'perp_value': entry.get('perp_value'),
 		}
 
+	def get_edge_segment_grid(self, obj, edge_index, segment_id):
+		entry = (getattr(obj, "EdgeSegments", {}) or {}).get(str(edge_index))
+		if not entry:
+			return None
+		segment = None
+		for seg in entry.get('segments', []):
+			if seg.get('id') == segment_id:
+				segment = seg
+				break
+		if segment is None:
+			return None
+		grid = _grid_from_list(obj.Poles)
+		weights = _weights_from_list(obj.Weights)
+		axis = entry.get('axis', 'v')
+		start = segment.get('u_start', 0.0)
+		end = segment.get('u_end', 1.0)
+		grid, weights = _trim_surface_interval(grid, weights, axis, start, end)
+		info = EDGE_PARAM_INFO.get(edge_index, {'rotation': 0})
+		rotation = info.get('rotation', 0)
+		grid = _rotate_grid_ccw(grid, rotation)
+		weights = _rotate_grid_ccw(weights, rotation)
+		if entry.get('reversed'):
+			for row in grid:
+				row.reverse()
+			for row in weights:
+				row.reverse()
+		return {
+			'grid': grid,
+			'weights': weights,
+			'flat_poles': _flatten_grid(grid),
+			'flat_weights': _flatten_grid(weights),
+		}
+
 
 class SilkPatchViewProvider:
 	def __init__(self, obj):
@@ -922,6 +1031,152 @@ class CreateBlendSegmentCommand:
 		FreeCAD.ActiveDocument.recompute()
 
 
+class SilkBlendPatch:
+	def __init__(self, obj, patch_a, patch_b):
+		obj.addProperty("App::PropertyLink", "PatchA", "C1 - Inputs", "First surface patch").PatchA = patch_a
+		obj.addProperty("App::PropertyLink", "PatchB", "C1 - Inputs", "Second surface patch").PatchB = patch_b
+		obj.addProperty("App::PropertyInteger", "EdgeIndexA", "C1 - Inputs", "Edge index on patch A").EdgeIndexA = 0
+		obj.addProperty("App::PropertyInteger", "EdgeIndexB", "C1 - Inputs", "Edge index on patch B").EdgeIndexB = 2
+		obj.addProperty("App::PropertyString", "SegmentIdA", "C1 - Inputs", "Segment identifier on patch A").SegmentIdA = ""
+		obj.addProperty("App::PropertyString", "SegmentIdB", "C1 - Inputs", "Segment identifier on patch B").SegmentIdB = ""
+		obj.addProperty("App::PropertyFloat", "ScaleTangentA", "C1 - Inputs", "Tangent scale for patch A").ScaleTangentA = 1.0
+		obj.addProperty("App::PropertyFloat", "ScaleTangentB", "C1 - Inputs", "Tangent scale for patch B").ScaleTangentB = 1.0
+		obj.addProperty("App::PropertyFloatList", "ScaleInnerA", "C1 - Inputs", "Inner scale for patch A").ScaleInnerA = [1.0, 1.0, 1.0, 1.0]
+		obj.addProperty("App::PropertyFloatList", "ScaleInnerB", "C1 - Inputs", "Inner scale for patch B").ScaleInnerB = [1.0, 1.0, 1.0, 1.0]
+		obj.addProperty("App::PropertyBool", "AutoG3", "C1 - Inputs", "Use G3 blending if supported").AutoG3 = False
+		obj.addProperty("App::PropertyVectorList", "Poles", "C2 - Outputs", "Blend control poles").Poles = []
+		obj.addProperty("App::PropertyFloatList", "Weights", "C2 - Outputs", "Blend weights").Weights = []
+		obj.addProperty("Part::PropertyPartShape", "GridShape", "C3 - Display", "Blend control grid").GridShape = Part.Shape()
+		obj.addProperty("Part::PropertyPartShape", "SurfaceShape", "C3 - Display", "Blend surface").SurfaceShape = Part.Shape()
+		obj.Proxy = self
+
+	def onChanged(self, obj, prop):
+		if prop in ("EdgeIndexA", "EdgeIndexB"):
+			obj.EdgeIndexA = max(0, min(3, int(obj.EdgeIndexA)))
+			obj.EdgeIndexB = max(0, min(3, int(obj.EdgeIndexB)))
+
+	def _default_segment(self, patch, edge_index):
+		entry = (getattr(patch, "EdgeSegments", {}) or {}).get(str(edge_index))
+		if not entry:
+			return None
+		segs = entry.get('segments', [])
+		return segs[0]['id'] if segs else None
+
+	def _resolve_segment(self, obj, which):
+		if which == 'A':
+			patch = obj.PatchA
+			edge = obj.EdgeIndexA
+			seg_id = obj.SegmentIdA
+		else:
+			patch = obj.PatchB
+			edge = obj.EdgeIndexB
+			seg_id = obj.SegmentIdB
+		if patch is None or patch.Proxy is None:
+			return None
+		entry = (getattr(patch, "EdgeSegments", {}) or {}).get(str(edge))
+		if not entry or not entry.get('segments'):
+			return None
+		if not seg_id or not any(seg.get('id') == seg_id for seg in entry['segments']):
+			seg_id = self._default_segment(patch, edge)
+			if which == 'A':
+				obj.SegmentIdA = seg_id or ""
+			else:
+				obj.SegmentIdB = seg_id or ""
+		if not seg_id:
+			return None
+		geom = patch.Proxy.get_edge_segment_geometry(patch, edge, seg_id)
+		grid = patch.Proxy.get_edge_segment_grid(patch, edge, seg_id)
+		return geom, grid
+
+	def execute(self, obj):
+		if obj.PatchA is None or obj.PatchB is None:
+			return
+		result_a = self._resolve_segment(obj, 'A')
+		result_b = self._resolve_segment(obj, 'B')
+		if result_a is None or result_b is None:
+			FreeCAD.Console.PrintError("Blend segments not available on selected edges.\n")
+			return
+		geom_a, grid_a = result_a
+		geom_b, grid_b = result_b
+		if not grid_a or not grid_b:
+			FreeCAD.Console.PrintError("Could not extract trimmed grids for blend.\n")
+			return
+		rows_a = grid_a['grid']
+		rows_b = grid_b['grid']
+		weights_a = grid_a['weights']
+		weights_b = grid_b['weights']
+		scale_inner_a = obj.ScaleInnerA if len(obj.ScaleInnerA) == 4 else [1.0] * 4
+		scale_inner_b = obj.ScaleInnerB if len(obj.ScaleInnerB) == 4 else [1.0] * 4
+		blend_poles = []
+		blend_weights = []
+		for i in range(4):
+			if obj.AutoG3:
+				row = AN.blendG3_poly_2x4_1x6(
+					rows_a[i], weights_a[i],
+					rows_b[i], weights_b[i],
+					obj.ScaleTangentA,
+					scale_inner_a[i],
+					scale_inner_b[i],
+					obj.ScaleTangentB
+				)
+			else:
+				row = AN.blend_poly_2x4_1x6(
+					rows_a[i], weights_a[i],
+					rows_b[i], weights_b[i],
+					obj.ScaleTangentA,
+					scale_inner_a[i],
+					scale_inner_b[i],
+					obj.ScaleTangentB
+				)
+			blend_poles.extend(row[0])
+			blend_weights.extend(row[1])
+		obj.Poles = blend_poles
+		obj.Weights = blend_weights
+		obj.GridShape = Part.Shape(AN.drawGrid(obj.Poles, 6))
+		weighted = [[obj.Poles[i], obj.Weights[i]] for i in range(len(obj.Poles))]
+		obj.SurfaceShape = AN.NURBS_Cubic_64_surf(weighted).toShape()
+		obj.Shape = Part.Compound([obj.SurfaceShape, obj.GridShape])
+
+
+class SilkBlendViewProvider:
+	def __init__(self, obj):
+		obj.Proxy = self
+
+	def attach(self, vobj):
+		self.Object = vobj.Object
+
+	def getDisplayModes(self, obj):
+		return ["Shaded", "Flat Lines", "Wireframe"]
+
+	def getDefaultDisplayMode(self):
+		return "Shaded"
+
+	def setDisplayMode(self, mode):
+		return mode
+
+	def onDelete(self, feature, subelements):
+		return True
+
+
+class CreateBlendPatchCommand:
+	def GetResources(self):
+		return {'Pixmap': '',
+				'MenuText': 'Silk SurfaceBlend',
+				'ToolTip': 'Create a blend surface between two Silk patches.'}
+
+	def Activated(self):
+		patches = [obj for obj in Gui.Selection.getSelection() if getattr(obj, "SilkRole", "") == "SilkSurfacePatch"]
+		if len(patches) != 2:
+			FreeCAD.Console.PrintError("Select two Silk SurfacePatch objects.\n")
+			return
+		doc = FreeCAD.ActiveDocument
+		obj = doc.addObject("Part::FeaturePython", "SilkBlend")
+		SilkBlendPatch(obj, patches[0], patches[1])
+		SilkBlendViewProvider(obj.ViewObject)
+		doc.recompute()
+
+
 Gui.addCommand('Silk_CreateBoundarySpline', CreateBoundarySplineCommand())
 Gui.addCommand('Silk_CreateSurfacePatch', CreateSurfacePatchCommand())
 Gui.addCommand('Silk_CreateBlendSegment', CreateBlendSegmentCommand())
+Gui.addCommand('Silk_CreateSurfaceBlend', CreateBlendPatchCommand())

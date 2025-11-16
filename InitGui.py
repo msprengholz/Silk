@@ -90,7 +90,8 @@ class Silk (Workbench):
 				"SilkPose",
 				"Silk_CreateBoundarySpline",
 				"Silk_CreateSurfacePatch",
-				"Silk_CreateBlendSegment"] 
+					"Silk_CreateBlendSegment",
+					"Silk_CreateSurfaceBlend"] 
 					
 		
 		self.appendToolbar("Silk Commands",self.list) # creates a new toolbar with your commands
@@ -115,5 +116,4 @@ class Silk (Workbench):
 		return "Gui::PythonWorkbench"
        
 FreeCAD.Gui.addWorkbench(Silk())
-
 
