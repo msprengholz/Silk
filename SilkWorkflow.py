@@ -44,6 +44,10 @@ All selected inputs must share endpoints just like the classic ControlGrid tools
 SEGMENT_TIP = """Select one Silk BoundarySpline and two Point_onCurve objects referencing it.
 The command will store the normalized trim span so it can be reused for blending."""
 
+BLEND_TIP = """Select two Silk BoundarySplines (one from each patch) that meet at the shared edge.
+They should be the orthogonal boundaries you trimmed for the blend. The tool will create a
+blend patch linking their parent SurfacePatch objects."""
+
 
 def _is_boundary(obj):
 	return hasattr(obj, "SilkRole") and obj.SilkRole == "SilkBoundarySpline"
@@ -80,10 +84,10 @@ EDGE_POLE_SEQUENCE = {
 }
 
 EDGE_PARAM_INFO = {
-	0: {'axis': 'v', 'perp': 'u', 'perp_value': 0.0, 'rotation': 0},
-	1: {'axis': 'u', 'perp': 'v', 'perp_value': 1.0, 'rotation': 1},
-	2: {'axis': 'v', 'perp': 'u', 'perp_value': 1.0, 'rotation': 2},
-	3: {'axis': 'u', 'perp': 'v', 'perp_value': 0.0, 'rotation': 3},
+	0: {'axis': 'u', 'perp': 'v', 'perp_value': 0.0, 'rotation': 0},
+	1: {'axis': 'v', 'perp': 'u', 'perp_value': 1.0, 'rotation': 1},
+	2: {'axis': 'u', 'perp': 'v', 'perp_value': 1.0, 'rotation': 2},
+	3: {'axis': 'v', 'perp': 'u', 'perp_value': 0.0, 'rotation': 3},
 }
 
 
@@ -260,9 +264,9 @@ def _trim_surface_interval(grid, weights, axis, start, end):
 
 def _rotate_grid_ccw(grid, count):
 	count = count % 4
-	result = grid
+	result = [row[:] for row in grid]
 	for _ in range(count):
-		result = [list(row) for row in zip(*result[::-1])]
+		result = [list(row) for row in zip(*result)][::-1]
 	return result
 
 
@@ -847,7 +851,7 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 		self._sync_boundaries(obj)
 		self._update_shape(obj)
 
-	def get_edge_segment_geometry(self, obj, edge_index, segment_id):
+	def get_edge_segment_geometry(self, obj, edge_index, segment_id, force_reverse=None):
 		names = self._poly_names_for()
 		if edge_index >= len(names):
 			return None
@@ -861,7 +865,10 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 		if not poles or not weights:
 			return None
 		entry = (getattr(obj, "EdgeSegments", {}) or {}).get(str(edge_index), {})
-		if entry.get('reversed'):
+		reverse = entry.get('reversed', False)
+		if force_reverse is not None:
+			reverse = force_reverse
+		if reverse:
 			poles = list(reversed(poles))
 			weights = list(reversed(weights))
 		shape = AN.Bezier_Cubic_curve(_weighted_poles(poles, weights)).toShape()
@@ -876,7 +883,7 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 			'perp_value': entry.get('perp_value'),
 		}
 
-	def get_edge_segment_grid(self, obj, edge_index, segment_id):
+	def get_edge_segment_grid(self, obj, edge_index, segment_id, force_reverse=None):
 		entry = (getattr(obj, "EdgeSegments", {}) or {}).get(str(edge_index))
 		if not entry:
 			return None
@@ -897,7 +904,10 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 		rotation = info.get('rotation', 0)
 		grid = _rotate_grid_ccw(grid, rotation)
 		weights = _rotate_grid_ccw(weights, rotation)
-		if entry.get('reversed'):
+		reverse = entry.get('reversed', False)
+		if force_reverse is not None:
+			reverse = force_reverse
+		if reverse:
 			for row in grid:
 				row.reverse()
 			for row in weights:
@@ -992,45 +1002,6 @@ class CreateSurfacePatchCommand:
 		doc.recompute()
 
 
-class CreateBlendSegmentCommand:
-	def GetResources(self):
-		return {'Pixmap': '',
-				'MenuText': 'Silk Blend Segment',
-				'ToolTip': SEGMENT_TIP}
-
-	def _collect_inputs(self):
-		boundary = None
-		points = []
-		for obj in Gui.Selection.getSelection():
-			if _is_boundary(obj):
-				boundary = obj
-			elif getattr(obj, "object_type", "") == "Point_onCurve":
-				points.append(obj)
-		if boundary is None and points:
-			ref = getattr(points[0], "NL_Curve", None)
-			if ref and _is_boundary(ref):
-				boundary = ref
-		if boundary is None:
-			return None, []
-		filtered = [pt for pt in points if getattr(pt, "NL_Curve", None) == boundary]
-		return boundary, filtered
-
-	def Activated(self):
-		boundary, points = self._collect_inputs()
-		if boundary is None or len(points) < 2:
-			tipsDialog("Silk: Blend Segment", SEGMENT_TIP)
-			return
-		u_values = sorted([float(points[0].u), float(points[1].u)])
-		if boundary.Proxy is None or not hasattr(boundary.Proxy, "add_segment"):
-			FreeCAD.Console.PrintError("Selected object is not a Silk BoundarySpline.\n")
-			return
-		segment = boundary.Proxy.add_segment(boundary, u_values[0], u_values[1])
-		FreeCAD.Console.PrintMessage(
-			"Added blend segment {} to {}\n".format(segment['id'], boundary.Label)
-		)
-		FreeCAD.ActiveDocument.recompute()
-
-
 class SilkBlendPatch:
 	def __init__(self, obj, patch_a, patch_b):
 		obj.addProperty("App::PropertyLink", "PatchA", "C1 - Inputs", "First surface patch").PatchA = patch_a
@@ -1039,6 +1010,12 @@ class SilkBlendPatch:
 		obj.addProperty("App::PropertyInteger", "EdgeIndexB", "C1 - Inputs", "Edge index on patch B").EdgeIndexB = 2
 		obj.addProperty("App::PropertyString", "SegmentIdA", "C1 - Inputs", "Segment identifier on patch A").SegmentIdA = ""
 		obj.addProperty("App::PropertyString", "SegmentIdB", "C1 - Inputs", "Segment identifier on patch B").SegmentIdB = ""
+		obj.addProperty("App::PropertyBool", "ReverseEdgeA", "C1 - Inputs", "Force reverse orientation on edge A").ReverseEdgeA = False
+		obj.addProperty("App::PropertyBool", "ReverseEdgeB", "C1 - Inputs", "Force reverse orientation on edge B").ReverseEdgeB = False
+		obj.addProperty("App::PropertyFloat", "TrimStartA", "C1 - Inputs", "Normalized trim start on boundary A").TrimStartA = 0.0
+		obj.addProperty("App::PropertyFloat", "TrimEndA", "C1 - Inputs", "Normalized trim end on boundary A").TrimEndA = 1.0
+		obj.addProperty("App::PropertyFloat", "TrimStartB", "C1 - Inputs", "Normalized trim start on boundary B").TrimStartB = 0.0
+		obj.addProperty("App::PropertyFloat", "TrimEndB", "C1 - Inputs", "Normalized trim end on boundary B").TrimEndB = 1.0
 		obj.addProperty("App::PropertyFloat", "ScaleTangentA", "C1 - Inputs", "Tangent scale for patch A").ScaleTangentA = 1.0
 		obj.addProperty("App::PropertyFloat", "ScaleTangentB", "C1 - Inputs", "Tangent scale for patch B").ScaleTangentB = 1.0
 		obj.addProperty("App::PropertyFloatList", "ScaleInnerA", "C1 - Inputs", "Inner scale for patch A").ScaleInnerA = [1.0, 1.0, 1.0, 1.0]
@@ -1054,6 +1031,11 @@ class SilkBlendPatch:
 		if prop in ("EdgeIndexA", "EdgeIndexB"):
 			obj.EdgeIndexA = max(0, min(3, int(obj.EdgeIndexA)))
 			obj.EdgeIndexB = max(0, min(3, int(obj.EdgeIndexB)))
+		if prop in ("TrimStartA", "TrimEndA", "TrimStartB", "TrimEndB"):
+			obj.TrimStartA = _clamp_01(obj.TrimStartA)
+			obj.TrimEndA = _clamp_01(obj.TrimEndA)
+			obj.TrimStartB = _clamp_01(obj.TrimStartB)
+			obj.TrimEndB = _clamp_01(obj.TrimEndB)
 
 	def _default_segment(self, patch, edge_index):
 		entry = (getattr(patch, "EdgeSegments", {}) or {}).get(str(edge_index))
@@ -1062,31 +1044,95 @@ class SilkBlendPatch:
 		segs = entry.get('segments', [])
 		return segs[0]['id'] if segs else None
 
+	def _edge_entry(self, patch, edge_index):
+		edges = getattr(patch, "EdgeSegments", {}) or {}
+		entry = edges.get(str(edge_index), {}).copy()
+		defaults = EDGE_PARAM_INFO.get(edge_index, {})
+		for key in ('axis', 'perp', 'perp_value', 'rotation'):
+			if key not in entry or entry[key] is None:
+				entry[key] = defaults.get(key)
+		if 'reversed' not in entry:
+			entry['reversed'] = False
+		return entry
+
+	def _build_manual_segment(self, patch, edge, segment, force_reverse=False):
+		names = list(getattr(patch, "Boundaries", []))
+		if edge >= len(names):
+			return None
+		boundary = names[edge]
+		if boundary is None or boundary.Proxy is None:
+			return None
+		entry = self._edge_entry(patch, edge)
+		base_reverse = entry.get('reversed', False)
+		reverse = base_reverse ^ bool(force_reverse)
+		poles, weights = boundary.Proxy.compute_segment_trim(boundary, segment)
+		if reverse:
+			poles = list(reversed(poles))
+			weights = list(reversed(weights))
+		shape = AN.Bezier_Cubic_curve(_weighted_poles(poles, weights)).toShape()
+		grid = _grid_from_list(patch.Poles)
+		wgrid = _weights_from_list(patch.Weights)
+		axis = entry.get('axis', 'u')
+		grid, wgrid = _trim_surface_interval(grid, wgrid, axis, segment['u_start'], segment['u_end'])
+		rotation = entry.get('rotation', 0)
+		grid = _rotate_grid_ccw(grid, rotation)
+		wgrid = _rotate_grid_ccw(wgrid, rotation)
+		if reverse:
+			for row in grid:
+				row.reverse()
+			for row in wgrid:
+				row.reverse()
+		return {
+			'boundary': boundary,
+			'segment': segment,
+			'poles': poles,
+			'weights': weights,
+			'shape': shape,
+			'grid': grid,
+			'weights_grid': wgrid,
+		}
+
 	def _resolve_segment(self, obj, which):
 		if which == 'A':
 			patch = obj.PatchA
-			edge = obj.EdgeIndexA
+			edge = obj.EdgeIndexA if obj.EdgeIndexA in range(4) else 0
 			seg_id = obj.SegmentIdA
+			manual_reverse = obj.ReverseEdgeA
+			start = obj.TrimStartA
+			end = obj.TrimEndA
 		else:
 			patch = obj.PatchB
-			edge = obj.EdgeIndexB
+			edge = obj.EdgeIndexB if obj.EdgeIndexB in range(4) else 2
 			seg_id = obj.SegmentIdB
+			manual_reverse = obj.ReverseEdgeB
+			start = obj.TrimStartB
+			end = obj.TrimEndB
 		if patch is None or patch.Proxy is None:
 			return None
 		entry = (getattr(patch, "EdgeSegments", {}) or {}).get(str(edge))
-		if not entry or not entry.get('segments'):
+		if seg_id:
+			if not entry or not entry.get('segments'):
+				return None
+			if not any(seg.get('id') == seg_id for seg in entry['segments']):
+				return None
+			base_reverse = entry.get('reversed', False)
+			override = base_reverse ^ bool(manual_reverse)
+			geom = patch.Proxy.get_edge_segment_geometry(patch, edge, seg_id, override)
+			grid = patch.Proxy.get_edge_segment_grid(patch, edge, seg_id, override)
+			return geom, grid
+		start = _clamp_01(min(start, end))
+		end = _clamp_01(max(start, end))
+		if end - start < 1e-5:
+			end = min(1.0, start + 0.05)
+		segment = {'id': 'manual', 'u_start': start, 'u_end': end}
+		result = self._build_manual_segment(patch, edge, segment, manual_reverse)
+		if result is None:
 			return None
-		if not seg_id or not any(seg.get('id') == seg_id for seg in entry['segments']):
-			seg_id = self._default_segment(patch, edge)
-			if which == 'A':
-				obj.SegmentIdA = seg_id or ""
-			else:
-				obj.SegmentIdB = seg_id or ""
-		if not seg_id:
-			return None
-		geom = patch.Proxy.get_edge_segment_geometry(patch, edge, seg_id)
-		grid = patch.Proxy.get_edge_segment_grid(patch, edge, seg_id)
-		return geom, grid
+		grid_entry = {
+			'grid': result['grid'],
+			'weights': result['weights_grid'],
+		}
+		return result, grid_entry
 
 	def execute(self, obj):
 		if obj.PatchA is None or obj.PatchB is None:
@@ -1162,21 +1208,55 @@ class CreateBlendPatchCommand:
 	def GetResources(self):
 		return {'Pixmap': '',
 				'MenuText': 'Silk SurfaceBlend',
-				'ToolTip': 'Create a blend surface between two Silk patches.'}
+				'ToolTip': BLEND_TIP}
 
 	def Activated(self):
-		patches = [obj for obj in Gui.Selection.getSelection() if getattr(obj, "SilkRole", "") == "SilkSurfacePatch"]
-		if len(patches) != 2:
-			FreeCAD.Console.PrintError("Select two Silk SurfacePatch objects.\n")
+		boundaries = [obj for obj in Gui.Selection.getSelection() if _is_boundary(obj)]
+		if len(boundaries) != 2:
+			FreeCAD.Console.PrintError("Select two Silk BoundarySplines (one on each patch).\n")
+			return
+		info = [self._find_patch_info(bnd) for bnd in boundaries]
+		if any(entry is None for entry in info):
+			FreeCAD.Console.PrintError("Could not find owning surface patches for selected boundaries.\n")
+			return
+		if info[0][0] == info[1][0]:
+			FreeCAD.Console.PrintError("Select boundaries from two different surface patches.\n")
 			return
 		doc = FreeCAD.ActiveDocument
 		obj = doc.addObject("Part::FeaturePython", "SilkBlend")
-		SilkBlendPatch(obj, patches[0], patches[1])
+		SilkBlendPatch(obj, info[0][0], info[1][0])
+		obj.EdgeIndexA = info[0][1]
+		obj.EdgeIndexB = info[1][1]
+		obj.TrimStartA = info[0][2]['u_start']
+		obj.TrimEndA = info[0][2]['u_end']
+		obj.TrimStartB = info[1][2]['u_start']
+		obj.TrimEndB = info[1][2]['u_end']
+		obj.SegmentIdA = ""
+		obj.SegmentIdB = ""
+		entry_a = (getattr(info[0][0], "EdgeSegments", {}) or {}).get(str(info[0][1]), {})
+		entry_b = (getattr(info[1][0], "EdgeSegments", {}) or {}).get(str(info[1][1]), {})
+		obj.ReverseEdgeA = bool(entry_a.get('reversed'))
+		obj.ReverseEdgeB = bool(entry_b.get('reversed'))
 		SilkBlendViewProvider(obj.ViewObject)
 		doc.recompute()
+
+	def _find_patch_info(self, boundary):
+		for obj in FreeCAD.ActiveDocument.Objects:
+			if getattr(obj, "SilkRole", "") != "SilkSurfacePatch":
+				continue
+			names = list(getattr(obj, "Boundaries", []))
+			for idx, bound in enumerate(names):
+				if bound == boundary:
+					entry = (getattr(obj, "EdgeSegments", {}) or {}).get(str(idx), {})
+					segments = entry.get('segments', [])
+					if segments:
+						segment = segments[0]
+					else:
+						segment = {'u_start': 0.0, 'u_end': 1.0}
+					return obj, idx, {'u_start': segment.get('u_start', 0.0), 'u_end': segment.get('u_end', 1.0)}
+		return None
 
 
 Gui.addCommand('Silk_CreateBoundarySpline', CreateBoundarySplineCommand())
 Gui.addCommand('Silk_CreateSurfacePatch', CreateSurfacePatchCommand())
-Gui.addCommand('Silk_CreateBlendSegment', CreateBlendSegmentCommand())
 Gui.addCommand('Silk_CreateSurfaceBlend', CreateBlendPatchCommand())

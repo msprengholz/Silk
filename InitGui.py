@@ -87,10 +87,9 @@ class Silk (Workbench):
 					"CubicNStarSurface_NStar66",
 					"StarTrim_CubicNStar",
 					"Reload_Silk",
-				"SilkPose",
-				"Silk_CreateBoundarySpline",
-				"Silk_CreateSurfacePatch",
-					"Silk_CreateBlendSegment",
+					"SilkPose",
+					"Silk_CreateBoundarySpline",
+					"Silk_CreateSurfacePatch",
 					"Silk_CreateSurfaceBlend"] 
 					
 		
@@ -116,4 +115,3 @@ class Silk (Workbench):
 		return "Gui::PythonWorkbench"
        
 FreeCAD.Gui.addWorkbench(Silk())
-
