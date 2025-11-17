@@ -89,7 +89,7 @@ class Silk (Workbench):
 					"Reload_Silk",
 					"SilkPose",
 					"Silk_CreateBoundarySpline",
-					"Silk_CreateSurfacePatch"] 
+					"Silk_CreateControlGrid"] 
 
 		
 		self.appendToolbar("Silk Commands",self.list) # creates a new toolbar with your commands

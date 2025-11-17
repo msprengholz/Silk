@@ -36,7 +36,7 @@ BOUNDARY_TIP = """Create a BoundarySpline object by selecting either:
 The resulting BoundarySpline remains driven by the original sketches, exposes
 Silk specific metadata, and stores an optional visualization BSpline."""
 
-PATCH_TIP = """Create a SurfacePatch object from three or four BoundarySplines.
+PATCH_TIP = """Create a ControlGrid object from three or four BoundarySplines.
 All selected inputs must share endpoints just like the classic ControlGrid tools."""
 
 
@@ -103,6 +103,35 @@ def _grid_edge_from_selection(sel_ex):
 	return None
 
 
+def _compound_shapes(shapes):
+	valid = [s for s in shapes if s and not s.isNull()]
+	if not valid:
+		return Part.Shape()
+	if len(valid) == 1:
+		return valid[0]
+	return Part.Compound(valid)
+
+
+def _grid_shape_from_surface(surface):
+	try:
+		poles = surface.getPoles()
+	except Exception:
+		return Part.Shape()
+	if not poles:
+		return Part.Shape()
+	edges = []
+	u_count = len(poles)
+	v_count = len(poles[0])
+	for row in poles:
+		for start, end in zip(row, row[1:]):
+			edges.append(Part.LineSegment(start, end).toShape())
+	for col in range(v_count):
+		points = [poles[i][col] for i in range(u_count)]
+		for start, end in zip(points, points[1:]):
+			edges.append(Part.LineSegment(start, end).toShape())
+	return _compound_shapes(edges)
+
+
 class SilkBoundarySpline(AN.ControlPoly4_3L,
 						AN.ControlPoly4_FirstElement,
 						AN.ControlPoly4_2N,
@@ -146,10 +175,6 @@ class SilkBoundarySpline(AN.ControlPoly4_3L,
 						"CreatorNote",
 						"B1 - Boundary",
 						"Free form comment about this boundary").CreatorNote = ""
-		obj.addProperty("App::PropertyPythonObject",
-						"BlendSegments",
-						"B4 - Blending",
-						"Stored blend segments for this boundary").BlendSegments = []
 		obj.Proxy = self
 
 	def _init_inputs(self, obj, payload):
@@ -327,7 +352,7 @@ class CreateBoundarySplineCommand:
 		FreeCAD.ActiveDocument.recompute()
 
 
-class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
+class SilkControlGrid(AN.ControlGrid44_4, AN.ControlGrid44_3):
 	PATCH_OPTIONS = ['Quad4', 'Quad3']
 
 	def __init__(self, obj, boundaries, patch_type='Quad4'):
@@ -367,7 +392,7 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 			obj.addProperty("App::PropertyString",
 							"SilkRole",
 							"P1 - Patch",
-							"Silk workflow identifier").SilkRole = "SilkSurfacePatch"
+							"Silk workflow identifier").SilkRole = "SilkControlGrid"
 		if not hasattr(obj, "PatchTopology"):
 			obj.addProperty("App::PropertyEnumeration",
 							"PatchTopology",
@@ -395,6 +420,16 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 							"ShowGrid",
 							"P2 - Display",
 							"Display the control grid").ShowGrid = True
+		if not hasattr(obj, "USplits"):
+			obj.addProperty("App::PropertyFloatList",
+							"USplits",
+							"P2 - Display",
+							"Subdivision parameters along U").USplits = []
+		if not hasattr(obj, "VSplits"):
+			obj.addProperty("App::PropertyFloatList",
+							"VSplits",
+							"P2 - Display",
+							"Subdivision parameters along V").VSplits = []
 		if not hasattr(obj, "ReverseNormal"):
 			obj.addProperty("App::PropertyBool",
 							"ReverseNormal",
@@ -410,27 +445,6 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 							"SurfaceShape",
 							"P3 - Cache",
 							"Cached cubic surface shape").SurfaceShape = Part.Shape()
-		self._update_edge_segments(obj)
-
-	def _update_edge_segments(self, obj):
-		if not hasattr(obj, "EdgeSegments"):
-			obj.addProperty("App::PropertyPythonObject",
-							"EdgeSegments",
-							"P4 - Blending",
-							"Per-edge blend segment references").EdgeSegments = {}
-		current = getattr(obj, "EdgeSegments", {}) or {}
-		names = self._poly_names_for()
-		updated = {}
-		for idx, name in enumerate(names):
-			boundary_obj = getattr(obj, name, None)
-			if boundary_obj is None:
-				continue
-			key = str(idx)
-			entry = current.get(key, {})
-			if entry.get('boundary') != boundary_obj.Name:
-				entry = {'boundary': boundary_obj.Name, 'segments': []}
-			updated[key] = entry
-		obj.EdgeSegments = updated
 
 	def _capture_patch_settings(self, obj):
 		settings = {}
@@ -472,13 +486,11 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 			return
 		names = self._poly_names_for()
 		obj.Boundaries = [getattr(obj, name) for name in names if hasattr(obj, name)]
-		self._update_edge_segments(obj)
-
 	def _switch_topology(self, obj, new_type):
 		bounds = self._boundary_inputs_for(obj, new_type)
 		required = 4 if new_type == 'Quad4' else 3
 		if len(bounds) < required:
-			FreeCAD.Console.PrintMessage("\nSilkSurfacePatch: not enough boundaries for {}\n".format(new_type))
+			FreeCAD.Console.PrintMessage("\nSilkControlGrid: not enough boundaries for {}\n".format(new_type))
 			self._topology_lock = True
 			obj.PatchTopology = self.patch_topology
 			self._topology_lock = False
@@ -493,11 +505,11 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 		self._topology_lock = False
 		self._update_shape(obj)
 
-	def _build_surface_shape(self, obj):
+	def _base_surface(self, obj):
 		weights = obj.Weights
 		poles = obj.Poles
 		if len(poles) != 16:
-			return Part.Shape()
+			return None
 		if obj.ReverseNormal:
 			reordered = [
 				[poles[3], weights[3]],
@@ -519,24 +531,66 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 			]
 		else:
 			reordered = [[poles[i], weights[i]] for i in range(16)]
-		return AN.Bezier_Bicubic_surf(reordered).toShape()
+		return AN.Bezier_Bicubic_surf(reordered)
+
+	def _build_surface_shape(self, obj):
+		base = self._base_surface(obj)
+		return base.toShape() if base else Part.Shape()
+
+	def _intervals(self, values):
+		valid = sorted(set(_clamp_01(v) for v in values if 0 < v < 1))
+		points = [0.0] + valid + [1.0]
+		return [(points[i], points[i + 1]) for i in range(len(points) - 1)]
+
+	def _generate_segments(self, surface, intervals_u, intervals_v):
+		segments = []
+		if surface is None:
+			return segments
+		for u0, u1 in intervals_u:
+			for v0, v1 in intervals_v:
+				sub = surface.copy()
+				try:
+					sub.segment(u0, u1, v0, v1)
+				except Exception:
+					continue
+				segments.append(sub)
+		return segments
 
 	def _update_shape(self, obj):
-		grid_shape = Part.Shape(obj.Legs)
-		obj.GridShape = grid_shape
-		if obj.ShowSurface:
-			obj.SurfaceShape = self._build_surface_shape(obj)
-		else:
+		base_surface = self._base_surface(obj)
+		if base_surface is None:
+			obj.GridShape = Part.Shape()
 			obj.SurfaceShape = Part.Shape()
-		shapes = []
-		if obj.ShowGrid:
-			shapes.append(grid_shape)
-		if obj.ShowSurface and not obj.SurfaceShape.isNull():
-			shapes.append(obj.SurfaceShape)
-		if shapes:
-			obj.Shape = Part.Compound(shapes) if len(shapes) > 1 else shapes[0]
-		else:
 			obj.Shape = Part.Shape()
+			return
+		u_intervals = self._intervals(getattr(obj, "USplits", []))
+		v_intervals = self._intervals(getattr(obj, "VSplits", []))
+		has_subdiv = len(u_intervals) > 1 or len(v_intervals) > 1
+		if not has_subdiv:
+			grid_shape = Part.Shape(obj.Legs)
+			surface_shape = base_surface.toShape()
+			obj.GridShape = grid_shape if obj.ShowGrid else Part.Shape()
+			obj.SurfaceShape = surface_shape if obj.ShowSurface else Part.Shape()
+			obj.Shape = _compound_shapes(
+				[
+					obj.GridShape if obj.ShowGrid else None,
+					obj.SurfaceShape if obj.ShowSurface else None,
+				]
+			)
+			return
+		sub_surfaces = self._generate_segments(base_surface, u_intervals, v_intervals)
+		grid_shapes = [_grid_shape_from_surface(s) for s in sub_surfaces]
+		surface_shapes = [s.toShape() for s in sub_surfaces]
+		obj.GridShape = _compound_shapes(grid_shapes) if obj.ShowGrid else Part.Shape()
+		obj.SurfaceShape = (
+			_compound_shapes(surface_shapes) if obj.ShowSurface else Part.Shape()
+		)
+		obj.Shape = _compound_shapes(
+			[
+				obj.GridShape if obj.ShowGrid else None,
+				obj.SurfaceShape if obj.ShowSurface else None,
+			]
+		)
 
 	def onChanged(self, obj, prop):
 		if prop == "PatchTopology":
@@ -560,7 +614,7 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 			builder.execute(self, obj)
 		except NameError as err:
 			if getattr(err, "name", "") == "please_read_message_above":
-				FreeCAD.Console.PrintError("SilkSurfacePatch: boundary endpoints do not match. Check boundary ordering and tolerances.\n")
+				FreeCAD.Console.PrintError("SilkControlGrid: boundary endpoints do not match. Check boundary ordering and tolerances.\n")
 				return
 			raise
 		self._sync_boundaries(obj)
@@ -580,7 +634,7 @@ class SilkSurfacePatch(AN.ControlGrid44_4, AN.ControlGrid44_3):
 		self._update_shape(obj)
 
 
-class SilkPatchViewProvider:
+class SilkControlGridViewProvider:
 	def __init__(self, obj):
 		obj.Proxy = self
 
@@ -603,10 +657,10 @@ class SilkPatchViewProvider:
 		return True
 
 
-class CreateSurfacePatchCommand:
+class CreateControlGridCommand:
 	def GetResources(self):
 		return {'Pixmap': '',
-				'MenuText': 'Silk SurfacePatch',
+				'MenuText': 'Silk ControlGrid',
 				'ToolTip': PATCH_TIP}
 
 	def _collect_boundaries(self):
@@ -650,17 +704,17 @@ class CreateSurfacePatchCommand:
 	def Activated(self):
 		bounds = self._collect_boundaries()
 		if len(bounds) not in (3, 4):
-			tipsDialog("Silk: SurfacePatch", PATCH_TIP)
+			tipsDialog("Silk: ControlGrid", PATCH_TIP)
 			return
 		doc = FreeCAD.ActiveDocument
 		patch_type = 'Quad3' if len(bounds) == 3 else 'Quad4'
-		label = "SurfacePatch{}".format(patch_type)
+		label = "ControlGrid{}".format(patch_type)
 		obj = doc.addObject("Part::FeaturePython", label)
-		SilkSurfacePatch(obj, bounds, patch_type)
-		SilkPatchViewProvider(obj.ViewObject)
+		SilkControlGrid(obj, bounds, patch_type)
+		SilkControlGridViewProvider(obj.ViewObject)
 		obj.ViewObject.DisplayMode = u"Flat Lines"
 		doc.recompute()
 
 
 Gui.addCommand('Silk_CreateBoundarySpline', CreateBoundarySplineCommand())
-Gui.addCommand('Silk_CreateSurfacePatch', CreateSurfacePatchCommand())
+Gui.addCommand('Silk_CreateControlGrid', CreateControlGridCommand())
