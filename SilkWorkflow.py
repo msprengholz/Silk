@@ -59,6 +59,14 @@ def _create_boundary_feature(mode, payload):
 	return obj
 
 
+def _clamp_01(value):
+	try:
+		val = float(value)
+	except (TypeError, ValueError):
+		val = 0.0
+	return max(0.0, min(1.0, val))
+
+
 # index helpers for ControlGrid44 style pole ordering
 EDGE_INTERIOR_INDICES = {
 	0: [1, 2],    # top edge
