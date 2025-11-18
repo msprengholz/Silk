@@ -57,10 +57,11 @@ class Silk (Workbench):
 		import CubicNStarSurface_NStar66
 		import StarTrim_CubicNStar
 		import Reload_Silk
+		import SilkWorkflow
 
 		# A list of command names created by the imports above
 		self.list = ["ControlPoly4",
-					"CubicCurve_4", 
+				"CubicCurve_4", 
 					"Point_onCurve", 
 					"ControlPoly4_segment",
 					"ControlGrid44",
@@ -86,8 +87,10 @@ class Silk (Workbench):
 					"CubicNStarSurface_NStar66",
 					"StarTrim_CubicNStar",
 					"Reload_Silk",
-					"SilkPose"] 
-					
+					"SilkPose",
+					"Silk_CreateBoundarySpline",
+					"Silk_CreateControlGrid"] 
+
 		
 		self.appendToolbar("Silk Commands",self.list) # creates a new toolbar with your commands
 		self.appendMenu("Silk",self.list) # creates a new menu
@@ -111,7 +114,3 @@ class Silk (Workbench):
 		return "Gui::PythonWorkbench"
        
 FreeCAD.Gui.addWorkbench(Silk())
-
-
-
-
