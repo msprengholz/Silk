@@ -11,6 +11,8 @@ import os
 import FreeCAD
 from FreeCAD import Gui
 
+import ArachNURBS as AN
+
 # get icons
 import Silk_dummy
 
@@ -150,47 +152,39 @@ class CreateControlGridPatchCommand:
                 )
                 return
             controlpolys.append(controlpoly)
-        before = _snapshot_objects(doc)
         group = doc.addObject("App::DocumentObjectGroupPython", "ControlGridPatch")
         group.ViewObject.Proxy = ControlGridPatchViewProvider()
-        # ControlGrid44 consumes selected ControlPolys.
-        try:
-            Gui.Selection.clearSelection()
-            for controlpoly in controlpolys:
-                Gui.Selection.addSelection(controlpoly)
-        except Exception:
-            pass
-        ok = Gui.runCommand("ControlGrid44")
-        if ok is False:
-            FreeCAD.Console.PrintError("SilkWorkflow: ControlGrid44 command failed.\n")
-            return
-        created_after_grid = _new_objects(doc, before)
-        grid = _find_controlgrid(created_after_grid)
-        if grid is None:
-            FreeCAD.Console.PrintError(
-                "SilkWorkflow: could not find ControlGrid output.\n"
+        if len(controlpolys) == 4:
+            grid = doc.addObject("Part::FeaturePython", "ControlGrid44_4")
+            AN.ControlGrid44_4(
+                grid,
+                controlpolys[0],
+                controlpolys[1],
+                controlpolys[2],
+                controlpolys[3],
             )
-            return
-        # CubicSurface_44 expects the ControlGrid selected.
-        try:
-            Gui.Selection.clearSelection()
-            Gui.Selection.addSelection(grid)
-        except Exception:
-            pass
-        ok = Gui.runCommand("CubicSurface_44")
-        if ok is False:
-            FreeCAD.Console.PrintError(
-                "SilkWorkflow: CubicSurface_44 command failed.\n"
+        else:
+            grid = doc.addObject("Part::FeaturePython", "ControlGrid44_3")
+            AN.ControlGrid44_3(
+                grid,
+                controlpolys[0],
+                controlpolys[1],
+                controlpolys[2],
             )
-            return
-        created = _new_objects(doc, before)
-        for obj in created:
-            if obj is group:
-                continue
-            try:
-                group.addObject(obj)
-            except Exception:
-                pass
+        # Set visual properties for grid and surface as done in the GUI commands.
+        grid.ViewObject.Proxy = 0
+        grid.ViewObject.LineWidth = 1.00
+        grid.ViewObject.LineColor = (0.67, 1.00, 1.00)
+        grid.ViewObject.PointSize = 4.00
+        grid.ViewObject.PointColor = (0.00, 0.33, 1.00)
+        surf = doc.addObject("Part::FeaturePython", "CubicSurface_44")
+        # Create CubicSurface_44 from ControlGrid44 (TODO: could also be done via GUI command)
+        AN.CubicSurface_44(surf, grid)
+        surf.ViewObject.Proxy = 0
+        surf.ViewObject.DisplayMode = "Shaded"
+        surf.ViewObject.ShapeColor = (0.33, 0.67, 1.00)
+        group.addObject(grid)
+        group.addObject(surf)
         doc.recompute()
 
 
