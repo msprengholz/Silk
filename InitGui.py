@@ -1,8 +1,8 @@
 #    This file is part of Silk
 #    (c) Edward Mills 2016-2017
 #    edwardvmills@gmail.com
-#	
-#    NURBS Surface modeling tools focused on low degree and seam continuity (FreeCAD Workbench) 
+#
+#    NURBS Surface modeling tools focused on low degree and seam continuity (FreeCAD Workbench)
 #
 #    Silk is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -19,99 +19,107 @@
 
 import FreeCAD
 
-class Silk (Workbench):
-	
-	def __init__(self):
-		self.__class__.Icon = FreeCAD.getUserAppDataDir()+"Mod" + "/Silk/Resources/Icons/Silk.svg"
-		self.__class__.MenuText = "Silk"
-		self.__class__.ToolTip = "NURBS Surface modeling tools focused on low degree and seam continuity "
 
-	def Initialize(self):
-		"This function is executed when FreeCAD starts"
-		import ArachNURBS
-		import SilkPose
-		import ControlPoly4
-		import CubicCurve_4
-		import Point_onCurve
-		import ControlPoly4_segment
-		import ControlGrid44
-		import ControlGrid44_Rotate
-		import ControlGrid44_flow
-		import CubicSurface_44
-		import ControlGrid44_EdgeSegment
-		import ControlGrid44_2EdgeSegments
-		import ControlPoly6
-		import CubicCurve_6
-		import ControlGrid66
-		import CubicSurface_66
-		import ControlGrid64
-		import CubicSurface_64
-		import ControlGrid64_2Grid44
-		import ControlGrid64_3_1Grid44
-		import ControlGrid64_normal
-		import ControlGrid64_Surf44
-		import SubGrid33_2Grid64
-		import ControlGrid66_4Sub
-		import SubGrid63_2Surf64
-		import ControlGridNStar66
-		import CubicNStarSurface_NStar66
-		import StarTrim_CubicNStar
-		import Reload_Silk
+class Silk(Workbench):
+    def __init__(self):
+        self.__class__.Icon = (
+            FreeCAD.getUserAppDataDir() + "Mod" + "/Silk/Resources/Icons/Silk.svg"
+        )
+        self.__class__.MenuText = "Silk"
+        self.__class__.ToolTip = (
+            "NURBS Surface modeling tools focused on low degree and seam continuity "
+        )
 
-		# A list of command names created by the imports above
-		self.list = ["ControlPoly4",
-					"CubicCurve_4", 
-					"Point_onCurve", 
-					"ControlPoly4_segment",
-					"ControlGrid44",
-					"ControlGrid44_Rotate",
-					"ControlGrid44_flow",
-					"CubicSurface_44",
-					"ControlGrid44_EdgeSegment",
-					"ControlGrid44_2EdgeSegments",
-					"ControlPoly6",
-					"CubicCurve_6",
-					"ControlGrid66",
-					"CubicSurface_66",
-					"ControlGrid64",
-					"CubicSurface_64",
-					"ControlGrid64_2Grid44",
-					"ControlGrid64_3_1Grid44",
-					"ControlGrid64_normal",
-					"ControlGrid64_Surf44",
-					"SubGrid33_2Grid64",
-					"ControlGrid66_4Sub",
-					"SubGrid63_2Surf64",
-					"ControlGridNStar66",
-					"CubicNStarSurface_NStar66",
-					"StarTrim_CubicNStar",
-					"Reload_Silk",
-					"SilkPose"] 
-					
-		
-		self.appendToolbar("Silk Commands",self.list) # creates a new toolbar with your commands
-		self.appendMenu("Silk",self.list) # creates a new menu
-		#self.appendMenu(["An existing Menu","My submenu"],self.list) # appends a submenu to an existing menu
+    def Initialize(self):
+        "This function is executed when FreeCAD starts"
+        import ArachNURBS
+        import ControlGrid44
+        import ControlGrid44_2EdgeSegments
+        import ControlGrid44_EdgeSegment
+        import ControlGrid44_flow
+        import ControlGrid44_Rotate
+        import ControlGrid64
+        import ControlGrid64_2Grid44
+        import ControlGrid64_3_1Grid44
+        import ControlGrid64_normal
+        import ControlGrid64_Surf44
+        import ControlGrid66
+        import ControlGrid66_4Sub
+        import ControlGridNStar66
+        import ControlPoly4
+        import ControlPoly4_segment
+        import ControlPoly6
+        import CubicCurve_4
+        import CubicCurve_6
+        import CubicNStarSurface_NStar66
+        import CubicSurface_44
+        import CubicSurface_64
+        import CubicSurface_66
+        import Point_onCurve
+        import Reload_Silk
+        import SilkPose
+        import SilkWorkflow
+        import StarTrim_CubicNStar
+        import SubGrid33_2Grid64
+        import SubGrid63_2Surf64
 
-	def Activated(self):
-		"This function is executed when the workbench is activated"
-		return
+        # A list of command names created by the imports above
+        self.list = [
+            "ControlPoly4",
+            "CubicCurve_4",
+            "Point_onCurve",
+            "ControlPoly4_segment",
+            "ControlGrid44",
+            "ControlGrid44_Rotate",
+            "ControlGrid44_flow",
+            "CubicSurface_44",
+            "ControlGrid44_EdgeSegment",
+            "ControlGrid44_2EdgeSegments",
+            "ControlPoly6",
+            "CubicCurve_6",
+            "ControlGrid66",
+            "CubicSurface_66",
+            "ControlGrid64",
+            "CubicSurface_64",
+            "ControlGrid64_2Grid44",
+            "ControlGrid64_3_1Grid44",
+            "ControlGrid64_normal",
+            "ControlGrid64_Surf44",
+            "SubGrid33_2Grid64",
+            "ControlGrid66_4Sub",
+            "SubGrid63_2Surf64",
+            "ControlGridNStar66",
+            "CubicNStarSurface_NStar66",
+            "StarTrim_CubicNStar",
+            "Reload_Silk",
+            "SilkPose",
+            "Silk_CreateBoundarySpline",
+        ]
 
-	def Deactivated(self):
-		"This function is executed when the workbench is deactivated"
-		return
+        self.appendToolbar(
+            "Silk Commands", self.list
+        )  # creates a new toolbar with your commands
+        self.appendMenu("Silk", self.list)  # creates a new menu
+        # self.appendMenu(["An existing Menu","My submenu"],self.list) # appends a submenu to an existing menu
 
-	def ContextMenu(self, recipient):
-		"This is executed whenever the user right-clicks on screen"
-		# "recipient" will be either "view" or "tree"
-		self.appendContextMenu("My commands",self.list) # add commands to the context menu
+    def Activated(self):
+        "This function is executed when the workbench is activated"
+        return
 
-	def GetClassName(self): 
-		# this function is mandatory if this is a full python workbench
-		return "Gui::PythonWorkbench"
-       
+    def Deactivated(self):
+        "This function is executed when the workbench is deactivated"
+        return
+
+    def ContextMenu(self, recipient):
+        "This is executed whenever the user right-clicks on screen"
+        # "recipient" will be either "view" or "tree"
+        self.appendContextMenu(
+            "My commands", self.list
+        )  # add commands to the context menu
+
+    def GetClassName(self):
+        # this function is mandatory if this is a full python workbench
+        return "Gui::PythonWorkbench"
+
+
 FreeCAD.Gui.addWorkbench(Silk())
-
-
-
-
