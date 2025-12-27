@@ -25,6 +25,10 @@ class Reload_Silk:
                     "Silk_CreateBoundarySpline",
                     SilkWorkflow.CreateBoundarySplineCommand(),
                 )
+                Gui.addCommand(
+                    "Silk_CreateControlGridPatch",
+                    SilkWorkflow.CreateControlGridPatchCommand(),
+                )
             except Exception:
                 pass
         except Exception as exc:

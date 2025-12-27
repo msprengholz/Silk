@@ -94,6 +94,7 @@ class Silk(Workbench):
             "Reload_Silk",
             "SilkPose",
             "Silk_CreateBoundarySpline",
+            "Silk_CreateControlGridPatch",
         ]
 
         self.appendToolbar(
