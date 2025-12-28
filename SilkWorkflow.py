@@ -66,6 +66,7 @@ def _build_intervals(values):
 
 
 def _make_subgrid_from_surface(doc, surface, u0, u1, v0, v1, name):
+    # Build a ControlGrid44 subgrid from a surface segment as in ArachNURBS
     seg = surface.copy()
     seg.segment(u0, u1, v0, v1)
     poles = seg.getPoles()
@@ -169,6 +170,20 @@ def _subgrid_suffix(u_index, u_count, v_index, v_count):
     u_label = _segment_label("u", u_index, u_count)
     v_label = _segment_label("v", v_index, v_count)
     return u_label + v_label
+
+
+def _set_grid_visuals(obj):
+    obj.ViewObject.Proxy = 0
+    obj.ViewObject.LineWidth = 1.00
+    obj.ViewObject.LineColor = (0.67, 1.00, 1.00)
+    obj.ViewObject.PointSize = 4.00
+    obj.ViewObject.PointColor = (0.00, 0.33, 1.00)
+
+
+def _set_surface_visuals(obj):
+    obj.ViewObject.Proxy = 0
+    obj.ViewObject.DisplayMode = "Shaded"
+    obj.ViewObject.ShapeColor = (0.33, 0.67, 1.00)
 
 
 class CreateBoundarySplineCommand:
@@ -299,19 +314,13 @@ class ControlGridPatchProxy:
                 if doc.getObject(sub_name):
                     doc.removeObject(sub_name)
                 sub = _make_subgrid_from_surface(doc, surface, u0, u1, v0, v1, sub_name)
-                sub.ViewObject.Proxy = 0
-                sub.ViewObject.LineWidth = 1.00
-                sub.ViewObject.LineColor = (0.67, 1.00, 1.00)
-                sub.ViewObject.PointSize = 4.00
-                sub.ViewObject.PointColor = (0.00, 0.33, 1.00)
+                _set_grid_visuals(sub)
                 surf_name = _name_with_suffix("CubicSurface_44_Sub", group_tag, suffix)
                 if doc.getObject(surf_name):
                     doc.removeObject(surf_name)
                 surf = doc.addObject("Part::FeaturePython", surf_name)
                 AN.CubicSurface_44(surf, sub)
-                surf.ViewObject.Proxy = 0
-                surf.ViewObject.DisplayMode = "Shaded"
-                surf.ViewObject.ShapeColor = (0.33, 0.67, 1.00)
+                _set_surface_visuals(surf)
                 obj.addObject(sub)
                 obj.addObject(surf)
         doc.recompute()
@@ -389,20 +398,14 @@ class CreateControlGridPatchCommand:
                 controlpolys[2],
             )
         # Set visual properties for grid and surface as done in the GUI commands.
-        grid.ViewObject.Proxy = 0
-        grid.ViewObject.LineWidth = 1.00
-        grid.ViewObject.LineColor = (0.67, 1.00, 1.00)
-        grid.ViewObject.PointSize = 4.00
-        grid.ViewObject.PointColor = (0.00, 0.33, 1.00)
+        _set_grid_visuals(grid)
         surf = doc.addObject(
             "Part::FeaturePython",
             _name_with_suffix("CubicSurface_44", group_tag),
         )
         # Create CubicSurface_44 from ControlGrid44 (TODO: could also be done via GUI command)
         AN.CubicSurface_44(surf, grid)
-        surf.ViewObject.Proxy = 0
-        surf.ViewObject.DisplayMode = "Shaded"
-        surf.ViewObject.ShapeColor = (0.33, 0.67, 1.00)
+        _set_surface_visuals(surf)
         group.addObject(grid)
         group.addObject(surf)
         group.BaseGrid = grid
