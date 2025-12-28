@@ -296,6 +296,8 @@ class ControlGridPatchProxy:
             for iv, (v0, v1) in enumerate(intervals_v):
                 suffix = _subgrid_suffix(iu, len(intervals_u), iv, len(intervals_v))
                 sub_name = _name_with_suffix("ControlGrid44_Sub", group_tag, suffix)
+                if doc.getObject(sub_name):
+                    doc.removeObject(sub_name)
                 sub = _make_subgrid_from_surface(doc, surface, u0, u1, v0, v1, sub_name)
                 sub.ViewObject.Proxy = 0
                 sub.ViewObject.LineWidth = 1.00
@@ -303,6 +305,8 @@ class ControlGridPatchProxy:
                 sub.ViewObject.PointSize = 4.00
                 sub.ViewObject.PointColor = (0.00, 0.33, 1.00)
                 surf_name = _name_with_suffix("CubicSurface_44_Sub", group_tag, suffix)
+                if doc.getObject(surf_name):
+                    doc.removeObject(surf_name)
                 surf = doc.addObject("Part::FeaturePython", surf_name)
                 AN.CubicSurface_44(surf, sub)
                 surf.ViewObject.Proxy = 0
