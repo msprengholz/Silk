@@ -54,6 +54,18 @@ def _find_boundary_controlpoly(boundary):
     return None
 
 
+def _is_boundary_spline(obj):
+    # Check if obj is a BoundarySpline group.
+    return (
+        obj is not None
+        and getattr(obj, "TypeId", "") == "App::DocumentObjectGroupPython"
+        and (
+            getattr(obj, "SilkType", "") == "BoundarySpline"
+            or obj.Name.startswith("BoundarySpline")
+        )
+    )
+
+
 def _normalize_splits(values):
     return sorted(set([v for v in values if 0.0 < v < 1.0]))
 
@@ -71,6 +83,7 @@ def _make_subgrid_from_surface(doc, surface, u0, u1, v0, v1, name):
     seg.segment(u0, u1, v0, v1)
     poles = seg.getPoles()
     weights = seg.getWeights()
+    # NOTE: Match ArachNURBS edge-segmentation pole order (reverse V).
     flat_poles = [
         poles[3][0],
         poles[3][1],
@@ -205,6 +218,9 @@ class CreateBoundarySplineCommand:
         before = _snapshot_objects(doc)
         # create BoundarySpline group to hold outputs
         group = doc.addObject("App::DocumentObjectGroupPython", "BoundarySpline")
+        group.addProperty(
+            "App::PropertyString", "SilkType", "Internal", "Silk object type"
+        ).SilkType = "BoundarySpline"
         group.ViewObject.Proxy = BoundarySplineViewProvider()  # assign custom icon
         ok = Gui.runCommand("ControlPoly4")
         if ok is False:
@@ -242,6 +258,39 @@ class CreateBoundarySplineCommand:
 class BoundarySplineViewProvider:
     def getIcon(self):
         return splineIconPath
+
+
+class _BoundarySplineSelectionObserver:
+    def __init__(self):
+        # Prevent recursive selection triggers.
+        self._handling = False
+
+    def addSelection(self, doc_name, obj_name, sub, pnt):
+        if self._handling:
+            return
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except Exception:
+            return
+        if doc is None:
+            return
+        boundary = doc.getObject(obj_name)
+        if boundary is None:
+            return
+        if not _is_boundary_spline(boundary):
+            return
+        try:
+            self._handling = True
+            # Select children so they highlight alongside the group.
+            for child in getattr(boundary, "Group", []):
+                try:
+                    if Gui.Selection.isSelected(child):
+                        continue
+                except Exception:
+                    pass
+                Gui.Selection.addSelection(child)
+        finally:
+            self._handling = False
 
 
 class ControlGridPatchProxy:
@@ -342,7 +391,9 @@ class CreateControlGridPatchCommand:
         if doc is None:
             FreeCAD.Console.PrintError("SilkWorkflow: no active document.\n")
             return
-        selection = Gui.Selection.getSelection()
+        selection = [
+            obj for obj in Gui.Selection.getSelection() if _is_boundary_spline(obj)
+        ]
         if len(selection) not in (3, 4):
             FreeCAD.Console.PrintError("SilkWorkflow: select 3 or 4 BoundarySplines.\n")
             return
@@ -424,3 +475,7 @@ class ControlGridPatchViewProvider:
 if Gui:
     Gui.addCommand("Silk_CreateBoundarySpline", CreateBoundarySplineCommand())
     Gui.addCommand("Silk_CreateControlGridPatch", CreateControlGridPatchCommand())
+    if not hasattr(Gui, "_SilkBoundarySplineObserver"):
+        # Keep a single observer across reloads.
+        Gui._SilkBoundarySplineObserver = _BoundarySplineSelectionObserver()
+        Gui.Selection.addObserver(Gui._SilkBoundarySplineObserver)
