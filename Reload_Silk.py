@@ -1,6 +1,12 @@
-# Locate Workbench Directory
+#    This file is part of Silk
+#    (c) 2025
+#
+#    NURBS Surface modeling tools focused on low degree and seam continuity (FreeCAD Workbench)
+#
+#    Hot reload command for the Silk workbench
+
 import os
-from importlib import reload
+import traceback
 
 import FreeCAD
 from FreeCAD import Gui
@@ -13,34 +19,30 @@ path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
 
 class Reload_Silk:
     def Activated(self):
-        import ArachNURBS
+        """Execute hot reload of Silk modules."""
+        from SilkReloadManager import SimpleSilkReloadManager
 
-        reload(ArachNURBS)
+        manager = SimpleSilkReloadManager()
         try:
-            import SilkWorkflow
-
-            reload(SilkWorkflow)
-            try:
-                Gui.addCommand(
-                    "Silk_CreateBoundarySpline",
-                    SilkWorkflow.CreateBoundarySplineCommand(),
-                )
-                Gui.addCommand(
-                    "Silk_CreateControlGridPatch",
-                    SilkWorkflow.CreateControlGridPatchCommand(),
-                )
-            except Exception:
-                pass
+            manager.reload_all()
+            FreeCAD.Console.PrintMessage(
+                "Silk: Module reload successful! Code changes are now active.\n"
+            )
         except Exception as exc:
             FreeCAD.Console.PrintError(
-                "Reload_Silk: SilkWorkflow reload failed: %s\n" % exc
+                f"Reload_Silk: Reload failed: {exc}\n"
             )
+            traceback.print_exc()
 
     def GetResources(self):
         return {
             "Pixmap": path_Silk_icons + "/WIP.svg",
-            "MenuText": "Reload_Silk",
-            "ToolTip": " reload the Silk workbench (actually just the core library) \n without exiting FreeCAD \n if you have made code changes",
+            "MenuText": "Reload Silk Workbench",
+            "ToolTip": (
+                "Hot reload the entire Silk workbench without restarting FreeCAD.\n"
+                "Reloads ArachNURBS, all commands, observers, and GUI elements.\n"
+                "Use during development to see code changes immediately."
+            ),
         }
 
 
