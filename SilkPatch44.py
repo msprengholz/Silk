@@ -14,7 +14,7 @@ from popup import tipsDialog
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
-iconPath = path_Silk_icons + "/ControlGrid44.svg"
+iconPath = path_Silk_icons + "/Patch44.svg"
 
 
 def _normalize_splits(values):
