@@ -49,6 +49,8 @@ class Patch44:
                         "show the control grid").ShowGrid = True
         obj.addProperty("App::PropertyBool", "ShowSubgrids", "S2 - Display",
                         "show subdivided subgrids instead of base surface").ShowSubgrids = False
+        obj.addProperty("App::PropertyBool", "AutoHideBlend", "S2 - Display",
+                        "hide subgrids when a BlendStrip uses this patch").AutoHideBlend = True
         obj.addProperty("App::PropertyVectorList", "Poles", "C2 - Outputs", "Poles").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "C2 - Outputs", "Weights").Weights
         obj.addProperty("Part::PropertyGeometryList", "Legs", "C2 - Outputs", "grid segments").Legs
@@ -179,6 +181,7 @@ class Patch44:
         self._subsurfaces = []
         u_splits = list(fp.USplits) if fp.USplits else []
         v_splits = list(fp.VSplits) if fp.VSplits else []
+        sub_legs = []  # subgrid legs (more detailed lines for subdivided view)
 
         if u_splits or v_splits:
             intervals_u = _build_intervals(u_splits)
@@ -202,15 +205,26 @@ class Patch44:
             self._subsurfaces = shapes
             fp.Legs = sub_legs
 
-        # Build display Shape
+        # Build display Shape (auto-hide subgrids if a BlendStrip uses this patch)
+        has_blend = False
+        if fp.AutoHideBlend and doc:
+            for obj in doc.Objects:
+                if hasattr(obj, "object_type") and obj.object_type == "BlendStrip":
+                    if getattr(obj, "PatchA", None) == fp or getattr(obj, "PatchB", None) == fp:
+                        has_blend = True
+                        break
+        show_subgrids = fp.ShowSubgrids and not has_blend
+
         shapes_to_compound = []
-        if fp.ShowSubgrids and self._subsurfaces:
+        if show_subgrids and self._subsurfaces:
             shapes_to_compound.extend(self._subsurfaces)
         elif fp.ShowSurface:
             shapes_to_compound.append(surf.toShape())
 
-        if fp.ShowGrid and fp.Legs:
-            for leg in fp.Legs:
+        # Show right grid lines: subgrid lines if showing subgrids, base lines otherwise
+        draw_legs = sub_legs if (u_splits or v_splits) and show_subgrids else legs
+        if fp.ShowGrid and draw_legs:
+            for leg in draw_legs:
                 if hasattr(leg, "toShape"):
                     shapes_to_compound.append(leg.toShape())
 

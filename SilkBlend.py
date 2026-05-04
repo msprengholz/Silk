@@ -56,6 +56,10 @@ class BlendStrip:
         if not pa or not pb:
             return
 
+        # Ensure patches are up to date and will recompute their Shape with auto-hide
+        pa.recompute()
+        pb.recompute()
+
         # Step 1: ensure patches have subdivision
         for p in (pa, pb):
             if not p.Proxy._subgrids:
