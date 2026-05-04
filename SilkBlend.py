@@ -84,12 +84,11 @@ class BlendStrip:
             return
 
         # Step 4: set split direction and side
-        dir_map = {"U": "V", "V": "U"}
-        side_map = {"0": 0, "1": 1}
-        sd_a = dir_map[ea[0]]
-        sd_b = dir_map[eb[0]]
-        ss_a = side_map[ea[1]]
-        ss_b = side_map[eb[1]]
+        # Split PERPENDICULAR to the shared edge
+        sd_a = "V" if ea[0] == "U" else "U"  # VSplits if edge along U, USplits if edge along V
+        sd_b = "V" if eb[0] == "U" else "U"
+        ss_a = 0 if ea[1] == "0" else 1  # split near 0 or near 1 along the perpendicular direction
+        ss_b = 0 if eb[1] == "0" else 1
 
         # Ensure splits exist on the shared edge side
         for p, sd, ss in ((pa, sd_a, ss_a), (pb, sd_b, ss_b)):
@@ -112,28 +111,35 @@ class BlendStrip:
         sga = get_strip(pa, sd_a, ss_a)
         sgb = get_strip(pb, sd_b, ss_b)
 
-        # Step 6: parameter mapping along shared edge
-        # Corner index → parameter index (0 or 3)
-        param_map = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
-                     "V0": {0: 0, 3: 3}, "V1": {1: 0, 2: 3}}
-        pmap = {param_map[ea][i]: param_map[eb][j] for i, j in pairs}
+        # Step 6: corner-to-parameter mapping
+        cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
+                "V0": {0: 0, 3: 3}, "V1": {1: 0, 2: 3}}
 
         # Step 7: blend each paired row/column
+        # Subgraph flat = poles[U][V] = flat[U*4 + V]
+        # If shared edge runs ALONG U (row): perpendicular = V → take COLUMNS (const U)
+        # If shared edge runs ALONG V (col): perpendicular = U → take ROWS (const V)
         blend_poles = []
         for li in range(4):
             # Left strip: shared edge → inward, then reverse for outer→shared
-            if sd_a == "U":  # shared edge along V, take rows
-                l_rev = list(reversed([sga[u * 4 + li] for u in range(4)]))
-            else:  # shared edge along U, take columns
+            if ea[0] == "U":  # shared along U → take COLUMNS
                 l_rev = list(reversed([sga[li * 4 + v] for v in range(4)]))
+            else:  # shared along V → take ROWS
+                l_rev = list(reversed([sga[u * 4 + li] for u in range(4)]))
 
-            ri = pmap.get(li, 3 - li)
+            # Map left param index to right param index via corner pairs
+            cmap = {"U0":{0:0,1:3},"U1":{2:3,3:0},"V0":{0:0,3:3},"V1":{1:0,2:3}}
+            ri = 3 - li  # default: reversed
+            for lc_idx, rc_idx in pairs:
+                if li == cmap[ea][lc_idx]:
+                    ri = cmap[eb][rc_idx]
+                    break
 
             # Right strip: shared edge → inward (keep direction)
-            if sd_b == "U":
-                rc = [sgb[u * 4 + ri] for u in range(4)]
-            else:
+            if eb[0] == "U":  # shared along U → take COLUMNS
                 rc = [sgb[ri * 4 + v] for v in range(4)]
+            else:  # shared along V → take ROWS
+                rc = [sgb[u * 4 + ri] for u in range(4)]
 
             res = AN.blend_poly_2x4_1x6(l_rev, [1.0] * 4, rc, [1.0] * 4,
                                         2.0, 2.0, 2.0, 2.0)
