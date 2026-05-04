@@ -41,27 +41,61 @@ Subgrid flat array: `poles[u][v]` = `flat[u*4 + v]`
 If shared edge is along V (col): rows at constant V = `flat[u*4 + v] for u in 0..3`
 If shared edge is along U (row): cols at constant U = `flat[u*4 + v] for v in 0..3`
 
-### Step 5: Pair rows/columns across patches
+### Step 5: Subdivide perpendicular to shared edge
+
+| Shared edge | Split on patch | Split direction | Strip location |
+|-------------|---------------|----------------|----------------|
+| U0 (row 0)  | Patch          | VSplits=[0.1]  | subgrid[0] (V=0→0.1) |
+| U1 (row 3)  | Patch          | VSplits=[0.9]  | subgrid[1] (V=0.9→1.0) |
+| V0 (col 0)  | Patch          | USplits=[0.1]  | subgrid[0] (U=0→0.1) |
+| V1 (col 3)  | Patch          | USplits=[0.9]  | subgrid[1] (U=0.9→1.0) |
+
+### Step 6: Extract rows/columns from strips
+
+Subgrid flat array: `poles[u][v]` = `flat[u*4 + v]`
+
+If shared edge is along V (col): rows at constant V = `flat[u*4 + v] for u in 0..3`
+If shared edge is along U (row): cols at constant U = `flat[u*4 + v] for v in 0..3`
+
+### Step 7: Pair rows/columns across patches
 
 Corner matching gives the index mapping. The shared edge runs in possibly reversed direction:
 - Corner A ↔ corner B means: the V (or U) index at corner A on patch A corresponds to the U (or V) index at corner B on patch B
 - This defines the pairing for intermediate indices
+- Example: if left corners[0]=(0,0,40) matches right corners[1]=(0,0,40), and left corners[3]=(0,50,0) matches right corners[0]=(0,50,0), then left V=0 ↔ right U=1, left V=3 ↔ right U=0, meaning the mapping is left V=i ↔ right U=n−1−i (reversed)
 
-### Step 6: Blend
+### Step 8: Blend
 
 For each paired row/col:
-1. Reverse one of them so both go OUTER→SHARED
-2. Call `AN.blend_poly_2x4_1x6(row_A, [1.0]*4, row_B, [1.0]*4, 2.0, 2.0, 2.0, 2.0)`
-3. Collect 6-pole results
+1. Reverse the LEFT row so it goes OUTER→SHARED (list(reversed(row)))
+2. Keep the RIGHT column as SHARED→OUTER
+3. Call `AN.blend_poly_2x4_1x6(l_row_rev, [1.0]*4, r_col, [1.0]*4, 2.0, 2.0, 2.0, 2.0)`
+4. Collect 6-pole results
 
-Stack 4 results into a 6×4 grid. Create blend surface via `AN.CubicSurface_64()`.
+Stack 4 result rows into a 6×4 grid (24 poles). Create blend surface:
+```python
+surf = Part.BSplineSurface()
+surf.increaseDegree(3, 3)
+surf.insertUKnot(0.0, 4, 1e-7)
+surf.insertUKnot(1.0/3.0, 3, 1e-7)
+surf.insertUKnot(2.0/3.0, 3, 1e-7)
+surf.insertUKnot(1.0, 4, 1e-7)
+surf.insertVKnot(0.0, 4, 1e-7)
+surf.insertVKnot(1.0, 4, 1e-7)
+for r in range(4):
+    for c in range(6):
+        surf.setPole(c+1, r+1, poles_24[r*6+c], weights_24[r*6+c])
+```
 
 ### Key gotchas
 - `flat[u*4 + v]` = U=u, V=v (first dim = U in FreeCAD's BSplineSurface)
+- `segment(u0, u1, v0, v1)` — first arg is U range, second is V range
+- Surface `getPoles()` returns `poles[U][V]` = `flat[U*4 + V]` (U is first dimension)
 - Row at V=i: `flat[0+i, 4+i, 8+i, 12+i]` = varying U, constant V
 - Col at U=j: `flat[4j+0, 4j+1, 4j+2, 4j+3]` = varying V, constant U
-- Shared edge direction may be REVERSED between patches — use corner matching to determine pairing
-- `blend_poly_2x4_1x6` expects both inputs going in the SAME direction (toward shared edge or away from it). Feed them as: poles_0 goes OUTER→SHARED, poles_1 goes SHARED→OUTER
+- Shared edge direction is REVERSED between patches — use corner matching to determine pairing
+- `blend_poly_2x4_1x6` expects: poles_0 goes OUTER→SHARED, poles_1 goes SHARED→OUTER  
+  So reverse the left row but NOT the right column
 
 ## Patch44 Implementation Notes
 
