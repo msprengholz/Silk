@@ -205,24 +205,16 @@ class Patch44:
             self._subsurfaces = shapes
             fp.Legs = sub_legs
 
-        # Build display Shape (auto-hide subgrids if a BlendStrip uses this patch)
-        has_blend = False
-        if fp.AutoHideBlend and doc:
-            for obj in doc.Objects:
-                if hasattr(obj, "object_type") and obj.object_type == "BlendStrip":
-                    if getattr(obj, "PatchA", None) == fp or getattr(obj, "PatchB", None) == fp:
-                        has_blend = True
-                        break
-        show_subgrids = fp.ShowSubgrids and not has_blend
-
+        # Build display Shape
+        # AutoHideBlend: still show subgrids normally; the blend strip visually covers the blended edge
         shapes_to_compound = []
-        if show_subgrids and self._subsurfaces:
+        if fp.ShowSubgrids and self._subsurfaces:
             shapes_to_compound.extend(self._subsurfaces)
         elif fp.ShowSurface:
             shapes_to_compound.append(surf.toShape())
 
         # Show right grid lines: subgrid lines if showing subgrids, base lines otherwise
-        draw_legs = sub_legs if (u_splits or v_splits) and show_subgrids else legs
+        draw_legs = sub_legs if (u_splits or v_splits) and fp.ShowSubgrids else legs
         if fp.ShowGrid and draw_legs:
             for leg in draw_legs:
                 if hasattr(leg, "toShape"):
