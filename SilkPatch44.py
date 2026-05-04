@@ -206,14 +206,21 @@ class Patch44:
             fp.Legs = sub_legs
 
         # Build display Shape
-        # AutoHideBlend: still show subgrids normally; the blend strip visually covers the blended edge
-        shapes_to_compound = []
-        if fp.ShowSubgrids and self._subsurfaces:
-            shapes_to_compound.extend(self._subsurfaces)
-        elif fp.ShowSurface:
-            shapes_to_compound.append(surf.toShape())
+        # ShowSurface: show/hide surface. ShowSubgrids: show subdivided detail. ShowGrid: grid lines.
+        # AutoHideBlend: hide the subgrid strip used by a blend (via _HideSubgridIdx)
+        hide_idx = getattr(fp, "_HideSubgridIdx", -1) if fp.AutoHideBlend else -1
 
-        # Show right grid lines: subgrid lines if showing subgrids, base lines otherwise
+        shapes_to_compound = []
+        if fp.ShowSurface:
+            if fp.ShowSubgrids and self._subsurfaces:
+                # Show only non-blended subgrid surfaces
+                for i, sub in enumerate(self._subsurfaces):
+                    if i != hide_idx:
+                        shapes_to_compound.append(sub)
+            else:
+                shapes_to_compound.append(surf.toShape())
+
+        # Grid lines: subgrid lines when showing subgrids, base grid otherwise
         draw_legs = sub_legs if (u_splits or v_splits) and fp.ShowSubgrids else legs
         if fp.ShowGrid and draw_legs:
             for leg in draw_legs:
