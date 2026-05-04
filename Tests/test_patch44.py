@@ -44,7 +44,9 @@ def test_patch44_4_sided(doc):
     Gui.Selection.clearSelection()
     for e in edges:
         Gui.Selection.addSelection(e)
-    Gui.runCommand("Silk_Patch44")
+    from SilkPatch44 import CreateSilkPatch44
+    cmd = CreateSilkPatch44()
+    cmd.Activated()
 
     patches = [o for o in doc.Objects if o.Name.startswith("Patch44") and hasattr(o, "Poles")]
     check(len(patches) == 1, f"Expected 1 Patch44, got {len(patches)}", errors)
@@ -83,7 +85,9 @@ def test_patch44_subdivision(doc):
     Gui.Selection.clearSelection()
     for e in edges:
         Gui.Selection.addSelection(e)
-    Gui.runCommand("Silk_Patch44")
+    from SilkPatch44 import CreateSilkPatch44
+    cmd = CreateSilkPatch44()
+    cmd.Activated()
 
     patches = [o for o in doc.Objects if o.Name.startswith("Patch44") and hasattr(o, "Poles")]
     check(len(patches) == 1, "No Patch44 created", errors)
