@@ -133,7 +133,7 @@ class Patch44:
                         sub_shape = seg.toShape()
                         if sub_shape:
                             shapes.append(sub_shape)
-                        grid_shapes_list.append(AN.drawGrid(flat, 4))
+                        grid_shapes_list.extend(AN.drawGrid(flat, 4))
                 self._subsurfaces = shapes
                 fp.Legs = grid_shapes_list
         else:
