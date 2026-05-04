@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#1b1d1f" rx="8" ry="8"/>
+  <!-- Left patch (blue) -->
+  <path d="M8 16 L28 12 L30 50 L10 52 Z" fill="none" stroke="#8ad1ff" stroke-width="2.5"/>
+  <path d="M12 24 L28 20 M16 32 L28 28 M20 40 L28 36" fill="none" stroke="#8ad1ff" stroke-width="1.5" stroke-dasharray="2 2"/>
+  <!-- Right patch (blue) -->
+  <path d="M36 12 L56 16 L54 52 L34 50 Z" fill="none" stroke="#8ad1ff" stroke-width="2.5"/>
+  <path d="M36 20 L52 24 M36 28 L48 32 M36 36 L44 40" fill="none" stroke="#8ad1ff" stroke-width="1.5" stroke-dasharray="2 2"/>
+  <!-- Blend strip (green) between them -->
+  <path d="M28 12 L36 12 L34 50 L30 50 Z" fill="rgba(80,220,100,0.3)" stroke="#50dc64" stroke-width="2.5"/>
+  <path d="M29 24 L35 22 M29 34 L34 32 M29 44 L33 42" fill="none" stroke="#50dc64" stroke-width="1.5" stroke-dasharray="2 2"/>
+</svg>
