@@ -99,6 +99,22 @@ class BlendStrip:
             if not p.Proxy._subgrids:
                 return  # no subdivisions — can't blend
 
+        # Tell each patch which subgrid is being blended (for auto-hide)
+        hide_a = 0 if ss_a == 0 else len(pa.Proxy._subgrids) - 1
+        hide_b = 0 if ss_b == 0 else len(pb.Proxy._subgrids) - 1
+        if not hasattr(pa, "_HideSubgridIdx"):
+            pa.addProperty("App::PropertyInteger", "_HideSubgridIdx", "Internal",
+                           "subgrid index hidden by blend")._HideSubgridIdx = hide_a
+            pa.setEditorMode("_HideSubgridIdx", 1)
+        else:
+            pa._HideSubgridIdx = hide_a
+        if not hasattr(pb, "_HideSubgridIdx"):
+            pb.addProperty("App::PropertyInteger", "_HideSubgridIdx", "Internal",
+                           "subgrid index hidden by blend")._HideSubgridIdx = hide_b
+            pb.setEditorMode("_HideSubgridIdx", 1)
+        else:
+            pb._HideSubgridIdx = hide_b
+
         # Pick the correct subgrid: 0 if split near 0, -1 if split near 1
         sga = pa.Proxy._subgrids[0 if ss_a == 0 else -1]
         sgb = pb.Proxy._subgrids[0 if ss_b == 0 else -1]
