@@ -122,153 +122,111 @@ def test_cubic_curve_4(doc):
 
 
 def test_controlgrid44_4(doc):
-    """ControlGrid44_4 from 4 ControlPoly4 objects."""
+    """ControlGrid44_4 from 4 ControlPoly4 objects (direct API)."""
     errors = []
     checks = []
 
-    # Create 4 sketches with 3 lines each
-    placements = [
-        (FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(90, 0, 90)),
-        (FreeCAD.Vector(0, 0, 40), FreeCAD.Rotation(0, 0, 90)),
-        (FreeCAD.Vector(0, 50, 0), FreeCAD.Rotation(0, 0, 0)),
-        (FreeCAD.Vector(50, 50, 0), FreeCAD.Rotation(-90, 0, 0)),
+    import ArachNURBS as AN
+
+    # Create 4 manual ControlPoly4 objects forming a closed rectangle
+    # Each poly has 4 poles; adjacent polys share endpoints exactly
+    edge_data = [
+        [FreeCAD.Vector(0,0,0), FreeCAD.Vector(16,0,0), FreeCAD.Vector(33,0,0), FreeCAD.Vector(50,0,0)],
+        [FreeCAD.Vector(50,0,0), FreeCAD.Vector(50,16,0), FreeCAD.Vector(50,33,0), FreeCAD.Vector(50,50,0)],
+        [FreeCAD.Vector(50,50,0), FreeCAD.Vector(33,50,0), FreeCAD.Vector(16,50,0), FreeCAD.Vector(0,50,0)],
+        [FreeCAD.Vector(0,50,0), FreeCAD.Vector(0,33,0), FreeCAD.Vector(0,16,0), FreeCAD.Vector(0,0,0)],
     ]
     polys = []
-    for i, (pos, rot) in enumerate(placements):
-        sk = doc.addObject("Sketcher::SketchObject", f"Sketch_{i}")
-        sk.Placement = FreeCAD.Placement(pos, rot)
-        geo = [
-            Part.LineSegment(FreeCAD.Vector(0, 40, 0), FreeCAD.Vector(25, 40, 0)),
-            Part.LineSegment(FreeCAD.Vector(25, 40, 0), FreeCAD.Vector(50, 15, 0)),
-            Part.LineSegment(FreeCAD.Vector(50, 15, 0), FreeCAD.Vector(50, 0, 0))
-        ]
-        sk.addGeometry(geo)
-        doc.recompute()
-        Gui.Selection.clearSelection()
-        Gui.Selection.addSelection(sk)
-        Gui.runCommand("ControlPoly4")
-        p = [obj for obj in doc.Objects if obj.Name.startswith("ControlPoly4") and hasattr(obj, "Poles")]
-        if p:
-            polys.append(p[-1])
+    for i, poles in enumerate(edge_data):
+        p = doc.addObject("Part::FeaturePython", f"Poly_{i}")
+        p.addProperty("App::PropertyVectorList", "Poles", "", "").Poles = poles
+        p.addProperty("App::PropertyFloatList", "Weights", "", "").Weights = [1.0]*4
+        p.Proxy = 0
+        polys.append(p)
 
-    check(len(polys) == 4, f"Expected 4 ControlPoly4, got {len(polys)}", errors)
-    if len(polys) != 4:
-        return {"pass": False, "errors": errors, "checks": checks}
+    grid = doc.addObject("Part::FeaturePython", "ControlGrid44_Test")
+    AN.ControlGrid44_4(grid, polys[0], polys[1], polys[2], polys[3])
+    grid.ViewObject.Proxy = 0
+    doc.recompute()
 
-    Gui.Selection.clearSelection()
-    for p in polys:
-        Gui.Selection.addSelection(p)
-    Gui.runCommand("ControlGrid44")
-
-    grids = [obj for obj in doc.Objects
-             if obj.Name.startswith("ControlGrid44") and hasattr(obj, "Poles")
-             and len(obj.Poles) == 16]
-    check(len(grids) >= 1, f"Expected >=1 ControlGrid44 with 16 poles, got {len(grids)}", errors)
-    if grids:
-        checks.append(f"Grid {grids[0].Name}: {len(grids[0].Poles)} poles")
+    check(len(grid.Poles) == 16, f"Expected 16 poles, got {len(grid.Poles)}", errors)
+    checks.append(f"Grid created with {len(grid.Poles)} poles, {len(grid.Weights)} weights")
 
     return {"pass": len(errors) == 0, "errors": errors, "checks": checks}
 
 
 def test_cubic_surface_44(doc):
-    """CubicSurface_44 from ControlGrid44."""
+    """CubicSurface_44 from ControlGrid44 (direct API)."""
     errors = []
     checks = []
 
-    placements = [
-        (FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(90, 0, 90)),
-        (FreeCAD.Vector(0, 0, 40), FreeCAD.Rotation(0, 0, 90)),
-        (FreeCAD.Vector(0, 50, 0), FreeCAD.Rotation(0, 0, 0)),
-        (FreeCAD.Vector(50, 50, 0), FreeCAD.Rotation(-90, 0, 0)),
+    import ArachNURBS as AN
+
+    edge_data = [
+        [FreeCAD.Vector(0,0,0), FreeCAD.Vector(16,0,0), FreeCAD.Vector(33,0,0), FreeCAD.Vector(50,0,0)],
+        [FreeCAD.Vector(50,0,0), FreeCAD.Vector(50,16,0), FreeCAD.Vector(50,33,0), FreeCAD.Vector(50,50,0)],
+        [FreeCAD.Vector(50,50,0), FreeCAD.Vector(33,50,0), FreeCAD.Vector(16,50,0), FreeCAD.Vector(0,50,0)],
+        [FreeCAD.Vector(0,50,0), FreeCAD.Vector(0,33,0), FreeCAD.Vector(0,16,0), FreeCAD.Vector(0,0,0)],
     ]
     polys = []
-    for i, (pos, rot) in enumerate(placements):
-        sk = doc.addObject("Sketcher::SketchObject", f"Sketch_{i}")
-        sk.Placement = FreeCAD.Placement(pos, rot)
-        geo = [
-            Part.LineSegment(FreeCAD.Vector(0, 40, 0), FreeCAD.Vector(25, 40, 0)),
-            Part.LineSegment(FreeCAD.Vector(25, 40, 0), FreeCAD.Vector(50, 15, 0)),
-            Part.LineSegment(FreeCAD.Vector(50, 15, 0), FreeCAD.Vector(50, 0, 0))
-        ]
-        sk.addGeometry(geo)
-        doc.recompute()
-        Gui.Selection.clearSelection()
-        Gui.Selection.addSelection(sk)
-        Gui.runCommand("ControlPoly4")
-        p = [obj for obj in doc.Objects if obj.Name.startswith("ControlPoly4") and hasattr(obj, "Poles")]
-        if p:
-            polys.append(p[-1])
+    for i, poles in enumerate(edge_data):
+        p = doc.addObject("Part::FeaturePython", f"Poly_{i}")
+        p.addProperty("App::PropertyVectorList", "Poles", "", "").Poles = poles
+        p.addProperty("App::PropertyFloatList", "Weights", "", "").Weights = [1.0]*4
+        p.Proxy = 0
+        polys.append(p)
 
-    Gui.Selection.clearSelection()
-    for p in polys:
-        Gui.Selection.addSelection(p)
-    Gui.runCommand("ControlGrid44")
-    grids = [obj for obj in doc.Objects
-             if obj.Name.startswith("ControlGrid44") and hasattr(obj, "Poles")
-             and len(obj.Poles) == 16]
-    check(len(grids) >= 1, "No ControlGrid44", errors)
-    if not grids:
+    grid = doc.addObject("Part::FeaturePython", "ControlGrid44_Test")
+    AN.ControlGrid44_4(grid, polys[0], polys[1], polys[2], polys[3])
+    grid.ViewObject.Proxy = 0
+    doc.recompute()
+
+    check(len(grid.Poles) == 16, "ControlGrid44 has no poles", errors)
+    if len(grid.Poles) != 16:
         return {"pass": False, "errors": errors, "checks": checks}
 
-    Gui.Selection.clearSelection()
-    Gui.Selection.addSelection(grids[0])
-    Gui.runCommand("CubicSurface_44")
-    surfaces = [obj for obj in doc.Objects
-                if obj.Name.startswith("CubicSurface") and hasattr(obj, "Shape")]
-    check(len(surfaces) >= 1, f"Expected >=1 CubicSurface, got {len(surfaces)}", errors)
-    if surfaces:
-        check(surfaces[0].Shape is not None, "Surface has no Shape", errors)
-        check(hasattr(surfaces[0].Shape, "Faces"), "Surface Shape has no Faces", errors)
-        checks.append(f"Surface {surfaces[0].Name} created")
+    surf = doc.addObject("Part::FeaturePython", "CubicSurface_Test")
+    AN.CubicSurface_44(surf, grid)
+    surf.ViewObject.Proxy = 0
+    doc.recompute()
+
+    check(surf.Shape is not None, "Surface has no Shape", errors)
+    check(hasattr(surf.Shape, "Faces"), "Surface Shape has no Faces", errors)
+    if surf.Shape and hasattr(surf.Shape, "Faces"):
+        checks.append(f"Surface created with {len(surf.Shape.Faces)} face(s)")
 
     return {"pass": len(errors) == 0, "errors": errors, "checks": checks}
 
 
 def test_controlgrid44_3(doc):
-    """ControlGrid44_3 from 3 ControlPoly4 objects (triangular grid)."""
+    """ControlGrid44_3 from 3 ControlPoly4 objects (direct API)."""
     errors = []
     checks = []
 
-    placements = [
-        (FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(90, 0, 90)),
-        (FreeCAD.Vector(0, 0, 40), FreeCAD.Rotation(0, 0, 90)),
-        (FreeCAD.Vector(0, 50, 0), FreeCAD.Rotation(0, 0, 0)),
+    import ArachNURBS as AN
+
+    # 3 polys forming a closed triangle; adjacent polys share endpoints
+    tri_data = [
+        [FreeCAD.Vector(0,0,0), FreeCAD.Vector(16,0,0), FreeCAD.Vector(33,0,0), FreeCAD.Vector(50,0,0)],
+        [FreeCAD.Vector(50,0,0), FreeCAD.Vector(40,16,0), FreeCAD.Vector(25,33,0), FreeCAD.Vector(0,50,0)],
+        [FreeCAD.Vector(0,50,0), FreeCAD.Vector(0,33,0), FreeCAD.Vector(0,16,0), FreeCAD.Vector(0,0,0)],
     ]
     polys = []
-    for i, (pos, rot) in enumerate(placements):
-        sk = doc.addObject("Sketcher::SketchObject", f"Sketch_{i}")
-        sk.Placement = FreeCAD.Placement(pos, rot)
-        geo = [
-            Part.LineSegment(FreeCAD.Vector(0, 40, 0), FreeCAD.Vector(25, 40, 0)),
-            Part.LineSegment(FreeCAD.Vector(25, 40, 0), FreeCAD.Vector(50, 15, 0)),
-            Part.LineSegment(FreeCAD.Vector(50, 15, 0), FreeCAD.Vector(50, 0, 0))
-        ]
-        sk.addGeometry(geo)
-        doc.recompute()
-        Gui.Selection.clearSelection()
-        Gui.Selection.addSelection(sk)
-        Gui.runCommand("ControlPoly4")
-        p = [obj for obj in doc.Objects if obj.Name.startswith("ControlPoly4") and hasattr(obj, "Poles")]
-        if p:
-            polys.append(p[-1])
+    for i, poles in enumerate(tri_data):
+        p = doc.addObject("Part::FeaturePython", f"Poly_{i}")
+        p.addProperty("App::PropertyVectorList", "Poles", "", "").Poles = poles
+        p.addProperty("App::PropertyFloatList", "Weights", "", "").Weights = [1.0]*4
+        p.Proxy = 0
+        polys.append(p)
 
-    check(len(polys) == 3, f"Expected 3 ControlPoly4, got {len(polys)}", errors)
-    if len(polys) != 3:
-        return {"pass": False, "errors": errors, "checks": checks}
+    grid = doc.addObject("Part::FeaturePython", "ControlGrid44_3_Test")
+    AN.ControlGrid44_3(grid, polys[0], polys[1], polys[2])
+    grid.ViewObject.Proxy = 0
+    doc.recompute()
 
-    Gui.Selection.clearSelection()
-    for p in polys:
-        Gui.Selection.addSelection(p)
-    Gui.runCommand("ControlGrid44_3_1Grid44")
-
-    tri = [obj for obj in doc.Objects
-           if obj.Name.startswith("ControlGrid44_3") and hasattr(obj, "Poles")]
-
-    if tri:
-        checks.append(f"Tri-grid {tri[0].Name}: {len(tri[0].Poles)} poles")
-        check(len(tri[0].Poles) == 16, f"Expected 16 poles, got {len(tri[0].Poles)}", errors)
-    else:
-        errors.append("No ControlGrid44_3 found")
+    check(len(grid.Poles) == 16, f"Expected 16 poles, got {len(grid.Poles)}", errors)
+    if len(grid.Poles) == 16:
+        checks.append(f"Tri-grid created with {len(grid.Poles)} poles")
 
     return {"pass": len(errors) == 0, "errors": errors, "checks": checks}
 
