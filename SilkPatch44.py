@@ -149,14 +149,16 @@ class Patch44:
         fp.Poles = poles
         fp.Weights = weights
 
-        # Build surface from the 16-pole grid
+        # Build bicubic Bezier surface from the 16-pole grid (matching ArachNURBS pattern)
         surf = Part.BSplineSurface()
-        poles2d = [[poles[r*4 + c] for c in range(4)] for r in range(4)]
-        weights2d = [[weights[r*4 + c] for c in range(4)] for r in range(4)]
-        surf.buildFromPolesMultsKnots(poles2d, weights2d,
-                                       [4, 4], [4, 4],
-                                       [0, 0, 0, 1, 1, 1], [0, 0, 0, 1, 1, 1],
-                                       False, False, 3, 3)
+        surf.increaseDegree(3, 3)
+        for knot, mult in [(0.0, 4), (1.0, 4)]:
+            surf.insertUKnot(knot, mult, 1e-7)
+            surf.insertVKnot(knot, mult, 1e-7)
+        for r in range(4):
+            for c in range(4):
+                idx = r * 4 + c
+                surf.setPole(c + 1, r + 1, poles[idx], weights[idx])
         self._base_surface = surf
 
         # Grid lines
