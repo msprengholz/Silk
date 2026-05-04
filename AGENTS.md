@@ -43,12 +43,12 @@ If shared edge is along U (row): cols at constant U = `flat[u*4 + v] for v in 0.
 
 ### Step 5: Subdivide perpendicular to shared edge
 
-| Shared edge | Split on patch | Split direction | Strip location |
-|-------------|---------------|----------------|----------------|
-| U0 (row 0)  | Patch          | VSplits=[0.1]  | subgrid[0] (V=0→0.1) |
-| U1 (row 3)  | Patch          | VSplits=[0.9]  | subgrid[1] (V=0.9→1.0) |
-| V0 (col 0)  | Patch          | USplits=[0.1]  | subgrid[0] (U=0→0.1) |
-| V1 (col 3)  | Patch          | USplits=[0.9]  | subgrid[1] (U=0.9→1.0) |
+| Shared edge | Split direction | Strip location |
+|-------------|----------------|----------------|
+| U0 (row 0)  | VSplits=[0.1]  | subgrid[0] (V=0→0.1) |
+| U1 (row 3)  | VSplits=[0.9]  | subgrid[1] (V=0.9→1.0) |
+| V0 (col 0)  | USplits=[0.1]  | subgrid[0] (U=0→0.1) |
+| V1 (col 3)  | USplits=[0.9]  | subgrid[1] (U=0.9→1.0) |
 
 ### Step 6: Extract rows/columns from strips
 
@@ -72,7 +72,7 @@ For each paired row/col:
 3. Call `AN.blend_poly_2x4_1x6(l_row_rev, [1.0]*4, r_col, [1.0]*4, 2.0, 2.0, 2.0, 2.0)`
 4. Collect 6-pole results
 
-Stack 4 result rows into a 6×4 grid (24 poles). Create blend surface:
+Stack 4 result rows into a 6×4 grid. Create blend surface:
 ```python
 surf = Part.BSplineSurface()
 surf.increaseDegree(3, 3)
@@ -93,6 +93,9 @@ for r in range(4):
 - Surface `getPoles()` returns `poles[U][V]` = `flat[U*4 + V]` (U is first dimension)
 - Row at V=i: `flat[0+i, 4+i, 8+i, 12+i]` = varying U, constant V
 - Col at U=j: `flat[4j+0, 4j+1, 4j+2, 4j+3]` = varying V, constant U
+- **CRITICAL: row/col extraction rule**:
+  - If shared edge runs ALONG U (row), perpendicular is V → take COLUMNS at const U
+  - If shared edge runs ALONG V (col), perpendicular is U → take ROWS at const V
 - Shared edge direction is REVERSED between patches — use corner matching to determine pairing
 - `blend_poly_2x4_1x6` expects: poles_0 goes OUTER→SHARED, poles_1 goes SHARED→OUTER  
   So reverse the left row but NOT the right column
