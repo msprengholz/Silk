@@ -1,8 +1,8 @@
 """
-SilkEdge — single FeaturePython group that replaces the old group+children approach.
-Sketch(es) in → 4 poles out → cubic curve + grid for display.
-Sketches are grouped as children in the tree.
-Display toggles: ShowCurve, ShowGrid
+SilkEdge — single FeaturePython.
+Sketch(es) in → 4 poles out → cubic curve + polygon for display.
+Sketches linked via Sketches property (not tree children, since Part::FeaturePython doesn't nest).
+Display toggles: ShowCurve, ShowPolygon
 """
 
 import FreeCAD
@@ -22,11 +22,11 @@ iconPath = path_Silk_icons + "/BoundarySpline.svg"
 
 
 class Edge:
-    def __init__(self, obj):
-        """Create an Edge from selected sketch(es).
-        Sketches are added as children. Poles computed from first sketch."""
+    def __init__(self, obj, sketches):
         latest_version = "0.01"
 
+        obj.addProperty("App::PropertyLinkList", "Sketches", "C1 - Inputs",
+                        "source sketches").Sketches = sketches
         obj.addProperty("App::PropertyFloat", "tolerance", "C1 - Inputs",
                         "point-to-point connection tolerance").tolerance = AN.default_tol
         obj.addProperty("App::PropertyBool", "reverse", "C1 - Inputs",
@@ -36,9 +36,8 @@ class Edge:
         obj.addProperty("App::PropertyBool", "ShowPolygon", "S1 - Display",
                         "show the control polygon").ShowPolygon = True
         obj.addProperty("App::PropertyVectorList", "Poles", "C2 - Outputs", "Poles").Poles
-        obj.addProperty("App::PropertyFloatList", "Weights", "C2 - Outputs", "Weights").Weights = [1.0, 1.0, 1.0, 1.0]
+        obj.addProperty("App::PropertyFloatList", "Weights", "C2 - Outputs", "Weights").Weights = [1.0] * 4
         obj.addProperty("Part::PropertyGeometryList", "Legs", "C2 - Outputs", "control segments").Legs
-        obj.addProperty("Part::PropertyPartShape", "Shape", "C2 - Outputs", "Shape")
         obj.addProperty("App::PropertyString", "object_type", "C3 - Identifiers",
                         "workbench class").object_type = "Edge"
         obj.setEditorMode("object_type", 1)
@@ -49,6 +48,7 @@ class Edge:
                         "internal FreeCAD name").internalName = obj.Name
         obj.setEditorMode("internalName", 1)
         obj.Proxy = self
+        self.execute(obj)
 
     def onDocumentRestored(self, obj):
         self.execute(obj)
@@ -62,13 +62,8 @@ class Edge:
         if 'Restore' in fp.State:
             return
 
-        # Read poles from the first sketch child, or keep existing poles
-        children = fp.Group
-        first_sketch = None
-        for child in children:
-            if hasattr(child, "TypeId") and child.TypeId == "Sketcher::SketchObject":
-                first_sketch = child
-                break
+        sketches = fp.Sketches
+        first_sketch = sketches[0] if sketches else None
 
         if first_sketch:
             sketch = first_sketch
@@ -132,9 +127,27 @@ class Edge:
             fp.Shape = Part.Shape()
 
 
-class CreateEdge:
-    """GUI command — selected sketch(es) → Edge group."""
+class EdgeViewProvider:
+    def __init__(self, vobj):
+        vobj.Proxy = self
 
+    def getIcon(self):
+        return iconPath
+
+    def attach(self, vobj):
+        self.ViewObject = vobj
+
+    def updateData(self, obj, prop):
+        return True
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        return None
+
+
+class CreateEdge:
     def GetResources(self):
         return {'Pixmap': iconPath, 'MenuText': 'Edge', 'ToolTip': tooltip}
 
@@ -145,26 +158,23 @@ class CreateEdge:
             return
 
         doc = FreeCAD.ActiveDocument
-        selected_sketches = []
+        selected = []
         for item in sel:
             obj = item.Object
             if obj.TypeId == "Sketcher::SketchObject":
-                selected_sketches.append(obj)
+                selected.append(obj)
 
-        if not selected_sketches:
+        if not selected:
             FreeCAD.Console.PrintError("Silk: Edge requires at least one Sketch selected.\n")
             return
 
-        # Create Edge as a DocumentObjectGroupPython
-        edge = doc.addObject("App::DocumentObjectGroupPython", "Edge")
-        proxy = Edge(edge)
-
-        # Add sketches as children
-        for sk in selected_sketches:
-            edge.addObject(sk)
-
-        edge.ViewObject.Proxy = 0
-        proxy.execute(edge)
+        edge = doc.addObject("Part::FeaturePython", "Edge")
+        Edge(edge, selected)
+        EdgeViewProvider(edge.ViewObject)
+        edge.ViewObject.LineWidth = 2.00
+        edge.ViewObject.LineColor = (0.00, 1.00, 0.00)
+        edge.ViewObject.PointSize = 4.00
+        edge.ViewObject.PointColor = (0.00, 0.33, 1.00)
         doc.recompute()
         FreeCAD.Console.PrintMessage(f"Edge created: {edge.Name}\n")
 
