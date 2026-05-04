@@ -16,7 +16,7 @@ from popup import tipsDialog
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
-iconPath = path_Silk_icons + "/ControlGrid64_2Grid44.svg"
+iconPath = path_Silk_icons + "/BlendStrip.svg"
 
 
 class BlendStrip:
@@ -171,19 +171,41 @@ class BlendStrip:
         if not surf_shape or not hasattr(surf_shape, "Faces") or not surf_shape.Faces:
             # Fallback: just show grid
             shapes = []
-        else:
-            shapes = [surf_shape]
-            for leg in fp.Legs:
-                if hasattr(leg, "toShape"):
-                    try:
-                        shapes.append(leg.toShape())
-                    except Exception:
-                        pass
+            fp.Shape = Part.Compound(shapes) if shapes else Part.Shape()
+            return
+
+        shapes = [surf_shape]
+        for leg in fp.Legs:
+            if hasattr(leg, "toShape"):
+                try:
+                    shapes.append(leg.toShape())
+                except Exception:
+                    pass
         if shapes:
             try:
                 fp.Shape = Part.Compound(shapes)
             except Exception:
                 fp.Shape = surf_shape
+
+
+class BlendStripViewProvider:
+    def __init__(self, vobj):
+        vobj.Proxy = self
+
+    def getIcon(self):
+        return iconPath
+
+    def attach(self, vobj):
+        self.ViewObject = vobj
+
+    def updateData(self, obj, prop):
+        return True
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        return None
 
 
 class CreateBlendStrip:
@@ -201,7 +223,7 @@ class CreateBlendStrip:
         doc = FreeCAD.ActiveDocument
         obj = doc.addObject("Part::FeaturePython", "BlendStrip")
         BlendStrip(obj, sel[0], sel[1])
-        obj.ViewObject.Proxy = 0
+        BlendStripViewProvider(obj.ViewObject)
         obj.ViewObject.LineWidth = 2.00
         obj.ViewObject.LineColor = (0.00, 1.00, 0.00)
         obj.ViewObject.PointSize = 5.00
