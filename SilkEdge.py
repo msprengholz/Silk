@@ -33,8 +33,8 @@ class Edge:
                         "reverse the pole sequence").reverse = False
         obj.addProperty("App::PropertyBool", "ShowCurve", "S1 - Display",
                         "show the cubic curve").ShowCurve = True
-        obj.addProperty("App::PropertyBool", "ShowGrid", "S1 - Display",
-                        "show the control polygon").ShowGrid = True
+        obj.addProperty("App::PropertyBool", "ShowPolygon", "S1 - Display",
+                        "show the control polygon").ShowPolygon = True
         obj.addProperty("App::PropertyVectorList", "Poles", "C2 - Outputs", "Poles").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "C2 - Outputs", "Weights").Weights = [1.0, 1.0, 1.0, 1.0]
         obj.addProperty("Part::PropertyGeometryList", "Legs", "C2 - Outputs", "control segments").Legs
@@ -54,7 +54,7 @@ class Edge:
         self.execute(obj)
 
     def onChanged(self, fp, prop):
-        if prop in ("ShowCurve", "ShowGrid", "reverse"):
+        if prop in ("ShowCurve", "ShowPolygon", "reverse"):
             if 'Restore' not in fp.State:
                 self.execute(fp)
 
@@ -116,7 +116,7 @@ class Edge:
             curve = Part.BSplineCurve()
             curve.buildFromPoles(fp.Poles)
             shapes_to_compound.append(curve.toShape())
-        if fp.ShowGrid and fp.Legs:
+        if fp.ShowPolygon and fp.Legs:
             for leg in fp.Legs:
                 if hasattr(leg, "toShape"):
                     shapes_to_compound.append(leg.toShape())
