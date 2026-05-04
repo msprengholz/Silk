@@ -42,6 +42,7 @@ class Silk (Workbench):
 		import CubicCurve_4
 		import Point_onCurve
 		import BoundarySpline
+		import SilkEdge
 		import ControlPoly4_segment
 		import ControlGrid44
 		import ControlGrid44_Rotate
@@ -75,6 +76,7 @@ class Silk (Workbench):
 					"CubicCurve_4", 
 					"Point_onCurve", 
 					"BoundarySpline", 
+					"Silk_CreateEdge", 
 					"ControlPoly4_segment",
 					"ControlGrid44",
 					"ControlGrid44_Rotate",
