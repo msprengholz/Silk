@@ -90,26 +90,14 @@ class BlendStrip:
         ss_a = 0 if ea[1] == "0" else 1  # split near 0 or near 1 along the perpendicular direction
         ss_b = 0 if eb[1] == "0" else 1
 
-        # Ensure splits exist on the shared edge side
-        for p, sd, ss in ((pa, sd_a, ss_a), (pb, sd_b, ss_b)):
-            attr = f"{sd}Splits"
-            current = list(getattr(p, attr))
-            if ss == 0:
-                if not current or current[0] > 0.1:
-                    setattr(p, attr, [0.1])
-                    p.recompute()
-            else:
-                if not current or current[-1] < 0.9:
-                    setattr(p, attr, [0.9])
-                    p.recompute()
+        # Step 5: get subgrid strips (user must set USplits/VSplits on patches first)
+        for p in (pa, pb):
+            if not p.Proxy._subgrids:
+                return  # no subdivisions — can't blend
 
-        # Step 5: get subgrid strips
-        def get_strip(p, sd, ss):
-            sg = p.Proxy._subgrids
-            return sg[0] if ss == 0 else sg[-1]
-
-        sga = get_strip(pa, sd_a, ss_a)
-        sgb = get_strip(pb, sd_b, ss_b)
+        # Pick the correct subgrid: 0 if split near 0, -1 if split near 1
+        sga = pa.Proxy._subgrids[0 if ss_a == 0 else -1]
+        sgb = pb.Proxy._subgrids[0 if ss_b == 0 else -1]
 
         # Step 6: corner-to-parameter mapping
         cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
