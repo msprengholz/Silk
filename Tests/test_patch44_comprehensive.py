@@ -51,6 +51,9 @@ def _make_edges(doc, edge_data):
     return edges
 
 
+def _is_patch44(o):
+    return hasattr(o, "object_type") and o.object_type == "Patch44"
+
 def _make_patch(doc, edges):
     import SilkPatch44
     Gui.Selection.clearSelection()
@@ -58,7 +61,7 @@ def _make_patch(doc, edges):
         Gui.Selection.addSelection(e)
     SilkPatch44.CreateSilkPatch44().Activated()
     doc.recompute()
-    return [o for o in doc.Objects if o.Name.startswith("Patch44")][0]
+    return [o for o in doc.Objects if _is_patch44(o)][0]
 
 
 FLAT_SQUARE = [
@@ -208,7 +211,7 @@ def _serialization(doc):
     FreeCAD.closeDocument(doc.Name)
     
     doc2 = FreeCAD.openDocument(save_path)
-    p2 = [o for o in doc2.Objects if o.Name.startswith("Patch44")][0]
+    p2 = [o for o in doc2.Objects if _is_patch44(o)][0]
     check(len(p2.Poles) == 16, "Reload: expected 16 poles", err)
     poles_after = [tuple(v) for v in p2.Poles]
     check(poles_before == poles_after, "Reload: poles changed", err)
@@ -263,6 +266,263 @@ def test_get_subgrid_api(doc):
     return _run_with_capture(doc, _get_subgrid_api)
 
 
+# ──────────────────────────────────────────────
+# NEW TESTS: Workflow, Error Recovery, Stress
+# ──────────────────────────────────────────────
+
+def _workflow_sketch_to_patch(doc):
+    err, chk = [], []
+    import Sketcher
+    import BoundarySpline
+    import SilkPatch44
+
+    sketch_data = [
+        {"pos": Vector(0,0,0), "pts": [Vector(0,0,0), Vector(16,0,0), Vector(33,0,0), Vector(50,0,0)]},
+        {"pos": Vector(50,0,0), "pts": [Vector(0,0,0), Vector(0,16,0), Vector(0,33,0), Vector(0,50,0)]},
+        {"pos": Vector(50,50,0), "pts": [Vector(0,0,0), Vector(-16,0,0), Vector(-33,0,0), Vector(-50,0,0)]},
+        {"pos": Vector(0,50,0), "pts": [Vector(0,0,0), Vector(0,-16,0), Vector(0,-33,0), Vector(0,-50,0)]},
+    ]
+    sketches = []
+    for i, sd in enumerate(sketch_data):
+        sk = doc.addObject("Sketcher::SketchObject", f"Sketch{i}")
+        pl = FreeCAD.Placement()
+        pl.Base = sd["pos"]
+        sk.Placement = pl
+        pts = sd["pts"]
+        sk.addGeometry(Part.LineSegment(pts[0], pts[1]))
+        sk.addGeometry(Part.LineSegment(pts[1], pts[2]))
+        sk.addGeometry(Part.LineSegment(pts[2], pts[3]))
+        sketches.append(sk)
+    doc.recompute()
+
+    for sk in sketches:
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(sk)
+        BoundarySpline.CreateBoundarySpline().Activated()
+    doc.recompute()
+
+    bsplines = sorted([o for o in doc.Objects if "BoundarySpline" in o.Name], key=lambda o: o.Name)
+    check(len(bsplines) == 4, f"Expected 4 BoundarySplines, got {len(bsplines)}", err)
+    if len(bsplines) < 4:
+        return {"pass": False, "errors": err, "checks": chk}
+
+    Gui.Selection.clearSelection()
+    for bs in bsplines:
+        Gui.Selection.addSelection(bs)
+    SilkPatch44.CreateSilkPatch44().Activated()
+    doc.recompute()
+
+    patches = [o for o in doc.Objects if _is_patch44(o)]
+    check(len(patches) == 1, "Expected 1 Patch44", err)
+    if len(patches) == 0:
+        return {"pass": False, "errors": err, "checks": chk}
+    p = patches[0]
+    check(len(p.Poles) == 16, f"Expected 16 poles, got {len(p.Poles)}", err)
+    check(p.Shape is not None and p.Shape.isValid(), "Valid Shape", err)
+    chk.append("Sketch->BoundarySpline->Patch44 workflow OK")
+    return {"pass": len(err) == 0, "errors": err, "checks": chk}
+
+
+def _error_disconnected(doc):
+    err, chk = [], []
+    disconnected = [
+        [Vector(0,0,0), Vector(10,0,0), Vector(20,0,0), Vector(30,0,0)],
+        [Vector(50,0,0), Vector(60,0,0), Vector(70,0,0), Vector(80,0,0)],
+        [Vector(0,50,0), Vector(10,50,0), Vector(20,50,0), Vector(30,50,0)],
+        [Vector(50,50,0), Vector(60,50,0), Vector(70,50,0), Vector(80,50,0)],
+    ]
+    e = _make_edges(doc, disconnected)
+    p = _make_patch(doc, e)
+    check(len(p.Poles) == 0, "Expected 0 poles for disconnected edges", err)
+    chk.append("Disconnected edges handled gracefully")
+    return {"pass": len(err) == 0, "errors": err, "checks": chk}
+
+
+def _error_bad_selection(doc):
+    err, chk = [], []
+    import SilkPatch44
+
+    Gui.Selection.clearSelection()
+    SilkPatch44.CreateSilkPatch44().Activated()
+    doc.recompute()
+    check(len([o for o in doc.Objects if _is_patch44(o)]) == 0,
+          "0 selection: no Patch44", err)
+
+    e = _make_edges(doc, FLAT_SQUARE)
+    Gui.Selection.clearSelection()
+    for i in range(3):
+        Gui.Selection.addSelection(e[i])
+    SilkPatch44.CreateSilkPatch44().Activated()
+    doc.recompute()
+    check(len([o for o in doc.Objects if _is_patch44(o)]) == 0,
+          "3 edges: no Patch44", err)
+
+    extra = doc.addObject("Part::FeaturePython", "E_extra")
+    extra.addProperty("App::PropertyVectorList", "Poles", "", "").Poles = [Vector(0,0,0), Vector(10,0,0), Vector(20,0,0), Vector(30,0,0)]
+    extra.addProperty("App::PropertyFloatList", "Weights", "", "").Weights = [1.0] * 4
+    xlegs = [Part.LineSegment(Vector(0,0,0), Vector(10,0,0)),
+             Part.LineSegment(Vector(10,0,0), Vector(20,0,0)),
+             Part.LineSegment(Vector(20,0,0), Vector(30,0,0))]
+    extra.addProperty("Part::PropertyGeometryList", "Legs", "", "").Legs = xlegs
+    extra.Proxy = 0
+    extra.Shape = Part.Shape(xlegs)
+    doc.recompute()
+
+    Gui.Selection.clearSelection()
+    for ee in e:
+        Gui.Selection.addSelection(ee)
+    Gui.Selection.addSelection(extra)
+    SilkPatch44.CreateSilkPatch44().Activated()
+    doc.recompute()
+    check(len([o for o in doc.Objects if _is_patch44(o)]) == 0,
+          "5 edges: no Patch44", err)
+    chk.append("Bad selection cases all rejected")
+    return {"pass": len(err) == 0, "errors": err, "checks": chk}
+
+
+def _multiple_patches(doc):
+    err, chk = [], []
+    import SilkPatch44
+
+    offset = 100
+    flat2 = [[Vector(p.x+offset, p.y, p.z) for p in edge] for edge in FLAT_SQUARE]
+    all_data = list(FLAT_SQUARE) + flat2
+    all_edges = _make_edges(doc, all_data)
+
+    Gui.Selection.clearSelection()
+    for ee in all_edges[:4]:
+        Gui.Selection.addSelection(ee)
+    SilkPatch44.CreateSilkPatch44().Activated()
+    doc.recompute()
+
+    Gui.Selection.clearSelection()
+    for ee in all_edges[4:]:
+        Gui.Selection.addSelection(ee)
+    SilkPatch44.CreateSilkPatch44().Activated()
+    doc.recompute()
+
+    patches = [o for o in doc.Objects if _is_patch44(o)]
+    check(len(patches) == 2, f"Expected 2 Patch44 objects, got {len(patches)}", err)
+    if len(patches) >= 2:
+        check(len(patches[0].Poles) == 16, f"Patch44[0]: {len(patches[0].Poles)} poles", err)
+        check(len(patches[1].Poles) == 16, f"Patch44[1]: {len(patches[1].Poles)} poles", err)
+        check(patches[0].Name != patches[1].Name, "Patches should have different Names", err)
+    chk.append("Multiple patches OK")
+    return {"pass": len(err) == 0, "errors": err, "checks": chk}
+
+
+def _get_subgrid_edge_cases(doc):
+    err, chk = [], []
+    e = _make_edges(doc, FLAT_SQUARE)
+    p = _make_patch(doc, e)
+    p.USplits = [0.3]
+    doc.recompute()
+
+    try:
+        poles, weights = p.Proxy.getSubgrid(0.5, 0.5, 0, 1)
+        chk.append(f"Empty range: returned {type(poles).__name__}")
+    except Exception as ex:
+        chk.append(f"Empty range exception (acceptable): {ex}")
+
+    try:
+        poles, weights = p.Proxy.getSubgrid(0, 1, 0, 1)
+        if poles is not None:
+            rows = len(poles)
+            cols = len(poles[0]) if rows > 0 else 0
+            check(rows == 4 and cols == 4, f"Full range: expected 4x4, got {rows}x{cols}", err)
+        else:
+            err.append("Full range getSubgrid returned None")
+    except Exception as ex:
+        err.append(f"Full range exception: {ex}")
+
+    try:
+        poles, weights = p.Proxy.getSubgrid(0.8, 0.2, 0, 1)
+        chk.append(f"Reversed range: returned {type(poles).__name__}")
+    except Exception as ex:
+        chk.append(f"Reversed range exception (acceptable): {ex}")
+
+    chk.append("getSubgrid edge cases handled")
+    return {"pass": len(err) == 0, "errors": err, "checks": chk}
+
+
+def _stress_many_splits(doc):
+    err, chk = [], []
+    e = _make_edges(doc, FLAT_SQUARE)
+    p = _make_patch(doc, e)
+    p.USplits = [i/21 for i in range(1, 21)]
+    doc.recompute()
+    check(len(p.Proxy._subgrids) == 21, f"Expected 21 subgrids, got {len(p.Proxy._subgrids)}", err)
+    chk.append("20 splits -> 21 subgrids OK")
+    return {"pass": len(err) == 0, "errors": err, "checks": chk}
+
+
+def _stress_extreme_splits(doc):
+    err, chk = [], []
+    e = _make_edges(doc, FLAT_SQUARE)
+    p = _make_patch(doc, e)
+    p.USplits = [0.001, 0.999]
+    doc.recompute()
+    check(len(p.Proxy._subgrids) == 3, f"Expected 3 subgrids, got {len(p.Proxy._subgrids)}", err)
+    p.VSplits = [0.5]
+    doc.recompute()
+    check(len(p.Proxy._subgrids) == 6, f"Expected 6 subgrids (3x2), got {len(p.Proxy._subgrids)}", err)
+    chk.append("Extreme splits OK")
+    return {"pass": len(err) == 0, "errors": err, "checks": chk}
+
+
+def _pole_count_stress(doc):
+    err, chk = [], []
+    e = _make_edges(doc, FLAT_SQUARE)
+    p = _make_patch(doc, e)
+
+    changes = [
+        ("initial", lambda: None),
+        ("USplits=[0.3]", lambda: setattr(p, "USplits", [0.3])),
+        ("VSplits=[0.5]", lambda: setattr(p, "VSplits", [0.5])),
+        ("ShowSubgrids=True", lambda: setattr(p, "ShowSubgrids", True)),
+        ("ShowSubgrids=False", lambda: setattr(p, "ShowSubgrids", False)),
+        ("ShowSurface=False", lambda: setattr(p, "ShowSurface", False)),
+        ("ShowSurface=True", lambda: setattr(p, "ShowSurface", True)),
+        ("ShowGrid=False", lambda: setattr(p, "ShowGrid", False)),
+        ("ShowGrid=True", lambda: setattr(p, "ShowGrid", True)),
+    ]
+    for label, action in changes:
+        action()
+        doc.recompute()
+        check(len(p.Poles) == 16, f"Expected 16 poles after {label}, got {len(p.Poles)}", err)
+    chk.append("Pole count stable across all property changes")
+    return {"pass": len(err) == 0, "errors": err, "checks": chk}
+
+
+# ──────────────────────────────────────────────
+# EXPORTED TEST WRAPPERS
+# ──────────────────────────────────────────────
+
+def test_workflow_sketch_to_patch(doc):
+    return _run_with_capture(doc, _workflow_sketch_to_patch)
+
+def test_error_disconnected(doc):
+    return _run_with_capture(doc, _error_disconnected)
+
+def test_error_bad_selection(doc):
+    return _error_bad_selection(doc)
+
+def test_multiple_patches(doc):
+    return _run_with_capture(doc, _multiple_patches)
+
+def test_get_subgrid_edge_cases(doc):
+    return _run_with_capture(doc, _get_subgrid_edge_cases)
+
+def test_stress_many_splits(doc):
+    return _run_with_capture(doc, _stress_many_splits)
+
+def test_stress_extreme_splits(doc):
+    return _run_with_capture(doc, _stress_extreme_splits)
+
+def test_pole_count_stress(doc):
+    return _run_with_capture(doc, _pole_count_stress)
+
+
 ALL_TESTS = [
     test_basic_creation,
     test_subgrid_counts,
@@ -271,4 +531,12 @@ ALL_TESTS = [
     test_3d_lofted,
     test_serialization,
     test_get_subgrid_api,
+    test_workflow_sketch_to_patch,
+    test_error_disconnected,
+    test_error_bad_selection,
+    test_multiple_patches,
+    test_get_subgrid_edge_cases,
+    test_stress_many_splits,
+    test_stress_extreme_splits,
+    test_pole_count_stress,
 ]
