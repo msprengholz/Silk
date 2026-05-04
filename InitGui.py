@@ -18,6 +18,15 @@
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import FreeCAD
+import sys
+import os
+
+# Add test directory to Python path for test discovery
+path_Silk = os.path.dirname(__file__)
+test_path = os.path.join(path_Silk, "Tests")
+if test_path not in sys.path:
+    sys.path.insert(0, test_path)
+
 
 class Silk (Workbench):
 	
@@ -29,7 +38,6 @@ class Silk (Workbench):
 	def Initialize(self):
 		"This function is executed when FreeCAD starts"
 		import ArachNURBS
-		import SilkPose
 		import ControlPoly4
 		import CubicCurve_4
 		import Point_onCurve
@@ -56,6 +64,8 @@ class Silk (Workbench):
 		import ControlGridNStar66
 		import CubicNStarSurface_NStar66
 		import StarTrim_CubicNStar
+		import SilkPose
+		import SilkWorkflow
 		import Reload_Silk
 
 		# A list of command names created by the imports above
@@ -85,8 +95,10 @@ class Silk (Workbench):
 					"ControlGridNStar66",
 					"CubicNStarSurface_NStar66",
 					"StarTrim_CubicNStar",
+					"SilkPose",
 					"Reload_Silk",
-					"SilkPose"] 
+					"Silk_CreateBoundarySpline",
+					"Silk_CreateControlGridPatch"] 
 					
 		
 		self.appendToolbar("Silk Commands",self.list) # creates a new toolbar with your commands
