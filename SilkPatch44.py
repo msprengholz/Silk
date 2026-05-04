@@ -73,6 +73,7 @@ class Patch44:
         # Guard: only recompute if object is fully initialized (has inputs)
         if prop in ("USplits", "VSplits", "ShowSurface", "ShowGrid", "ShowSubgrids", "reverse"):
             if 'Restore' not in fp.State and hasattr(fp, "Poly0") and fp.Poly0:
+                fp.touch()
                 fp.recompute()
 
     def getSubgrid(self, u0, u1, v0, v1):
@@ -91,6 +92,14 @@ class Patch44:
             return
         if not hasattr(fp, "Poly3") or not fp.Poly3:
             return
+
+        # Touch any BlendStrip objects linked to this patch
+        doc = fp.Document
+        if doc:
+            for obj in doc.Objects:
+                if hasattr(obj, "object_type") and obj.object_type == "BlendStrip":
+                    if getattr(obj, "PatchA", None) == fp or getattr(obj, "PatchB", None) == fp:
+                        obj.touch()
 
         # Build grid poles from edges using ArachNURBS (without temp doc objects)
         p0 = list(fp.Poly0.Poles)
