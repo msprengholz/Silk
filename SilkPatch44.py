@@ -239,6 +239,26 @@ class Patch44:
             fp.Shape = Part.Shape()
 
 
+class Patch44ViewProvider:
+    def __init__(self, vobj):
+        vobj.Proxy = self
+
+    def getIcon(self):
+        return iconPath
+
+    def attach(self, vobj):
+        self.ViewObject = vobj
+
+    def updateData(self, obj, prop):
+        return True
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        return None
+
+
 class CreateSilkPatch44:
     def GetResources(self):
         return {'Pixmap': iconPath, 'MenuText': 'Silk Patch44',
@@ -256,7 +276,7 @@ class CreateSilkPatch44:
         doc = FreeCAD.ActiveDocument
         obj = doc.addObject("Part::FeaturePython", "Patch44")
         Patch44(obj, sel[0], sel[1], sel[2], sel[3])
-        obj.ViewObject.Proxy = 0
+        Patch44ViewProvider(obj.ViewObject)
         obj.ViewObject.LineWidth = 1.50
         obj.ViewObject.LineColor = (0.67, 1.00, 1.00)
         obj.ViewObject.PointSize = 4.00
