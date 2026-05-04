@@ -41,6 +41,7 @@ class Silk (Workbench):
 		import ControlPoly4
 		import CubicCurve_4
 		import Point_onCurve
+		import BoundarySpline
 		import ControlPoly4_segment
 		import ControlGrid44
 		import ControlGrid44_Rotate
@@ -65,6 +66,7 @@ class Silk (Workbench):
 		import CubicNStarSurface_NStar66
 		import StarTrim_CubicNStar
 		import SilkPose
+		import SilkPatch44
 		import SilkWorkflow
 		import Reload_Silk
 
@@ -72,6 +74,7 @@ class Silk (Workbench):
 		self.list = ["ControlPoly4",
 					"CubicCurve_4", 
 					"Point_onCurve", 
+					"BoundarySpline", 
 					"ControlPoly4_segment",
 					"ControlGrid44",
 					"ControlGrid44_Rotate",
@@ -98,7 +101,8 @@ class Silk (Workbench):
 					"SilkPose",
 					"Reload_Silk",
 					"Silk_CreateBoundarySpline",
-					"Silk_CreateControlGridPatch"] 
+					"Silk_CreateControlGridPatch",
+					"Silk_Patch44"] 
 					
 		
 		self.appendToolbar("Silk Commands",self.list) # creates a new toolbar with your commands
