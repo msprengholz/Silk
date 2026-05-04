@@ -137,30 +137,33 @@ class BlendStrip:
         fp.Weights = [w for row in [res[1] for _ in range(4)] for w in row]
         fp.Legs = AN.drawGrid(fp.Poles, 6)
 
-        # Step 8: build blend surface (6x4 grid → bicubic)
+        # Step 8: build blend surface using AN.CubicSurface_64
         if len(fp.Poles) != 24:
             return
 
-        surf = Part.BSplineSurface()
-        surf.increaseDegree(3, 3)
-        for k, m in ((0.0, 4), (1.0 / 3.0, 3), (2.0 / 3.0, 3), (1.0, 4)):
-            surf.insertUKnot(k, m, 1e-7)
-        for k, m in ((0.0, 4), (1.0, 4)):
-            surf.insertVKnot(k, m, 1e-7)
-        for r in range(4):
-            for c in range(6):
-                idx = r * 6 + c
-                surf.setPole(c + 1, r + 1, fp.Poles[idx], fp.Weights[idx])
+        doc = fp.Document
+        tmp_surf = doc.addObject("Part::FeaturePython", "_blend_surf_tmp")
+        AN.CubicSurface_64(tmp_surf, fp)
+        tmp_surf.recompute()
+        surf_shape = tmp_surf.Shape
+        doc.removeObject(tmp_surf.Name)
 
-        surf_shape = surf.toShape()
-        shapes = [surf_shape]
-        for leg in fp.Legs:
-            if hasattr(leg, "toShape"):
-                shapes.append(leg.toShape())
-        try:
-            fp.Shape = Part.Compound(shapes)
-        except Exception:
-            fp.Shape = surf_shape
+        if not surf_shape or not hasattr(surf_shape, "Faces") or not surf_shape.Faces:
+            # Fallback: just show grid
+            shapes = []
+        else:
+            shapes = [surf_shape]
+            for leg in fp.Legs:
+                if hasattr(leg, "toShape"):
+                    try:
+                        shapes.append(leg.toShape())
+                    except Exception:
+                        pass
+        if shapes:
+            try:
+                fp.Shape = Part.Compound(shapes)
+            except Exception:
+                fp.Shape = surf_shape
 
 
 class CreateBlendStrip:
