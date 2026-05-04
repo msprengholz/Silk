@@ -31,9 +31,11 @@ def test_boundaryspline_3l(doc):
     ])
     doc.recompute()
 
+    # Call command directly (in-session Gui.addCommand doesn't replace cached registration)
     Gui.Selection.clearSelection()
     Gui.Selection.addSelection(sk)
-    Gui.runCommand("BoundarySpline")
+    cmd = BoundarySpline.CreateBoundarySpline()
+    cmd.Activated()
 
     # Should find exactly one BoundarySpline with 4 poles
     bs_list = [o for o in doc.Objects if o.Name.startswith("BoundarySpline") and hasattr(o, "Poles")]
