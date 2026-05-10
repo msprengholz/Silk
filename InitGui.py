@@ -68,6 +68,7 @@ class Silk (Workbench):
 		import StarTrim_CubicNStar
 		import SilkPose
 		import SilkPatch44
+		import SilkBlend
 		import SilkWorkflow
 		import Reload_Silk
 
@@ -104,7 +105,8 @@ class Silk (Workbench):
 					"Reload_Silk",
 					"Silk_CreateBoundarySpline",
 					"Silk_CreateControlGridPatch",
-					"Silk_Patch44"] 
+					"Silk_Patch44",
+					"Silk_CreateBlend"] 
 					
 		
 		self.appendToolbar("Silk Commands",self.list) # creates a new toolbar with your commands
