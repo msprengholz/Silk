@@ -99,25 +99,38 @@ class BlendStrip:
             if not p.Proxy._subgrids:
                 return  # no subdivisions — can't blend
 
+        # Compute correct subgrid index for 2D interval layout
+        # Subgrid order: for iu in intervals_u: for iv in intervals_v
+        # idx = iu * nv + iv. For edge strip, take first interval in the non-split direction.
+        def sg_idx(p, sd, ss):
+            from SilkPatch44 import _build_intervals
+            nu = max(1, len(_build_intervals(list(p.USplits or []))))
+            nv = max(1, len(_build_intervals(list(p.VSplits or []))))
+            if sd == "U":
+                iu = 0 if ss == 0 else nu - 1
+                return iu * nv  # first V interval
+            else:
+                iv = 0 if ss == 0 else nv - 1
+                return iv  # first U interval
+
+        si_a = sg_idx(pa, sd_a, ss_a)
+        si_b = sg_idx(pb, sd_b, ss_b)
+        sga = pa.Proxy._subgrids[si_a]
+        sgb = pb.Proxy._subgrids[si_b]
+
         # Tell each patch which subgrid is being blended (for auto-hide)
-        hide_a = 0 if ss_a == 0 else len(pa.Proxy._subgrids) - 1
-        hide_b = 0 if ss_b == 0 else len(pb.Proxy._subgrids) - 1
         if not hasattr(pa, "_HideSubgridIdx"):
             pa.addProperty("App::PropertyInteger", "_HideSubgridIdx", "Internal",
-                           "subgrid index hidden by blend")._HideSubgridIdx = hide_a
+                           "subgrid index hidden by blend")._HideSubgridIdx = si_a
             pa.setEditorMode("_HideSubgridIdx", 1)
         else:
-            pa._HideSubgridIdx = hide_a
+            pa._HideSubgridIdx = si_a
         if not hasattr(pb, "_HideSubgridIdx"):
             pb.addProperty("App::PropertyInteger", "_HideSubgridIdx", "Internal",
-                           "subgrid index hidden by blend")._HideSubgridIdx = hide_b
+                           "subgrid index hidden by blend")._HideSubgridIdx = si_b
             pb.setEditorMode("_HideSubgridIdx", 1)
         else:
-            pb._HideSubgridIdx = hide_b
-
-        # Pick the correct subgrid: 0 if split near 0, -1 if split near 1
-        sga = pa.Proxy._subgrids[0 if ss_a == 0 else -1]
-        sgb = pb.Proxy._subgrids[0 if ss_b == 0 else -1]
+            pb._HideSubgridIdx = si_b
 
         # Step 6: corner-to-parameter mapping
         cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
