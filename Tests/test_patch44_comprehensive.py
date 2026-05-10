@@ -523,6 +523,46 @@ def test_pole_count_stress(doc):
     return _run_with_capture(doc, _pole_count_stress)
 
 
+def _edge_2n(doc):
+    """Edge from 2 sketches (2N mode): circle+line each, selects both together."""
+    err, chk = [], []
+
+    sk1 = doc.addObject("Sketcher::SketchObject", "SK_A")
+    sk1.Placement = FreeCAD.Placement(Vector(88.4507,0,9.0377), FreeCAD.Rotation(-90,0,45.5543))
+    sk1.addGeometry([
+        Part.Circle(Vector(0,0,0), Vector(0,0,1), 10.995),
+        Part.LineSegment(Vector(0,0,0), Vector(-14.4129,29.393,0)),
+    ])
+    sk2 = doc.addObject("Sketcher::SketchObject", "SK_B")
+    sk2.Placement = FreeCAD.Placement(Vector(138.2692,50,0), FreeCAD.Rotation(-113.309,0,90))
+    sk2.addGeometry([
+        Part.Circle(Vector(0,0,0), Vector(0,0,1), 9.1779),
+        Part.LineSegment(Vector(0,0,0), Vector(20.5843,19.925,0)),
+    ])
+    doc.recompute()
+
+    import SilkEdge
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(sk1)
+    Gui.Selection.addSelection(sk2)
+    SilkEdge.CreateEdge().Activated()
+    doc.recompute()
+
+    edges = [o for o in doc.Objects if hasattr(o,"object_type") and o.object_type=="Edge"]
+    check(len(edges) >= 1, "Expected >=1 Edge", err)
+    if edges:
+        e = edges[-1]
+        check(len(e.Poles) == 4, f"Expected 4 poles, got {len(e.Poles)}", err)
+        check(len(e.Sketches) == 2, f"Expected 2 sketches, got {len(e.Sketches)}", err)
+        chk.append(f"2N Edge: {len(e.Poles)} poles from {len(e.Sketches)} sketches")
+
+    return {"pass": len(err) == 0, "errors": err, "checks": chk}
+
+
+def test_edge_2n(doc):
+    return _run_with_capture(doc, _edge_2n)
+
+
 ALL_TESTS = [
     test_basic_creation,
     test_subgrid_counts,
@@ -539,4 +579,5 @@ ALL_TESTS = [
     test_stress_many_splits,
     test_stress_extreme_splits,
     test_pole_count_stress,
+    test_edge_2n,
 ]
