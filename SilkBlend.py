@@ -60,8 +60,10 @@ class BlendStrip:
         pa.recompute()
         pb.recompute()
 
-        # Step 1: ensure patches have subdivision
+        # Step 1: ensure patches have splits for the edge strip width
         for p in (pa, pb):
+            if not p.Proxy._base_surface:
+                return
             if not p.Proxy._subgrids:
                 p.USplits = [0.1]
                 p.recompute()
@@ -94,43 +96,61 @@ class BlendStrip:
         ss_a = 0 if ea[1] == "0" else 1  # split near 0 or near 1 along the perpendicular direction
         ss_b = 0 if eb[1] == "0" else 1
 
-        # Step 5: get subgrid strips (user must set USplits/VSplits on patches first)
+        # Step 5: extract edge strips directly from base surface
+        # (bypasses pre-computed subgrids which may not cover the full shared edge)
+        # For shared edge along U (row): need strip with full U range, narrow V range
+        # For shared edge along V (col): need strip with full V range, narrow U range
         for p in (pa, pb):
-            if not p.Proxy._subgrids:
-                return  # no subdivisions — can't blend
+            if not p.Proxy._base_surface:
+                return  # no base surface — can't blend
 
-        # Compute correct subgrid index for 2D interval layout
-        # Subgrid order: for iu in intervals_u: for iv in intervals_v
-        # idx = iu * nv + iv. For edge strip, take first interval in the non-split direction.
-        def sg_idx(p, sd, ss):
+        def get_strip(p, ea, ss):
+            """Extract 4x4 edge strip from patch surface via segmentation.
+            
+            ea: edge type ("U0","U1","V0","V1")
+            ss: side (0=split near 0, 1=split near 1)
+            Returns flat 16-pole array poles[U][V] = flat[U*4+V]
+            """
+            surf = p.Proxy._base_surface
+            if ea[0] == "U":  # shared edge along U (row)
+                u0, u1 = 0.0, 1.0  # full U range
+                v0, v1 = (0.0, 0.1) if ss == 0 else (0.9, 1.0)  # narrow V at shared edge
+            else:  # shared edge along V (col)
+                u0, u1 = (0.0, 0.1) if ss == 0 else (0.9, 1.0)  # narrow U at shared edge
+                v0, v1 = 0.0, 1.0  # full V range
+            seg = surf.copy()
+            seg.segment(u0, u1, v0, v1)
+            sp = seg.getPoles()
+            flat = []
+            for u in range(4):
+                for v in range(4):
+                    flat.append(sp[u][v])
+            return flat
+
+        sga = get_strip(pa, ea, ss_a)
+        sgb = get_strip(pb, eb, ss_b)
+
+        # Auto-hide: tell each patch which subgrid is being blended
+        def hide_idx(p, sd, ss):
             from SilkPatch44 import _build_intervals
             nu = max(1, len(_build_intervals(list(p.USplits or []))))
             nv = max(1, len(_build_intervals(list(p.VSplits or []))))
             if sd == "U":
                 iu = 0 if ss == 0 else nu - 1
-                return iu * nv  # first V interval
+                return iu * nv
             else:
                 iv = 0 if ss == 0 else nv - 1
-                return iv  # first U interval
-
-        si_a = sg_idx(pa, sd_a, ss_a)
-        si_b = sg_idx(pb, sd_b, ss_b)
-        sga = pa.Proxy._subgrids[si_a]
-        sgb = pb.Proxy._subgrids[si_b]
-
-        # Tell each patch which subgrid is being blended (for auto-hide)
-        if not hasattr(pa, "_HideSubgridIdx"):
-            pa.addProperty("App::PropertyInteger", "_HideSubgridIdx", "Internal",
-                           "subgrid index hidden by blend")._HideSubgridIdx = si_a
-            pa.setEditorMode("_HideSubgridIdx", 1)
-        else:
-            pa._HideSubgridIdx = si_a
-        if not hasattr(pb, "_HideSubgridIdx"):
-            pb.addProperty("App::PropertyInteger", "_HideSubgridIdx", "Internal",
-                           "subgrid index hidden by blend")._HideSubgridIdx = si_b
-            pb.setEditorMode("_HideSubgridIdx", 1)
-        else:
-            pb._HideSubgridIdx = si_b
+                return iv
+        sd_a = "V" if ea[0] == "U" else "U"
+        sd_b = "V" if eb[0] == "U" else "U"
+        for p, sd, ss, label in [(pa, sd_a, ss_a, "a"), (pb, sd_b, ss_b, "b")]:
+            hi = hide_idx(p, sd, ss)
+            if not hasattr(p, "_HideSubgridIdx"):
+                p.addProperty("App::PropertyInteger", "_HideSubgridIdx", "Internal",
+                              "subgrid index hidden by blend")._HideSubgridIdx = hi
+                p.setEditorMode("_HideSubgridIdx", 1)
+            else:
+                p._HideSubgridIdx = hi
 
         # Step 6: corner-to-parameter mapping
         cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
