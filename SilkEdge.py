@@ -63,10 +63,25 @@ class Edge:
             return
 
         sketches = fp.Sketches
-        first_sketch = sketches[0] if sketches else None
+        if not sketches:
+            return
 
-        if first_sketch:
-            sketch = first_sketch
+        if len(sketches) >= 2:
+            # 2N mode — two sketches (each with circle + line)
+            from ArachNURBS import ControlPoly4_2N
+            dummy = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "_edge_tmp")
+            ControlPoly4_2N(dummy, sketches[0], sketches[1])
+            dummy.recompute()
+            if fp.reverse:
+                fp.Poles = list(reversed(dummy.Poles))
+                fp.Weights = list(reversed(dummy.Weights))
+            else:
+                fp.Poles = dummy.Poles
+                fp.Weights = dummy.Weights
+            fp.Legs = dummy.Legs
+            FreeCAD.ActiveDocument.removeObject(dummy.Name)
+        else:
+            sketch = sketches[0]
             geom = sketch.Geometry
             geom_count = len(geom)
 
