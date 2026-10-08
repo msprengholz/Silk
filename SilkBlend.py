@@ -19,6 +19,28 @@ path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
 iconPath = path_Silk_icons + "/BlendStrip.svg"
 
 
+def _patch_side(pa, pb, tol=0.01):
+    """Edge type and side of the shared edge as seen from pa (toward pb).
+
+    Returns (edge_type, ss) e.g. ("V1", 1), or (None, None) when the
+    patches do not share an edge.
+    """
+    a_c = [pa.Poles[0], pa.Poles[3], pa.Poles[15], pa.Poles[12]]
+    b_c = [pb.Poles[0], pb.Poles[3], pb.Poles[15], pb.Poles[12]]
+    pairs = [(i, j) for i, ac in enumerate(a_c)
+             for j, bc in enumerate(b_c) if (ac - bc).Length < tol]
+    if len(pairs) < 2:
+        return None, None
+    edges = {(0, 1): "U0", (1, 2): "V1", (2, 3): "U1", (3, 0): "V0",
+             (1, 0): "U0", (2, 1): "V1", (3, 2): "U1", (0, 3): "V0"}
+    ids_a = sorted(x[0] for x in pairs)
+    ids_b = sorted(x[1] for x in pairs)
+    ea = edges.get((ids_a[0], ids_a[1]))
+    if not ea:
+        return None, None
+    return ea, (0 if ea[1] == "0" else 1)
+
+
 class BlendStrip:
     """FeaturePython: joins two Patch44 objects at their shared edge."""
 
@@ -111,55 +133,87 @@ class BlendStrip:
         # For shared edge along U (row): need strip with full U range, narrow V range
         # For shared edge along V (col): need strip with full V range, narrow U range
 
-        def get_strip(p, ea, ss):
-            """Extract 4x4 edge strip from patch surface via segmentation.
-            
-            ea: edge type ("U0","U1","V0","V1")
-            ss: side (0=split near 0, 1=split near 1)
-            Returns flat 16-pole array poles[U][V] = flat[U*4+V]
+        # #33: the blend band comes from the patch's own subgrid cells —
+        # the UV splits already subdivide the surface, so pick the seam-
+        # adjacent cell(s) instead of re-segmenting the base surface. The
+        # 0.1x0.1 corner cell at a 4-patch junction is not part of the band
+        # (reserved for the four-cell corner blend op).
+        def band_cells(p, ea, ss):
+            """Subgrid cell indices covered by this strip's band.
+
+            The band runs along the seam in the band interval (0 or last,
+            per ss). A cell at a seam end with a seam-axis split is a
+            corner cell — excluded from the band.
             """
-            surf = p.Proxy._base_surface
-            if ea[0] == "U":  # shared edge along U (row)
-                u0, u1 = 0.0, 1.0  # full U range
-                v0, v1 = (0.0, 0.1) if ss == 0 else (0.9, 1.0)  # narrow V at shared edge
-            else:  # shared edge along V (col)
-                u0, u1 = (0.0, 0.1) if ss == 0 else (0.9, 1.0)  # narrow U at shared edge
-                v0, v1 = 0.0, 1.0  # full V range
-            seg = surf.copy()
-            seg.segment(u0, u1, v0, v1)
-            sp = seg.getPoles()
-            flat = []
-            for u in range(4):
-                for v in range(4):
-                    flat.append(sp[u][v])
-            return flat
+            from SilkPatch44 import _build_intervals
+            ivs_u = _build_intervals(list(p.USplits or []))
+            ivs_v = _build_intervals(list(p.VSplits or []))
+            nu, nv = len(ivs_u), len(ivs_v)
+            if ea[0] == "U":  # seam along U: band fixes V interval, spans U cells
+                b = (nv - 1) if ss else 0
+                keep_u = set(range(nu))
+                if any(abs(s - 0.1) < 1e-9 for s in (p.USplits or [])):
+                    keep_u.discard(0)
+                if any(abs(s - 0.9) < 1e-9 for s in (p.USplits or [])):
+                    keep_u.discard(nu - 1)
+                return [a * nv + b for a in sorted(keep_u)]
+            # seam along V: band fixes U interval, spans V cells
+            a = (nu - 1) if ss else 0
+            keep_v = set(range(nv))
+            if any(abs(s - 0.1) < 1e-9 for s in (p.VSplits or [])):
+                keep_v.discard(0)
+            if any(abs(s - 0.9) < 1e-9 for s in (p.VSplits or [])):
+                keep_v.discard(nv - 1)
+            return [a * nv + b for b in sorted(keep_v)]
+
+        def get_strip(p, ea, ss):
+            """Extract the band cell's flat 16-pole array poles[U][V] = flat[U*4+V]
+            from the patch's pre-computed subgrids.
+            """
+            idxs = band_cells(p, ea, ss)
+            if len(idxs) != 1 or not p.Proxy._subgrids:
+                FreeCAD.Console.PrintError(
+                    f"Silk: blend band on {p.Name} covers {len(idxs)} subgrid "
+                    "cells; exactly 1 is required (multi-cell bands not "
+                    "supported yet).\n")
+                return None
+            return list(p.Proxy._subgrids[idxs[0]])
 
         sga = get_strip(pa, ea, ss_a)
         sgb = get_strip(pb, eb, ss_b)
+        if sga is None or sgb is None:
+            return
 
-        # Auto-hide: record every subgrid cell covered by this strip's band.
-        # A band spans all cells along the seam, so on a corner patch (both
-        # U and V splits) it covers 2 cells. Multiple blends union their sets.
-        def band_cells(p, sd, ss):
-            from SilkPatch44 import _build_intervals
-            nu = max(1, len(_build_intervals(list(p.USplits or []))))
-            nv = max(1, len(_build_intervals(list(p.VSplits or []))))
-            iu = nu - 1 if ss else 0
-            iv = nv - 1 if ss else 0
-            return [a * nv + b for a in range(nu) for b in range(nv)
-                    if (sd == "U" and a == iu) or (sd == "V" and b == iv)]
+        # Auto-hide: re-derive the FULL hidden set for each patch from ALL
+        # blend bands on it, using the current splits. Cell indices shift
+        # whenever a later strip adds a split and re-subdivides the patch,
+        # so per-strip sets recorded earlier would go stale (#33). The
+        # corner cell at a 4-patch junction is never part of a band.
+        def linked_strips(p):
+            for o in fp.Document.Objects:
+                if (o is not fp and getattr(o, "object_type", "") == "BlendStrip"
+                        and getattr(o, "PatchA", None) and getattr(o, "PatchB", None)
+                        and (o.PatchA is p or o.PatchB is p)):
+                    yield o
 
-        for p, sd, ss in [(pa, sd_a, ss_a), (pb, sd_b, ss_b)]:
-            idxs = band_cells(p, sd, ss)
+        for p_i in (pa, pb):
+            e_i = ea if p_i is pa else eb
+            ss_i = ss_a if p_i is pa else ss_b
+            idxs = set(band_cells(p_i, e_i, ss_i))
+            for st in linked_strips(p_i):
+                other = st.PatchB if st.PatchA is p_i else st.PatchA
+                e_j, ss_j = _patch_side(p_i, other, fp.tolerance)
+                if e_j:
+                    idxs |= set(band_cells(p_i, e_j, ss_j))
             try:
-                p.removeProperty("_HideSubgridIdx")  # superseded by the list
+                p_i.removeProperty("_HideSubgridIdx")  # superseded by the list
             except Exception:
                 pass
-            if not hasattr(p, "_HiddenSubgridIdxs"):
-                p.addProperty("App::PropertyIntegerList", "_HiddenSubgridIdxs", "Internal",
-                              "subgrid cell indices hidden by blends")
-                p.setEditorMode("_HiddenSubgridIdxs", 1)
-            p._HiddenSubgridIdxs = sorted(set(list(p._HiddenSubgridIdxs or [])) | set(idxs))
+            if not hasattr(p_i, "_HiddenSubgridIdxs"):
+                p_i.addProperty("App::PropertyIntegerList", "_HiddenSubgridIdxs", "Internal",
+                                "subgrid cell indices hidden by blends")
+                p_i.setEditorMode("_HiddenSubgridIdxs", 1)
+            p_i._HiddenSubgridIdxs = sorted(idxs)
 
         # Step 6: corner-to-parameter mapping
         cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},

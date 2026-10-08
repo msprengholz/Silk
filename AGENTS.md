@@ -71,13 +71,26 @@ Compare corner[i] vs corner[j] within tolerance 0.01. Collect matching pairs.
 - (2,3) or (3,2) = U1 (V=1, U varies along row 3)
 - (3,0) or (0,3) = V0 (U=0, V varies along col 0)
 
-### Step 3: Subdivide perpendicular to shared edge
-| Shared edge | Split direction | Strip location |
-|-------------|----------------|----------------|
-| U0 (row 0)  | VSplits=[0.1]  | subgrid[0] (V=0→0.1) |
-| U1 (row 3)  | VSplits=[0.9]  | subgrid[1] (V=0.9→1.0) |
-| V0 (col 0)  | USplits=[0.1]  | subgrid[0] (U=0→0.1) |
-| V1 (col 3)  | USplits=[0.9]  | subgrid[1] (U=0.9→1.0) |
+### Step 3: Ensure the band split on both patches (SilkBlend.ensure_band_split)
+Each strip sets the perpendicular split on its two patches, additively so both
+splits can coexist on a 4-patch corner patch:
+| Shared edge | Split direction | Band location |
+|-------------|-----------------|---------------|
+| U0 (row 0)  | VSplits=[0.1]  | U∈[0,0.1] band |
+| U1 (row 3)  | VSplits=[0.9]  | U∈[0.9,1.0] band |
+| V0 (col 0)  | USplits=[0.1]  | U∈[0,0.1] band |
+| V1 (col 3)  | USplits=[0.9]  | U∈[0.9,1.0] band |
+
+### Step 3b: Band = subgrid cells, NOT re-segmentation (ticket #33)
+The strip band is taken from the patch's pre-computed subgrid cells
+(`p.Proxy._subgrids`, produced by USplits/VSplits) — never by re-segmenting
+`_base_surface` with an ad-hoc trim. `band_cells(p, ea, ss)` selects the band
+cell(s): band interval 0 or last per ss, excluding corner cells at seam ends
+with a seam-axis split (0.1/0.9) — those are reserved for the 4-subgrid corner
+blend object. `get_strip` returns the selected cell's flat poles (single-cell
+bands only; console error + None otherwise). Auto-hide re-derives the FULL
+`_HiddenSubgridIdxs` set for each patch from ALL linked strips with the
+current splits (cell indices shift when a later strip adds a split).
 
 ### Step 4: Extract rows/columns from strips
 Subgrid flat: `poles[U][V]` = `flat[U*4 + V]` (U is first dimension in FreeCAD)

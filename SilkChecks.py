@@ -389,20 +389,35 @@ def _blend_reference_rows(pa, pb, tol=0.01):
     ss_a = 0 if ea[1] == "0" else 1
     ss_b = 0 if eb[1] == "0" else 1
 
+    # #33: the blend band comes from the patch's own subgrid cells
+    # (mirrors SilkBlend._do_execute band_cells/get_strip).
+    def band_cells(p, etype, ss):
+        from SilkPatch44 import _build_intervals
+        ivs_u = _build_intervals(list(p.USplits or []))
+        ivs_v = _build_intervals(list(p.VSplits or []))
+        nu, nv = len(ivs_u), len(ivs_v)
+        if etype[0] == "U":  # seam along U: band fixes V interval, spans U cells
+            b = (nv - 1) if ss else 0
+            keep_u = set(range(nu))
+            if any(abs(s - 0.1) < 1e-9 for s in (p.USplits or [])):
+                keep_u.discard(0)
+            if any(abs(s - 0.9) < 1e-9 for s in (p.USplits or [])):
+                keep_u.discard(nu - 1)
+            return [a * nv + b for a in sorted(keep_u)]
+        # seam along V: band fixes U interval, spans V cells
+        a = (nu - 1) if ss else 0
+        keep_v = set(range(nv))
+        if any(abs(s - 0.1) < 1e-9 for s in (p.VSplits or [])):
+            keep_v.discard(0)
+        if any(abs(s - 0.9) < 1e-9 for s in (p.VSplits or [])):
+            keep_v.discard(nv - 1)
+        return [a * nv + b for b in sorted(keep_v)]
+
     def get_strip(p, etype, ss):
-        surf = p.Proxy._base_surface
-        if etype[0] == "U":  # shared edge along U (row): narrow V strip
-            u0, u1 = 0.0, 1.0
-            v0, v1 = (0.0, BLEND_STRIP_WIDTH) if ss == 0 else \
-                     (1.0 - BLEND_STRIP_WIDTH, 1.0)
-        else:  # shared edge along V (col): narrow U strip
-            u0, u1 = (0.0, BLEND_STRIP_WIDTH) if ss == 0 else \
-                     (1.0 - BLEND_STRIP_WIDTH, 1.0)
-            v0, v1 = 0.0, 1.0
-        seg = surf.copy()
-        seg.segment(u0, u1, v0, v1)
-        sp = seg.getPoles()
-        return [sp[u][v] for u in range(4) for v in range(4)]
+        idxs = band_cells(p, etype, ss)
+        if len(idxs) != 1 or not p.Proxy._subgrids:
+            return None
+        return list(p.Proxy._subgrids[idxs[0]])
 
     sga = get_strip(pa, ea, ss_a)
     sgb = get_strip(pb, eb, ss_b)

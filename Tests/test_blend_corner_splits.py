@@ -59,12 +59,15 @@ def test_corner_patches_have_both_band_splits(doc):
 
 
 def test_corner_patch_hidden_cells_cover_both_bands(doc):
-    """Both strip bands are recorded; only the far corner cell stays visible.
+    """Both trimmed strip bands are recorded; the corner cell stays visible.
 
     Cell index = iu * nv + iv (row-major over the 2x2 subgrid).
-    Patch44 (BL): B12 band (U, ss=1) -> cells [2, 3];
-                  B31 band (V, ss=1) -> cells [1, 3];
-                  union [1, 2, 3], visible cell = 0.
+    With the #33 trim, each band stops at the corner-cell boundary, so the
+    0.1x0.1 corner cell at C is no longer covered by any strip band — it
+    stays visible as the placeholder face for the #28 corner blend.
+    Patch44 (BL): B12 band (U, ss=1, trimmed) -> cells [2];
+                  B31 band (V, ss=1, trimmed) -> cells [1];
+                  union [1, 2], visible cells = 0 and 3 (corner placeholder).
     """
     from Tests.corner_model import build_corner_model
 
@@ -74,19 +77,20 @@ def test_corner_patch_hidden_cells_cover_both_bands(doc):
     checks = []
 
     hidden = sorted(p44._HiddenSubgridIdxs)
-    if hidden != [1, 2, 3]:
-        errors.append(f"Patch44 _HiddenSubgridIdxs={hidden}, want [1, 2, 3]")
+    if hidden != [1, 2]:
+        errors.append(f"Patch44 _HiddenSubgridIdxs={hidden}, want [1, 2]")
     checks.append(f"Patch44 hidden={hidden}")
 
-    # In subgrid view the patch must show exactly one face (cell 0).
+    # In subgrid view the patch must show exactly two faces: the outer
+    # panel cell (0) and the corner placeholder cell (3) at C.
     p44.ShowSurface = True
     p44.ShowSubgrids = True
     p44.AutoHideBlend = True
     p44.recompute()
     faces = [s for s in p44.Shape.SubShapes if s.ShapeType == "Face"]
-    if len(faces) != 1:
-        errors.append(f"Patch44 subgrid view shows {len(faces)} faces, want 1")
-    checks.append(f"subgrid view faces={len(faces)} (want 1)")
+    if len(faces) != 2:
+        errors.append(f"Patch44 subgrid view shows {len(faces)} faces, want 2")
+    checks.append(f"subgrid view faces={len(faces)} (want 2: panel + corner)")
 
     return {"pass": not errors, "errors": errors, "checks": checks}
 
