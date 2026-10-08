@@ -60,15 +60,11 @@ class BlendStrip:
         pa.recompute()
         pb.recompute()
 
-        # Step 1: ensure patches have splits for the edge strip width
         for p in (pa, pb):
             if not p.Proxy._base_surface:
                 return
-            if not p.Proxy._subgrids:
-                p.USplits = [0.1]
-                p.recompute()
 
-        # Step 2: find shared corners
+        # Step 1: find shared corners
         a_c = [pa.Poles[0], pa.Poles[3], pa.Poles[15], pa.Poles[12]]
         b_c = [pb.Poles[0], pb.Poles[3], pb.Poles[15], pb.Poles[12]]
         pairs = []
@@ -79,7 +75,7 @@ class BlendStrip:
         if len(pairs) < 2:
             return
 
-        # Step 3: determine edge type (U0/U1/V0/V1)
+        # Step 2: determine edge type (U0/U1/V0/V1)
         edges = {(0, 1): "U0", (1, 2): "V1", (2, 3): "U1", (3, 0): "V0",
                  (1, 0): "U0", (2, 1): "V1", (3, 2): "U1", (0, 3): "V0"}
         ids_a = sorted(p[0] for p in pairs)
@@ -89,20 +85,31 @@ class BlendStrip:
         if not ea or not eb:
             return
 
-        # Step 4: set split direction and side
+        # Step 3: set split direction and side
         # Split PERPENDICULAR to the shared edge
         sd_a = "V" if ea[0] == "U" else "U"  # VSplits if edge along U, USplits if edge along V
         sd_b = "V" if eb[0] == "U" else "U"
         ss_a = 0 if ea[1] == "0" else 1  # split near 0 or near 1 along the perpendicular direction
         ss_b = 0 if eb[1] == "0" else 1
 
+        # Step 4: ensure each patch has the split that isolates its 0.1 band at
+        # the shared edge (perpendicular to the seam, on the seam's side). A
+        # corner patch meets two strips, so both USplits and VSplits get set.
+        def ensure_band_split(p, sd, ss):
+            prop = "VSplits" if sd == "V" else "USplits"
+            val = 0.9 if ss else 0.1
+            cur = list(getattr(p, prop) or [])
+            if all(abs(v - val) > 1e-9 for v in cur):
+                setattr(p, prop, sorted(cur + [val]))
+                p.recompute()
+
+        ensure_band_split(pa, sd_a, ss_a)
+        ensure_band_split(pb, sd_b, ss_b)
+
         # Step 5: extract edge strips directly from base surface
         # (bypasses pre-computed subgrids which may not cover the full shared edge)
         # For shared edge along U (row): need strip with full U range, narrow V range
         # For shared edge along V (col): need strip with full V range, narrow U range
-        for p in (pa, pb):
-            if not p.Proxy._base_surface:
-                return  # no base surface — can't blend
 
         def get_strip(p, ea, ss):
             """Extract 4x4 edge strip from patch surface via segmentation.
@@ -130,57 +137,84 @@ class BlendStrip:
         sga = get_strip(pa, ea, ss_a)
         sgb = get_strip(pb, eb, ss_b)
 
-        # Auto-hide: tell each patch which subgrid is being blended
-        def hide_idx(p, sd, ss):
+        # Auto-hide: record every subgrid cell covered by this strip's band.
+        # A band spans all cells along the seam, so on a corner patch (both
+        # U and V splits) it covers 2 cells. Multiple blends union their sets.
+        def band_cells(p, sd, ss):
             from SilkPatch44 import _build_intervals
             nu = max(1, len(_build_intervals(list(p.USplits or []))))
             nv = max(1, len(_build_intervals(list(p.VSplits or []))))
-            if sd == "U":
-                iu = 0 if ss == 0 else nu - 1
-                return iu * nv
-            else:
-                iv = 0 if ss == 0 else nv - 1
-                return iv
-        sd_a = "V" if ea[0] == "U" else "U"
-        sd_b = "V" if eb[0] == "U" else "U"
-        for p, sd, ss, label in [(pa, sd_a, ss_a, "a"), (pb, sd_b, ss_b, "b")]:
-            hi = hide_idx(p, sd, ss)
-            if not hasattr(p, "_HideSubgridIdx"):
-                p.addProperty("App::PropertyInteger", "_HideSubgridIdx", "Internal",
-                              "subgrid index hidden by blend")._HideSubgridIdx = hi
-                p.setEditorMode("_HideSubgridIdx", 1)
-            else:
-                p._HideSubgridIdx = hi
+            iu = nu - 1 if ss else 0
+            iv = nv - 1 if ss else 0
+            return [a * nv + b for a in range(nu) for b in range(nv)
+                    if (sd == "U" and a == iu) or (sd == "V" and b == iv)]
+
+        for p, sd, ss in [(pa, sd_a, ss_a), (pb, sd_b, ss_b)]:
+            idxs = band_cells(p, sd, ss)
+            try:
+                p.removeProperty("_HideSubgridIdx")  # superseded by the list
+            except Exception:
+                pass
+            if not hasattr(p, "_HiddenSubgridIdxs"):
+                p.addProperty("App::PropertyIntegerList", "_HiddenSubgridIdxs", "Internal",
+                              "subgrid cell indices hidden by blends")
+                p.setEditorMode("_HiddenSubgridIdxs", 1)
+            p._HiddenSubgridIdxs = sorted(set(list(p._HiddenSubgridIdxs or [])) | set(idxs))
 
         # Step 6: corner-to-parameter mapping
         cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
                 "V0": {0: 0, 3: 3}, "V1": {1: 0, 2: 3}}
+
+        # Seam alignment (#30): the matched corners fix the two seam ends;
+        # the middle rows must follow the same alignment. Both patches can
+        # parametrize the shared edge in the same physical direction
+        # (identity) or opposite (reversed) — it depends on the geometry,
+        # not on the edge type. Inconsistent corner pairs = twisted input.
+        identity = None
+        for lc_idx, rc_idx in pairs:
+            la = cmap[ea].get(lc_idx)
+            if la is None:
+                continue
+            is_id = (la == cmap[eb][rc_idx])
+            if identity is None:
+                identity = is_id
+            elif is_id != identity:
+                return
+        if identity is None:
+            return
 
         # Step 7: blend each paired row/column
         # Subgraph flat = poles[U][V] = flat[U*4 + V]
         # If shared edge runs ALONG U (row): perpendicular = V → take COLUMNS (const U)
         # If shared edge runs ALONG V (col): perpendicular = U → take ROWS (const V)
         blend_poles = []
+        # #31: strip index 0 sits at param 0 of the strip window. For ss=0 the
+        # shared edge is at index 0; for ss=1 it is at index 3. Build each row
+        # in shared→outer order, then orient: blend_poly_2x4_1x6 needs
+        # poles_0 outer→shared and poles_1 shared→outer.
+        va = range(4) if ss_a == 0 else range(3, -1, -1)   # left:  shared→outer
+        vb = range(4) if ss_b == 0 else range(3, -1, -1)   # right: shared→outer
         for li in range(4):
-            # Left strip: shared edge → inward, then reverse for outer→shared
+            # Left strip: shared edge → outward, then reverse for outer→shared
             if ea[0] == "U":  # shared along U → take COLUMNS
-                l_rev = list(reversed([sga[li * 4 + v] for v in range(4)]))
+                l_rev = list(reversed([sga[li * 4 + v] for v in va]))
             else:  # shared along V → take ROWS
-                l_rev = list(reversed([sga[u * 4 + li] for u in range(4)]))
+                l_rev = list(reversed([sga[v * 4 + li] for v in va]))
 
-            # Map left param index to right param index via corner pairs
-            cmap = {"U0":{0:0,1:3},"U1":{2:3,3:0},"V0":{0:0,3:3},"V1":{1:0,2:3}}
-            ri = 3 - li  # default: reversed
+            # Map left param index to right param index: corner pairs fix
+            # the seam ends, the inferred alignment governs the middle.
             for lc_idx, rc_idx in pairs:
-                if li == cmap[ea][lc_idx]:
+                if li == cmap[ea].get(lc_idx):
                     ri = cmap[eb][rc_idx]
                     break
+            else:
+                ri = li if identity else 3 - li
 
-            # Right strip: shared edge → inward (keep direction)
+            # Right strip: shared edge → outward (keep shared→outer direction)
             if eb[0] == "U":  # shared along U → take COLUMNS
-                rc = [sgb[ri * 4 + v] for v in range(4)]
+                rc = [sgb[ri * 4 + v] for v in vb]
             else:  # shared along V → take ROWS
-                rc = [sgb[u * 4 + ri] for u in range(4)]
+                rc = [sgb[v * 4 + ri] for v in vb]
 
             res = AN.blend_poly_2x4_1x6(l_rev, [1.0] * 4, rc, [1.0] * 4,
                                         2.0, 2.0, 2.0, 2.0)

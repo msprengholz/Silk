@@ -411,21 +411,42 @@ def _blend_reference_rows(pa, pb, tol=0.01):
 
     cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
             "V0": {0: 0, 3: 3}, "V1": {1: 0, 2: 3}}
+    # Seam alignment (#30): middle rows follow the corner-pair alignment
+    # (identity or reversed), not an assumed reversal.
+    identity = None
+    for lc_idx, rc_idx in pairs:
+        la = cmap[ea].get(lc_idx)
+        if la is None:
+            continue
+        is_id = (la == cmap[eb][rc_idx])
+        if identity is None:
+            identity = is_id
+        elif is_id != identity:
+            return None
+    if identity is None:
+        return None
+    # #31: strip index 0 sits at param 0 of the strip window, so the shared
+    # edge is at index 0 for ss=0 and index 3 for ss=1. Build each row in
+    # shared->outer order, then orient: poles_0 outer->shared, poles_1
+    # shared->outer.
+    va = range(4) if ss_a == 0 else range(3, -1, -1)   # left:  shared->outer
+    vb = range(4) if ss_b == 0 else range(3, -1, -1)   # right: shared->outer
     rows = []
     for li in range(4):
         if ea[0] == "U":  # shared along U -> COLUMNS (const U)
-            l_rev = list(reversed([sga[li * 4 + v] for v in range(4)]))
+            l_rev = list(reversed([sga[li * 4 + v] for v in va]))
         else:  # shared along V -> ROWS (const V)
-            l_rev = list(reversed([sga[u * 4 + li] for u in range(4)]))
-        ri = 3 - li
+            l_rev = list(reversed([sga[v * 4 + li] for v in va]))
         for lc_idx, rc_idx in pairs:
             if li == cmap[ea].get(lc_idx):
                 ri = cmap[eb][rc_idx]
                 break
-        if eb[0] == "U":
-            rc = [sgb[ri * 4 + v] for v in range(4)]
         else:
-            rc = [sgb[u * 4 + ri] for u in range(4)]
+            ri = li if identity else 3 - li
+        if eb[0] == "U":
+            rc = [sgb[ri * 4 + v] for v in vb]
+        else:
+            rc = [sgb[v * 4 + ri] for v in vb]
         rows.append((l_rev, rc))
     return rows
 

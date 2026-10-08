@@ -207,15 +207,22 @@ class Patch44:
 
         # Build display Shape
         # ShowSurface: show/hide surface. ShowSubgrids: show subdivided detail. ShowGrid: grid lines.
-        # AutoHideBlend: hide the subgrid strip used by a blend (via _HideSubgridIdx)
-        hide_idx = getattr(fp, "_HideSubgridIdx", -1) if fp.AutoHideBlend else -1
+        # AutoHideBlend: hide the subgrid cells covered by blends
+        # (via _HiddenSubgridIdxs; legacy single _HideSubgridIdx also honoured)
+        if fp.AutoHideBlend:
+            hide_idxs = set(list(getattr(fp, "_HiddenSubgridIdxs", []) or []))
+            legacy = getattr(fp, "_HideSubgridIdx", -1)
+            if isinstance(legacy, int) and legacy >= 0:
+                hide_idxs.add(legacy)
+        else:
+            hide_idxs = set()
 
         shapes_to_compound = []
         if fp.ShowSurface:
             if fp.ShowSubgrids and self._subsurfaces:
                 # Show only non-blended subgrid surfaces
                 for i, sub in enumerate(self._subsurfaces):
-                    if i != hide_idx:
+                    if i not in hide_idxs:
                         shapes_to_compound.append(sub)
             else:
                 shapes_to_compound.append(surf.toShape())
