@@ -17,7 +17,10 @@ Check menu (locked in #14):
 Patches (P1-P4):
   P1  corner poles sit on the shared corners of the 4-edge loop
   P2  boundary row/col pole sets match their driving edges
-  P3  pole grid does not fold or flip (consistent cell orientation)
+  P3  the built surface's normal field is consistently oriented
+      (a folded or flipped net shows up as a normal flip on the
+      evaluated surface -- robust on curved grids, unlike a raw
+      control-net cross test which false-positives on twists)
   P4  surface is valid and free of self-intersection
 
 Tolerances (spec #16): poles 1e-6, weights exact (1.0).
@@ -175,6 +178,19 @@ def _multiset_match_within(poles, targets, tol):
     return True
 
 
+def _build_bicubic(poles, weights):
+    """Bicubic Bezier surface from a 4x4 pole grid (mirrors Patch44)."""
+    surf = Part.BSplineSurface()
+    surf.increaseDegree(3, 3)
+    for knot, mult in [(0.0, 4), (1.0, 4)]:
+        surf.insertUKnot(knot, mult, 1e-7)
+        surf.insertVKnot(knot, mult, 1e-7)
+    for r in range(4):
+        for c in range(4):
+            surf.setPole(c + 1, r + 1, poles[r * 4 + c], weights[r * 4 + c])
+    return surf
+
+
 def _check_patch44(patch, edges):
     results = []
 
@@ -235,25 +251,32 @@ def _check_patch44(patch, edges):
         "; ".join(berrs) if berrs else "all 4 boundary rows/cols match their edges",
     ))
 
-    # P3: pole grid does not fold or flip (consistent cell orientation)
-    n0, folds = None, []
-    for u in range(3):
-        for v in range(3):
-            a = poles[u * 4 + v]
-            n = (poles[(u + 1) * 4 + v] - a).cross(poles[u * 4 + v + 1] - a)
-            if n.Length < 1e-12:
-                continue
-            if n0 is None:
-                n0 = n
-            elif n.dot(n0) < 0:
-                folds.append("cell(%d,%d)" % (u, v))
-    if n0 is None:
-        results.append(("P3_no_fold_flip", False, "degenerate grid: no cell has area"))
-    else:
-        results.append((
-            "P3_no_fold_flip", not folds,
-            "folds/flips: " + ", ".join(folds) if folds else "cell orientation consistent",
-        ))
+    # P3: surface normal field consistently oriented (catches folds/flips
+    # on the evaluated surface; a raw control-net cross test false-positives
+    # on legitimately twisted curved grids)
+    try:
+        n0, folds = None, []
+        surf = _build_bicubic(poles, weights)
+        N = 9
+        for i in range(N):
+            for j in range(N):
+                u, v = (i + 0.5) / N, (j + 0.5) / N
+                n = surf.normal(u, v)
+                if n.Length < 1e-12:
+                    continue
+                if n0 is None:
+                    n0 = n
+                elif n.dot(n0) < -1e-6:
+                    folds.append("u=%.2f,v=%.2f" % (u, v))
+        if n0 is None:
+            results.append(("P3_no_fold_flip", False, "surface degenerate: no normal"))
+        else:
+            results.append((
+                "P3_no_fold_flip", not folds,
+                "normal flips: " + ", ".join(folds) if folds else "normal field consistent",
+            ))
+    except Exception as e2:
+        results.append(("P3_no_fold_flip", False, "P3 check error: %r" % e2))
 
     # P4: surface valid + no self-intersection
     try:
