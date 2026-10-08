@@ -43,15 +43,19 @@ def _restore_dialogs(saved):
         mod.tipsDialog = orig
 
 
-def run_tests(*test_funcs, verbose=True):
+def run_tests(*test_funcs, verbose=True, close_docs=True):
     """Run test functions, return JSON summary.
 
     Each test_func must accept a document and return a dict:
         {"pass": bool, "errors": [str, ...], "checks": [...]}
 
+    close_docs=False leaves each test's document open (stage-2 visual
+    inspection) and prints the list of open documents at the end.
+
     Prints a single JSON line "RESULT:<json>" at the end for agent parsing.
     """
     results = []
+    open_docs = []
     saved = _patch_dialogs()
     try:
         for func in test_funcs:
@@ -78,10 +82,16 @@ def run_tests(*test_funcs, verbose=True):
                 })
             finally:
                 if doc is not None:
-                    try:
-                        FreeCAD.closeDocument(doc.Name)
-                    except Exception:
-                        pass
+                    if close_docs:
+                        try:
+                            FreeCAD.closeDocument(doc.Name)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            open_docs.append(doc.Name)
+                        except Exception:
+                            pass  # the test closed its own document
     finally:
         _restore_dialogs(saved)
 
@@ -103,6 +113,14 @@ def run_tests(*test_funcs, verbose=True):
                 print(f"    ERROR: {err}")
 
         print(f"\n{passed}/{len(results)} passed, {failed} failed")
+
+        if not close_docs:
+            print("\n[inspect] documents left open for manual inspection:")
+            if open_docs:
+                for n in open_docs:
+                    print("  - " + n)
+            else:
+                print("  (none)")
 
     # Machine-parseable line
     print("RESULT:" + json.dumps(summary))

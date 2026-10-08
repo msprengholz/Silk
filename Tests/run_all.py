@@ -4,6 +4,10 @@ Non-chat test runner for the Silk test suite.
 Primary -- attach to an already-running FreeCAD GUI (no restart):
     python3 Tests/run_all.py
 
+Stage 2 (visual inspection) -- leave the test documents open in the GUI
+so you can look at the geometry afterwards:
+    python3 Tests/run_all.py --inspect
+
 Uses the MCP RPC server (XML-RPC on 127.0.0.1:9875) that auto-starts
 inside any FreeCAD GUI. FreeCAD must be open; override the port with
 SILK_RPC_PORT.
@@ -34,6 +38,12 @@ os.chdir(_SILK_DIR)
 _REMOTE_CODE = """
 import sys
 sys.path.insert(0, %r)
+# Reload workbench + test modules fresh from disk (AGENTS.md pattern):
+# the RPC server process outlives our edits, so cached modules would
+# silently run stale code.
+for _m in list(sys.modules):
+    if _m.startswith("Silk") or _m.startswith("Tests") or _m.startswith("ArachNURBS"):
+        del sys.modules[_m]
 import FreeCADGui as Gui
 try:
     Gui.activateWorkbench("Silk")
@@ -43,7 +53,7 @@ from Tests import suite
 from Tests.mcp_harness import run_tests
 funcs = suite.collect_tests()
 if funcs:
-    run_tests(*funcs)
+    run_tests(*funcs, close_docs=%s)
 else:
     import json
     print("RESULT:" + json.dumps(
@@ -51,7 +61,7 @@ else:
 """
 
 
-def _run_in_process():
+def _run_in_process(inspect):
     """Inside a FreeCAD process (freecad startup-script mode)."""
     try:
         import FreeCADGui as Gui
@@ -65,11 +75,11 @@ def _run_in_process():
         print("No tests found in " + os.path.join(_SILK_DIR, "Tests"))
         return 1
     print("Running {} Silk tests (in-process runner)".format(len(funcs)))
-    summary = run_tests(*funcs)
+    summary = run_tests(*funcs, close_docs=not inspect)
     return 0 if summary["failed"] == 0 else 1
 
 
-def _run_via_rpc(port):
+def _run_via_rpc(port, inspect):
     """Attach to a running FreeCAD GUI through its XML-RPC server."""
     import http.client
     import json
@@ -93,7 +103,9 @@ def _run_via_rpc(port):
         return 2
 
     print("Running Silk tests in the running FreeCAD (port %d)..." % port)
-    res = proxy.execute_code(_REMOTE_CODE % _SILK_DIR, 600)
+    if inspect:
+        print("--inspect: test documents will be left open for inspection.")
+    res = proxy.execute_code(_REMOTE_CODE % (_SILK_DIR, str(not inspect)), 600)
     if not isinstance(res, dict) or not res.get("success"):
         print("FreeCAD reported an error:\n%s" % res)
         return 2
@@ -114,16 +126,21 @@ def _run_via_rpc(port):
         "\n%d/%d passed, %d failed (in running FreeCAD)"
         % (summary["passed"], summary["total"], summary["failed"])
     )
+    if inspect:
+        for line in out.splitlines():
+            if "[inspect]" in line or (line.startswith("  - ") and "_mcp_test_" in line):
+                print(line)
     return 0 if summary["failed"] == 0 else 1
 
 
 def main():
+    inspect = "--inspect" in sys.argv
     try:
         import FreeCAD  # noqa: F401
-        return _run_in_process()
+        return _run_in_process(inspect)
     except ImportError:
         port = int(os.environ.get("SILK_RPC_PORT", "9875"))
-        return _run_via_rpc(port)
+        return _run_via_rpc(port, inspect)
 
 
 # NOTE: called unconditionally -- FreeCAD executes startup scripts with
