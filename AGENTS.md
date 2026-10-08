@@ -182,19 +182,14 @@ class CaptureConsole:
         FreeCAD.Console.PrintError = self._orig_error
 ```
 
-### Running Tests via MCP
-```python
-import sys
-sys.path.insert(0, "/home/mo/.local/share/FreeCAD/v1-1/Mod/Silk")
-for m in list(sys.modules.keys()):
-    if 'SilkPatch44' in m or 'test_patch44' in m or 'test_blend' in m or 'mcp_harness' in m:
-        del sys.modules[m]
-import SilkPatch44, SilkBlend
-from Tests.mcp_harness import run_tests
-from Tests.test_patch44_comprehensive import ALL_TESTS as tests
-from Tests.test_blend import ALL_TESTS as blend_tests
-run_tests(*(tests + blend_tests))
-```
+### Test suite (two launchers, one suite)
+- `Tests/suite.py` — auto-discovers `Tests/test_*.py` modules (uses `ALL_TESTS` if present, else top-level `test_*` functions)
+- `Tests/run_all.py` — **primary launcher**: `python3 Tests/run_all.py` connects via XML-RPC to the user's already-running FreeCAD GUI (127.0.0.1:9875, no restart). Takes an optional substring filter (e.g. `python3 Tests/run_all.py chain`) and `--inspect` to leave test documents open for stage-2 human inspection. Exit codes: 0 = all pass, 1 = failures, 2 = FreeCAD unreachable.
+- `freecad Tests/run_all.py` — fallback in-process mode (spawns its own FreeCAD)
+- Stage tests: `test_edge_stage.py` (E1–E4 oracle), `test_patch_stage.py` (P1–P4), `test_blend_stage.py` (B1–B4), `test_chain.py` (full 9→7→2→1 rebuild, the acceptance gate — always runs)
+- Ops layer: `SilkWorkflowOps.py` (`create_edge`, `create_patch`, `create_blend`) — the only construction path; oracle: `SilkChecks.py` (`check_edge`, `check_patch44`, `check_blend`)
+- The harness monkey-patches `popup.tipsDialog` to a console stub so unattended runs never block on modal popups
+- RPC runs must `del` all `sys.modules` entries starting with `Silk`/`Tests`/`ArachNURBS` before importing (done in `run_all.py`'s remote code) — otherwise the long-lived RPC process runs stale cached modules
 
 ## Reference Files
 - `Resources/Test_files/Silk_2Boundaries.FCStd` — 9 sketches only (baseline)
