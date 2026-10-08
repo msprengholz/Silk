@@ -16,8 +16,13 @@ import os
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def collect_tests():
-    """Collect test functions from every test_*.py module in Tests/."""
+def collect_tests(test_filter=None):
+    """Collect test functions from every test_*.py module in Tests/.
+
+    test_filter: optional substring matched against the test function
+    name or its module name (e.g. 'edge_stage' runs only Tests/
+    test_edge_stage.py). Lets a developer run one stage at a time.
+    """
     funcs = []
     for path in sorted(glob.glob(os.path.join(_TESTS_DIR, "test_*.py"))):
         mod_name = "Tests." + os.path.splitext(os.path.basename(path))[0]
@@ -32,4 +37,9 @@ def collect_tests():
                     and len(inspect.signature(obj).parameters) == 1
                 ):
                     funcs.append(obj)
+    if test_filter is not None:
+        funcs = [
+            f for f in funcs
+            if test_filter in f.__name__ or test_filter in (f.__module__ or "")
+        ]
     return funcs
