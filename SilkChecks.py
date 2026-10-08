@@ -63,14 +63,17 @@ def _seg_cross(a, b, c, d, tol=1e-7):
 
 def _sketch_endpoints(sketch):
     """(first, last) point of the visible geometry, or None if not a
-    pure line-segment sketch (the 3L case is what E1 anchors against)."""
+    pure line-segment sketch (the 3L case is what E1 anchors against).
+    Points are returned in document coordinates (sketch Placement
+    applied) to match the edge's pole coordinates."""
     lines = [
         geom for i, geom in enumerate(sketch.Geometry)
         if not sketch.getConstruction(i)
     ]
     if not lines or any(g.TypeId != "Part::GeomLineSegment" for g in lines):
         return None
-    return lines[0].StartPoint, lines[-1].EndPoint
+    pl = sketch.Placement
+    return pl.multVec(lines[0].StartPoint), pl.multVec(lines[-1].EndPoint)
 
 
 def _check_edge(edge):
@@ -117,25 +120,29 @@ def _check_edge(edge):
             "end deltas vs sketch: %.2e / %.2e (tol %.0e)" % (d0, d3, TOL),
         ))
 
-    # E2: pole order without jumps
+    # E2: pole order without jumps. Edges are open curves (sketch start
+    # to sketch end), so only the 3 consecutive pairs are continuity
+    # constraints -- the p3->p0 wrap is not (it is the closing chord of
+    # an open edge and can legitimately be long).
     bad = []
-    for i in range(4):
-        step = _dist(poles[i], poles[(i + 1) % 4])
-        skip = _dist(poles[i], poles[(i + 2) % 4])
+    for i in range(3):
+        step = _dist(poles[i], poles[i + 1])
+        skip = _dist(poles[i], poles[i + 2] if i < 2 else poles[0])
         if step > ORDER_FACTOR * max(skip, TOL):
             bad.append("p%d->p%d=%.3f > %.2fx p%d->p%d=%.3f"
-                       % (i, (i + 1) % 4, step, ORDER_FACTOR, i, (i + 2) % 4, skip))
+                       % (i, i + 1, step, ORDER_FACTOR, i, i + 2, skip))
     results.append((
         "E2_pole_order", not bad,
         "; ".join(bad) if bad else "consecutive steps stay shorter than diagonal skips",
     ))
 
-    # E3: control polygon does not self-intersect
+    # E3: control polygon does not self-intersect. The control polygon of
+    # an open edge is the 3 legs p0p1, p1p2, p2p3 -- the only
+    # non-adjacent pair is (p0p1, p2p3). The p3p0 closing chord is not a
+    # leg and must not be tested (it false-positives on tight U-edges).
     crossings = []
     if _seg_cross(poles[0], poles[1], poles[2], poles[3]):
         crossings.append("p0p1 x p2p3")
-    if _seg_cross(poles[1], poles[2], poles[3], poles[0]):
-        crossings.append("p1p2 x p3p0")
     results.append((
         "E3_polygon_self_intersection", not crossings,
         "crossings: " + ", ".join(crossings) if crossings else "no crossings",
@@ -187,7 +194,8 @@ def _multiset_match_within(poles, targets, tol):
 
 
 def _build_bicubic(poles, weights):
-    """Bicubic Bezier surface from a 4x4 pole grid (mirrors Patch44)."""
+    """Bicubic Bezier surface from a 4x4 pole grid (mirrors Patch44).
+    Used by P3 to evaluate the surface its control net defines."""
     surf = Part.BSplineSurface()
     surf.increaseDegree(3, 3)
     for knot, mult in [(0.0, 4), (1.0, 4)]:
@@ -197,6 +205,44 @@ def _build_bicubic(poles, weights):
         for c in range(4):
             surf.setPole(c + 1, r + 1, poles[r * 4 + c], weights[r * 4 + c])
     return surf
+
+
+def _normal_field_flips(surf, n=9):
+    """Neighbour-consistency check on a surface's normal field.
+
+    Samples surf.normal(u, v) on an n x n parametric grid (cell centres
+    in knot space [0,1]^2) and compares each sample with its left and
+    upper neighbours. A genuine fold/flip appears as a sign flip between
+    adjacent samples; a legitimate large normal rotation (long curved
+    strips, curved patches) does not, so this is robust where a
+    fixed-reference dot test false-positives.
+
+    Returns (flips, any_normal): flips is a list of "u=..,v=.." strings
+    (empty = consistent), any_normal is False when every sample was
+    degenerate (degenerate surface).
+    """
+    ns = []
+    for i in range(n):
+        for j in range(n):
+            nrm = surf.normal((i + 0.5) / n, (j + 0.5) / n)
+            if nrm.Length < 1e-9:
+                ns.append(None)
+            else:
+                nrm.normalize()
+                ns.append(nrm)
+    flips = []
+    for i in range(n):
+        for j in range(n):
+            a = ns[i * n + j]
+            if a is None:
+                continue
+            for (ii, jj) in ((i - 1, j), (i, j - 1)):
+                if ii < 0 or jj < 0:
+                    continue
+                b = ns[ii * n + jj]
+                if b is not None and a.dot(b) < -1e-6:
+                    flips.append("u=%.2f,v=%.2f" % ((i + 0.5) / n, (j + 0.5) / n))
+    return flips, any(v is not None for v in ns)
 
 
 def _check_patch44(patch, edges):
@@ -263,25 +309,14 @@ def _check_patch44(patch, edges):
     # on the evaluated surface; a raw control-net cross test false-positives
     # on legitimately twisted curved grids)
     try:
-        n0, folds = None, []
         surf = _build_bicubic(poles, weights)
-        N = 9
-        for i in range(N):
-            for j in range(N):
-                u, v = (i + 0.5) / N, (j + 0.5) / N
-                n = surf.normal(u, v)
-                if n.Length < 1e-12:
-                    continue
-                if n0 is None:
-                    n0 = n
-                elif n.dot(n0) < -1e-6:
-                    folds.append("u=%.2f,v=%.2f" % (u, v))
-        if n0 is None:
+        flips, any_normal = _normal_field_flips(surf)
+        if not any_normal:
             results.append(("P3_no_fold_flip", False, "surface degenerate: no normal"))
         else:
             results.append((
-                "P3_no_fold_flip", not folds,
-                "normal flips: " + ", ".join(folds) if folds else "normal field consistent",
+                "P3_no_fold_flip", not flips,
+                "normal flips: " + ", ".join(flips) if flips else "normal field consistent",
             ))
     except Exception as e2:
         results.append(("P3_no_fold_flip", False, "P3 check error: %r" % e2))
@@ -458,37 +493,13 @@ def _check_blend(blend, pa, pb, reference_poles):
                 Shape=surf, LinearDeflection=0.5, AngularDeflection=0.5,
                 Relative=False)
             si = mesh.hasSelfIntersections()
-            # normal field over a 9x9 parametric grid. A blend strip's
-            # normal can legitimately rotate far (the strip is long and
-            # curved), so compare each sample against its spatial
-            # neighbours -- a genuine fold/flip shows up as a sign flip
-            # between adjacent samples, not against a fixed reference.
-            bad_normals = 0
-            ns = []
-            base = surf.Surface
-            for iu in range(9):
-                for iv in range(9):
-                    n = base.normal(iu / 8.0, iv / 8.0)
-                    if n.Length < 1e-9:
-                        ns.append(None)
-                    else:
-                        n.normalize()
-                        ns.append(n)
-            for iu in range(9):
-                for iv in range(9):
-                    n = ns[iu * 9 + iv]
-                    if n is None:
-                        continue
-                    for (ju, jv) in ((iu - 1, iv), (iu, iv - 1)):
-                        if ju < 0 or jv < 0:
-                            continue
-                        m = ns[ju * 9 + jv]
-                        if m is not None and n.dot(m) < -1e-6:
-                            bad_normals += 1
-            ok_b3 = valid and not si and bad_normals == 0
+            # local normal consistency over a 9x9 parametric grid
+            # (neighbour-based -- see _normal_field_flips)
+            bad_normals, any_normal = _normal_field_flips(surf.Surface)
+            ok_b3 = valid and not si and not bad_normals and any_normal
             results.append(("B3_surface_valid", ok_b3,
                             "valid=%s, self-intersections=%s, "
-                            "flipped normals=%d" % (valid, si, bad_normals)))
+                            "flipped normals=%d" % (valid, si, len(bad_normals))))
     except Exception as e2:
         results.append(("B3_surface_valid", False, "B3 check error: %r" % e2))
 
