@@ -17,14 +17,21 @@ Vector = FreeCAD.Vector
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "..", "Resources", "Test_files", "Silk_Workflow.FCStd")
 
-# Which 4 edges drive the stored ground-truth patch Patch44 (cyclic order),
-# and which fixture sketches drive each edge. Extracted by corner matching
-# (ticket #19); the chain test (#21) owns the full 7-edge table.
+# Which 4 edges drive each stored ground-truth patch (cyclic order), and
+# which fixture sketches drive each edge. Extracted by corner matching
+# (ticket #19); the chain test (#21) owns the full 7-edge table as data.
 GT_PATCH44_EDGES = [
     ("E_Top", ["Sketch007", "Sketch008"]),
     ("E_Left", ["Sketch005"]),
     ("E_BtmL", ["Sketch006"]),
     ("E_Shr", ["Sketch"]),
+]
+
+GT_PATCH001_EDGES = [
+    ("E_Shr", ["Sketch"]),
+    ("E_BtmR", ["Sketch001"]),
+    ("E_CurR", ["Sketch003", "Sketch004"]),
+    ("E_TopR", ["Sketch002"]),
 ]
 
 # 50x50 square, one straight 3-line sketch per side, cyclic direction.
@@ -83,14 +90,21 @@ def _copy_fixture_edge(doc, fixture_doc, edge_name, sketch_names):
     return create_edge(sks, name=edge_name + "_n")
 
 
+def _build_gt_edges(doc, fixture_doc, edge_table):
+    """Recreate the fixture edges from a (edge_name, [sketch names]) table
+    in the test doc. `fixture_doc` must already be open."""
+    edges = []
+    for edge_name, sketch_names in edge_table:
+        edges.append(_copy_fixture_edge(doc, fixture_doc, edge_name, sketch_names))
+    return edges
+
+
 def _build_gt_patch(doc, fixture_doc):
     """Build the ground-truth Patch44 (curved) in the test doc from the
     fixture's sketches. `fixture_doc` must already be open."""
     from SilkWorkflowOps import create_patch
-    edges = []
-    for edge_name, sketch_names in GT_PATCH44_EDGES:
-        edges.append(_copy_fixture_edge(doc, fixture_doc, edge_name, sketch_names))
-    patch = create_patch(edges[0], edges[1], edges[2], edges[3], name="PatchGT")
+    edges = _build_gt_edges(doc, fixture_doc, GT_PATCH44_EDGES)
+    patch = create_patch(edges[0], edges[1], edges[2], edges[3], name="Patch44")
     return patch, edges
 
 

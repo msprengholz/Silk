@@ -22,6 +22,14 @@ Patches (P1-P4):
       evaluated surface -- robust on curved grids, unlike a raw
       control-net cross test which false-positives on twists)
   P4  surface is valid and free of self-intersection
+Blends (B1-B4):
+  B1  C0 at both inner boundaries: each blend row's outer poles sit on
+      the patches' strip-curve endpoints (1e-6)
+  B2  C1 construction at both inner boundaries: each row's first/last
+      tangent poles match the strip-curve tangents under the documented
+      2x tangent scale (1e-6)
+  B3  blend surface valid + no self-intersection + normal field coherent
+  B4  full 24-pole match against a provided reference (optional)
 
 Tolerances (spec #16): poles 1e-6, weights exact (1.0).
 """
@@ -306,5 +314,211 @@ def check_patch44(patch, edges):
     never raises."""
     try:
         return _check_patch44(patch, list(edges))
+    except Exception as e:
+        return [("structural", False, "oracle error: %r" % e)]
+
+
+# The blend strip width used by SilkBlend when it segments the patches'
+# base surfaces perpendicular to the shared edge.
+BLEND_STRIP_WIDTH = 0.1
+
+# Tangent scale applied by SilkBlend when calling AN.blend_poly_2x4_1x6.
+BLEND_TANGENT_SCALE = 2.0
+
+
+def _blend_reference_rows(pa, pb, tol=0.01):
+    """Independently re-derive the 4 (l_rev, rc) strip-row pairs that drive
+    a blend between two patches.
+
+    Mirrors SilkBlend._do_execute steps 2-7 (shared corners, edge type,
+    strip segmentation, corner-pair row mapping) so the oracle checks the
+    stored blend poles against geometry it derived itself. Returns
+    [(l_rev, rc), ...] (4 rows, each a list of 4 Vectors) or None when
+    the patches do not share an edge.
+    """
+    a_c = [pa.Poles[0], pa.Poles[3], pa.Poles[15], pa.Poles[12]]
+    b_c = [pb.Poles[0], pb.Poles[3], pb.Poles[15], pb.Poles[12]]
+    pairs = [(i, j) for i, ac in enumerate(a_c)
+             for j, bc in enumerate(b_c)
+             if (ac - bc).Length < tol]
+    if len(pairs) < 2:
+        return None
+    edges = {(0, 1): "U0", (1, 2): "V1", (2, 3): "U1", (3, 0): "V0",
+             (1, 0): "U0", (2, 1): "V1", (3, 2): "U1", (0, 3): "V0"}
+    ids_a = sorted(p[0] for p in pairs)
+    ids_b = sorted(p[1] for p in pairs)
+    ea = edges.get((ids_a[0], ids_a[1]))
+    eb = edges.get((ids_b[0], ids_b[1]))
+    if not ea or not eb:
+        return None
+    ss_a = 0 if ea[1] == "0" else 1
+    ss_b = 0 if eb[1] == "0" else 1
+
+    def get_strip(p, etype, ss):
+        surf = p.Proxy._base_surface
+        if etype[0] == "U":  # shared edge along U (row): narrow V strip
+            u0, u1 = 0.0, 1.0
+            v0, v1 = (0.0, BLEND_STRIP_WIDTH) if ss == 0 else \
+                     (1.0 - BLEND_STRIP_WIDTH, 1.0)
+        else:  # shared edge along V (col): narrow U strip
+            u0, u1 = (0.0, BLEND_STRIP_WIDTH) if ss == 0 else \
+                     (1.0 - BLEND_STRIP_WIDTH, 1.0)
+            v0, v1 = 0.0, 1.0
+        seg = surf.copy()
+        seg.segment(u0, u1, v0, v1)
+        sp = seg.getPoles()
+        return [sp[u][v] for u in range(4) for v in range(4)]
+
+    sga = get_strip(pa, ea, ss_a)
+    sgb = get_strip(pb, eb, ss_b)
+    if sga is None or sgb is None:
+        return None
+
+    cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
+            "V0": {0: 0, 3: 3}, "V1": {1: 0, 2: 3}}
+    rows = []
+    for li in range(4):
+        if ea[0] == "U":  # shared along U -> COLUMNS (const U)
+            l_rev = list(reversed([sga[li * 4 + v] for v in range(4)]))
+        else:  # shared along V -> ROWS (const V)
+            l_rev = list(reversed([sga[u * 4 + li] for u in range(4)]))
+        ri = 3 - li
+        for lc_idx, rc_idx in pairs:
+            if li == cmap[ea].get(lc_idx):
+                ri = cmap[eb][rc_idx]
+                break
+        if eb[0] == "U":
+            rc = [sgb[ri * 4 + v] for v in range(4)]
+        else:
+            rc = [sgb[u * 4 + ri] for u in range(4)]
+        rows.append((l_rev, rc))
+    return rows
+
+
+def _check_blend(blend, pa, pb, reference_poles):
+    results = []
+
+    # structural
+    st = getattr(blend, "object_type", None)
+    poles = blend.Poles or []
+    weights = blend.Weights or []
+    ok = (st == "BlendStrip" and len(poles) == 24
+          and len(weights) == 24 and all(abs(w - 1.0) < 1e-12 for w in weights)
+          and pa is not None and pb is not None
+          and getattr(blend, "Shape", None) is not None
+          and not blend.Shape.isNull())
+    results.append(("structural", ok,
+                    "type=%s poles=%d weights=%d shape=%s" % (
+                        st, len(poles), len(weights),
+                        "ok" if ok else "bad")))
+
+    rows = _blend_reference_rows(pa, pb, tol=getattr(blend, "tolerance", 0.01))
+    if rows is None:
+        results.append(("B1_c0_seams", False,
+                        "no shared edge found between the patches"))
+        results.append(("B2_c1_tangents", False,
+                        "no shared edge found between the patches"))
+        return results
+
+    # B1: C0 -- each blend row's outer poles sit on the strip-curve
+    # endpoints (row layout: [outer_L, t_L, inner_L, inner_R, t_R, outer_R])
+    b1_dev = 0.0
+    for i, (l_rev, rc) in enumerate(rows):
+        row = poles[i * 6:i * 6 + 6]
+        b1_dev = max(b1_dev, (row[0] - l_rev[0]).Length,
+                     (row[5] - rc[3]).Length)
+    results.append(("B1_c0_seams", b1_dev <= TOL,
+                    "max endpoint deviation %.3e" % b1_dev))
+
+    # B2: C1 construction -- the tangent poles must match the reference
+    # blend of the independently derived strip rows
+    import ArachNURBS as AN
+    b2_dev = 0.0
+    for i, (l_rev, rc) in enumerate(rows):
+        ref_row = AN.blend_poly_2x4_1x6(
+            l_rev, [1.0] * 4, rc, [1.0] * 4,
+            BLEND_TANGENT_SCALE, BLEND_TANGENT_SCALE,
+            BLEND_TANGENT_SCALE, BLEND_TANGENT_SCALE)[0]
+        row = poles[i * 6:i * 6 + 6]
+        b2_dev = max(b2_dev, (row[1] - ref_row[1]).Length,
+                     (row[4] - ref_row[4]).Length)
+    results.append(("B2_c1_tangents", b2_dev <= TOL,
+                    "max tangent-pole deviation %.3e" % b2_dev))
+
+    # B3: surface valid + no self-intersection + normal field coherent
+    try:
+        import MeshPart
+        faces = blend.Shape.Faces
+        if not faces:
+            results.append(("B3_surface_valid", False, "no face in Shape"))
+        else:
+            surf = max(faces, key=lambda f: f.Area)
+            valid = blend.Shape.isValid()
+            mesh = MeshPart.meshFromShape(
+                Shape=surf, LinearDeflection=0.5, AngularDeflection=0.5,
+                Relative=False)
+            si = mesh.hasSelfIntersections()
+            # normal field over a 9x9 parametric grid. A blend strip's
+            # normal can legitimately rotate far (the strip is long and
+            # curved), so compare each sample against its spatial
+            # neighbours -- a genuine fold/flip shows up as a sign flip
+            # between adjacent samples, not against a fixed reference.
+            bad_normals = 0
+            ns = []
+            base = surf.Surface
+            for iu in range(9):
+                for iv in range(9):
+                    n = base.normal(iu / 8.0, iv / 8.0)
+                    if n.Length < 1e-9:
+                        ns.append(None)
+                    else:
+                        n.normalize()
+                        ns.append(n)
+            for iu in range(9):
+                for iv in range(9):
+                    n = ns[iu * 9 + iv]
+                    if n is None:
+                        continue
+                    for (ju, jv) in ((iu - 1, iv), (iu, iv - 1)):
+                        if ju < 0 or jv < 0:
+                            continue
+                        m = ns[ju * 9 + jv]
+                        if m is not None and n.dot(m) < -1e-6:
+                            bad_normals += 1
+            ok_b3 = valid and not si and bad_normals == 0
+            results.append(("B3_surface_valid", ok_b3,
+                            "valid=%s, self-intersections=%s, "
+                            "flipped normals=%d" % (valid, si, bad_normals)))
+    except Exception as e2:
+        results.append(("B3_surface_valid", False, "B3 check error: %r" % e2))
+
+    # B4: full 24-pole match against a provided reference
+    if reference_poles is None:
+        results.append(("B4_pole_match", True,
+                        "no reference given (skipped)"))
+    else:
+        if len(reference_poles) != 24:
+            results.append(("B4_pole_match", False,
+                            "reference has %d poles, want 24" %
+                            len(reference_poles)))
+        else:
+            b4_dev = max((p - r).Length for p, r in zip(poles,
+                                                        reference_poles))
+            results.append(("B4_pole_match", b4_dev <= TOL,
+                            "max deviation from reference %.3e" % b4_dev))
+
+    return results
+
+
+def check_blend(blend, patch_a, patch_b, reference_poles=None):
+    """Check a BlendStrip against its two patches (explicit arguments).
+
+    reference_poles: optional 24-pole reference (e.g. the stored
+    ground-truth blend) for the B4 full-pole match.
+
+    Returns [(name, ok, detail), ...]; never raises.
+    """
+    try:
+        return _check_blend(blend, patch_a, patch_b, reference_poles)
     except Exception as e:
         return [("structural", False, "oracle error: %r" % e)]
