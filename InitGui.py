@@ -22,7 +22,8 @@ import sys
 import os
 
 # Add test directory to Python path for test discovery
-path_Silk = os.path.dirname(__file__)
+import Silk_dummy
+path_Silk = os.path.dirname(Silk_dummy.__file__)
 test_path = os.path.join(path_Silk, "Tests")
 if test_path not in sys.path:
     sys.path.insert(0, test_path)
