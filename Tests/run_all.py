@@ -1,84 +1,131 @@
 """
 Non-chat test runner for the Silk test suite.
 
-Run from anywhere:
-    freecad Tests/run_all.py        (or: freecad /path/to/Silk/Tests/run_all.py)
+Primary -- attach to an already-running FreeCAD GUI (no restart):
+    python3 Tests/run_all.py
 
-Discovers every test in Tests/test_*.py and runs it through the same
-run_tests() harness the MCP (agent) path uses, so both launchers exercise
-exactly the same test functions. Prints a per-test pass/fail summary and
-exits 0 when everything passes, 1 otherwise.
+Uses the MCP RPC server (XML-RPC on 127.0.0.1:9875) that auto-starts
+inside any FreeCAD GUI. FreeCAD must be open; override the port with
+SILK_RPC_PORT.
 
-Adding a test: put a test_*.py module in Tests/. It is picked up
-automatically -- use an ALL_TESTS list, or plain test_* functions that
-take a document.
+Fallback -- standalone instance (e.g. CI):
+    freecad Tests/run_all.py
+
+Both modes run exactly the same test functions through
+Tests.mcp_harness.run_tests -- the MCP chat path uses the same functions.
+Exit codes: 0 = all passed, 1 = test failures, 2 = could not reach FreeCAD.
 """
 
-import glob
-import importlib
-import inspect
 import os
 import sys
 
-# Line-buffer stdout so progress is visible in the terminal even if the
-# process is killed mid-run (FreeCAD startup scripts otherwise buffer).
 try:
     sys.stdout.reconfigure(line_buffering=True)
 except AttributeError:
     pass
 
 _SILK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Make the workbench root importable (ArachNURBS, SilkEdge, ... live there)
-# and give the tests a predictable cwd for any relative file references.
 if _SILK_DIR not in sys.path:
     sys.path.insert(0, _SILK_DIR)
 os.chdir(_SILK_DIR)
 
-import FreeCAD  # noqa: E402
-from Tests.mcp_harness import run_tests  # noqa: E402
+# Code sent to the running FreeCAD: activate the workbench (so command
+# based tests resolve) and run the shared suite.
+_REMOTE_CODE = """
+import sys
+sys.path.insert(0, %r)
+import FreeCADGui as Gui
+try:
+    Gui.activateWorkbench("Silk")
+except Exception:
+    pass
+from Tests import suite
+from Tests.mcp_harness import run_tests
+funcs = suite.collect_tests()
+if funcs:
+    run_tests(*funcs)
+else:
+    import json
+    print("RESULT:" + json.dumps(
+        {"total": 0, "passed": 0, "failed": 1, "results": []}))
+"""
 
 
-def _collect_tests():
-    """Collect test functions from every test_*.py module in this directory."""
-    funcs = []
-    for path in sorted(glob.glob(os.path.join(_TESTS_DIR, "test_*.py"))):
-        mod_name = "Tests." + os.path.splitext(os.path.basename(path))[0]
-        mod = importlib.import_module(mod_name)
-        if hasattr(mod, "ALL_TESTS"):
-            funcs.extend(mod.ALL_TESTS)
-        else:
-            # Fallback: any top-level test_* function taking a document.
-            for name, obj in sorted(vars(mod).items()):
-                if (
-                    name.startswith("test_")
-                    and inspect.isfunction(obj)
-                    and len(inspect.signature(obj).parameters) == 1
-                ):
-                    funcs.append(obj)
-    return funcs
-
-
-def main():
-    # The MCP path runs with the Silk workbench active (commands like
-    # 'ControlPoly4' only resolve in that context) -- replicate it here.
+def _run_in_process():
+    """Inside a FreeCAD process (freecad startup-script mode)."""
     try:
         import FreeCADGui as Gui
         Gui.activateWorkbench("Silk")
     except Exception as e:
         print("Warning: could not activate Silk workbench: " + str(e))
-
-    funcs = _collect_tests()
+    from Tests import suite
+    from Tests.mcp_harness import run_tests
+    funcs = suite.collect_tests()
     if not funcs:
-        print("No tests found in " + _TESTS_DIR)
+        print("No tests found in " + os.path.join(_SILK_DIR, "Tests"))
         return 1
-    print("Running {} Silk tests via freecad (non-chat runner)".format(len(funcs)))
+    print("Running {} Silk tests (in-process runner)".format(len(funcs)))
     summary = run_tests(*funcs)
     return 0 if summary["failed"] == 0 else 1
+
+
+def _run_via_rpc(port):
+    """Attach to a running FreeCAD GUI through its XML-RPC server."""
+    import http.client
+    import json
+    import xmlrpc.client
+
+    class _Transport(xmlrpc.client.Transport):
+        def make_connection(self, host):
+            parts = host.split(":")
+            return http.client.HTTPConnection(
+                parts[0], int(parts[1]) if len(parts) > 1 else 80, timeout=600
+            )
+
+    try:
+        proxy = xmlrpc.client.ServerProxy(
+            "http://127.0.0.1:%d/" % port, _Transport()
+        )
+        proxy.ping()
+    except Exception as e:
+        print("No running FreeCAD reachable at 127.0.0.1:%d (%s)" % (port, e))
+        print("Open FreeCAD first -- its MCP RPC server is the test target.")
+        return 2
+
+    print("Running Silk tests in the running FreeCAD (port %d)..." % port)
+    res = proxy.execute_code(_REMOTE_CODE % _SILK_DIR, 600)
+    if not isinstance(res, dict) or not res.get("success"):
+        print("FreeCAD reported an error:\n%s" % res)
+        return 2
+
+    out = str(res.get("message", ""))
+    idx = out.rfind("RESULT:")
+    if idx < 0:
+        print("No RESULT line in FreeCAD output:\n%s" % out[-3000:])
+        return 2
+    summary = json.loads(out[idx + len("RESULT:"):].strip())
+
+    for r in summary["results"]:
+        status = "PASS" if r.get("pass") else "FAIL"
+        print("  [%s] %s" % (status, r["name"]))
+        for err in r.get("errors", []):
+            print("    ERROR: " + err)
+    print(
+        "\n%d/%d passed, %d failed (in running FreeCAD)"
+        % (summary["passed"], summary["total"], summary["failed"])
+    )
+    return 0 if summary["failed"] == 0 else 1
+
+
+def main():
+    try:
+        import FreeCAD  # noqa: F401
+        return _run_in_process()
+    except ImportError:
+        port = int(os.environ.get("SILK_RPC_PORT", "9875"))
+        return _run_via_rpc(port)
 
 
 # NOTE: called unconditionally -- FreeCAD executes startup scripts with
 # __name__ != "__main__", so an if-guard would skip everything.
 sys.exit(main())
-
