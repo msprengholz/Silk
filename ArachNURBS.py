@@ -1486,18 +1486,19 @@ class SilkPose_PR: # alternative to Attachment/MapMode for Placement - by positi
 		#print("new fp.Placement = ", fp.Placement)
 
 class SilkPose_3P: # alternative to Attachment/MapMode for Placement - by three points
-	def SilkPose_3P_Attributes(self, obj, O_ref, X_ref, Y_ref, flip_X, flip_Y, rel_axes, scale, object_version):
+	def SilkPose_3P_Attributes(self, obj, O_ref, X_ref, Y_ref, swap_XY, flip_X, flip_Y, rel_axes, scale, object_version):
 		# current attribute set
 		# inputs
 		obj.addProperty("App::PropertyLinkSub", "O_ref", "C1.1 - ref inputs", "the subObject (vertex) used to define origin").O_ref = O_ref
 		obj.addProperty("App::PropertyLinkSub", "X_ref", "C1.1 - ref inputs", "the subObject (vertex) used to define x direction").X_ref = X_ref
 		obj.addProperty("App::PropertyLinkSub", "Y_ref", "C1.1 - ref inputs", "the subObject (vertex) used to define y direction").Y_ref = Y_ref
-		obj.addProperty("App::PropertyBool", "flip_X", "C1.2 - direct inputs", "reverse x direction").flip_X = flip_X
-		obj.addProperty("App::PropertyBool", "flip_Y", "C1.2 - direct inputs", "reverse y direction").flip_X = flip_Y
-		obj.addProperty("App::PropertyEnumeration", "relative_axes", "C1.2 - direct inputs", 
+		obj.addProperty("App::PropertyBool", "swap_XY", "C1.2 - direct inputs", "swap X and Y references").swap_XY = swap_XY
+		obj.addProperty("App::PropertyBool", "flip_X", "C1.3 - direct inputs", "reverse x direction").flip_X = flip_X
+		obj.addProperty("App::PropertyBool", "flip_Y", "C1.3 - direct inputs", "reverse y direction").flip_Y = flip_Y
+		obj.addProperty("App::PropertyEnumeration", "relative_axes", "C1.3 - direct inputs", 
 				  		"the relative orientation to the rotation reference (XY, XZ, or YZ)").relative_axes = ['XY', 'YZ', 'ZX']
 		obj.relative_axes = rel_axes
-		obj.addProperty("App::PropertyFloat", "symbol_scale", "C1.2 - direct inputs", "the overall size of the 3D symbol").symbol_scale = scale
+		obj.addProperty("App::PropertyFloat", "symbol_scale", "C1.4 - direct inputs", "the overall size of the 3D symbol").symbol_scale = scale
 		# outputs
 
 		# additional object identifiers
@@ -1513,17 +1514,17 @@ class SilkPose_3P: # alternative to Attachment/MapMode for Placement - by three 
 		return
 
 	def __init__(self, obj , refs):
-		latest_version = "0.03" # must match in onDocumentRestored()
+		latest_version = "0.04" # must match in onDocumentRestored()
 		O_ref = (refs[0][0], refs[0][1])
 		X_ref = (refs[1][0], refs[1][1])
 		Y_ref = (refs[2][0], refs[2][1])
-		self.SilkPose_3P_Attributes(obj, O_ref, X_ref, Y_ref, False, False,'XY', 20, latest_version)
+		self.SilkPose_3P_Attributes(obj, O_ref, X_ref, Y_ref, False, False, False,'XY', 20, latest_version)
 		obj.Proxy = self
 
 	def onDocumentRestored(self, obj):
 		# Migration function to set attributes between object versions. Preserves user data in object.
 		# print("onDocumentRestored() invoked")
-		latest_version = "0.03" # must match in __init__
+		latest_version = "0.04" # must match in __init__
 		update = False
 		if not hasattr(obj, "object_version"):
 			print( obj.Name, " has no version attribute. Attribute format will be updated")
@@ -1545,6 +1546,11 @@ class SilkPose_3P: # alternative to Attachment/MapMode for Placement - by three 
 			if hasattr(obj, "Y_ref"): 
 				old_Y_ref = obj.Y_ref
 				obj.removeProperty("Y_ref")
+			if hasattr(obj, "swap_XY"): 
+				old_swap_XY = obj.swap_XY
+				obj.removeProperty("swap_XY")
+			else:
+				old_swap_XY = False
 			if hasattr(obj, "flip_X"): 
 				old_flip_X = obj.flip_X
 				obj.removeProperty("flip_X")
@@ -1565,14 +1571,15 @@ class SilkPose_3P: # alternative to Attachment/MapMode for Placement - by three 
 				obj.removeProperty("internalName")
 			
 			#re/create all  atributes in current version format
-			self.SilkPose_3P_Attributes(obj, old_O_ref, old_X_ref, old_Y_ref, old_flip_X, old_flip_Y, old_rel_axes, old_sym_scale, latest_version)
+			self.SilkPose_3P_Attributes(obj, old_O_ref, old_X_ref, old_Y_ref, old_swap_XY, old_flip_X, old_flip_Y, old_rel_axes, old_sym_scale, latest_version)
+			print(obj.Name, " attribute format updated")
 			
 		# need to recompute otherwise ? remain unpopulated?
 		obj.recompute()
 
 	def onChanged(self, fp, prop):
 		# print("onChanged invoked")
-		if prop == "reverse":
+		if prop == "swap_XY":
 			fp.recompute()
 
 	def execute(self, fp):
@@ -1622,13 +1629,19 @@ class SilkPose_3P: # alternative to Attachment/MapMode for Placement - by three 
 													0,0,0,1)
 
 		origin_ref = fp.O_ref[0].getSubObject(fp.O_ref[1])[0].Point
-		X_ref = fp.X_ref[0].getSubObject(fp.X_ref[1])[0].Point
-		Y_ref = fp.Y_ref[0].getSubObject(fp.Y_ref[1])[0].Point
 
-		X = (X_ref-origin_ref).normalize()
+		if fp.swap_XY == False:
+			X_raw = fp.X_ref[0].getSubObject(fp.X_ref[1])[0].Point
+			Y_raw = fp.Y_ref[0].getSubObject(fp.Y_ref[1])[0].Point
+
+		if fp.swap_XY == True:
+			X_raw = fp.Y_ref[0].getSubObject(fp.Y_ref[1])[0].Point
+			Y_raw = fp.X_ref[0].getSubObject(fp.X_ref[1])[0].Point
+
+		X = (X_raw-origin_ref).normalize()
 		if fp.flip_X == True:
 			X = -X
-		yish = (Y_ref-origin_ref).normalize()
+		yish = (Y_raw-origin_ref).normalize()
 		if equalVectors(X, yish, default_tol):
 			print('SilkPose_3P: the three selected points are too close to forming a line. cannot determine orthogonal vectors. ')
 			return
@@ -2357,6 +2370,184 @@ class ControlPoly4_FirstElement:	# made from the first element of a single sketc
 		# define the shape for visualization
 		fp.Shape = Part.Shape(fp.Legs)
 
+class ControlPoly4_2X4P:# made by composing two existing ControlPoly4s
+
+	def ControlPoly4_2X4P_Attributes(self, obj, poly4_0, poly4_1, weights, tolerance, reverse, object_version):
+		# current attribute set
+		# inputs
+		obj.addProperty("App::PropertyLink","Poly4_0","C1 - Inputs","reference Sketch").Poly4_0 = poly4_0
+		obj.addProperty("App::PropertyLink","Poly4_1","C1 - Inputs","reference Sketch").Poly4_1 = poly4_1
+		obj.addProperty("App::PropertyFloat","tolerance","C1 - Inputs","point-to-point connection tolerance for the circle-line in each node").tolerance = tolerance
+		obj.addProperty("App::PropertyBool","reverse","C1 - Inputs","reverse the parameter direction").reverse = reverse
+		# outputs
+		obj.addProperty("App::PropertyVectorList","Poles","C2 - Outputs","Poles").Poles
+		obj.addProperty("App::PropertyFloatList","Weights","C2 - Outputs","Weights").Weights = weights
+		obj.addProperty("Part::PropertyGeometryList","Legs","C2 - Outputs","control segments").Legs
+		# additional object identifiers
+		obj.addProperty("App::PropertyString", "object_type", "C3 - Identifiers", "the workbench class used to create this object").object_type = "ControlPoly4_2X4P"
+		obj.setEditorMode("object_type", 1)
+		obj.addProperty("App::PropertyString", "object_version", "C3 - Identifiers", "the class version of this object").object_version = object_version
+		obj.setEditorMode("object_version", 1)
+		obj.addProperty("App::PropertyString", "internalName", "C3 - Identifiers", "the permanent internal FreeCAD name for this object").internalName= obj.Name
+		obj.setEditorMode("internalName", 1)
+
+	def __init__(self, obj , poly4_0, poly4_1):
+		FreeCAD.Console.PrintMessage("\nControlPoly4_2X4P class Init\n")
+		
+		latest_version = "0.02" # must match in onDocumentRestored()
+		
+		self.ControlPoly4_2X4P_Attributes(obj, poly4_0, poly4_1, [1.0,1.0,1.0,1.0], default_tol, False, latest_version)
+
+		# mandatory Proxy assignment
+		obj.Proxy = self
+
+	def onDocumentRestored(self, obj):
+		# Migration function to set attributes between object versions. Preserves user data in object.
+		latest_version = "0.02" # must match in __init__
+		update = False
+		if not hasattr(obj, "object_version"):
+			print( obj.Name, " has no version attribute. Attribute format will be updated")
+			update = True
+		else:
+			if not obj.object_version == latest_version:
+				print(obj.Name, " is out of date. Attribute format will be updated")
+				update = True
+
+		if update:
+			#capture, then delete original attribute values in user input fields
+			#deleting is done because we may be changing the format of pre-existing attributes
+			old_Poly4_0 = obj.Poly4_0
+			obj.removeProperty("Poly4_0")
+			old_Poly4_1 = obj.Poly4_1
+			obj.removeProperty("Poly4_1")
+			obj.removeProperty("Weights")
+			obj.removeProperty("Legs")
+			obj.removeProperty("Poles")
+
+			#capturing, then deleting versioned attributes will require testing for their presence
+			if hasattr(obj, "tolerance"): 
+				old_tolerance = obj.tolerance
+				obj.removeProperty("tolerance")
+			else:
+				old_tolerance = default_tol
+				obj.removeProperty("tolerance")
+
+			if hasattr(obj, "reverse"): 
+				old_reverse = obj.reverse
+				obj.removeProperty("reverse")
+			else:
+				old_reverse = False
+				obj.removeProperty("reverse")
+
+			if hasattr(obj, "object_type"):
+				obj.removeProperty("object_type")
+			if hasattr(obj, "object_version"): 
+				obj.removeProperty("object_version")
+			# the internal name should not be changing. this will be used for a check.
+			if hasattr(obj, "internalName"): 
+				obj.removeProperty("internalName")
+			
+			self.ControlPoly4_2X4P_Attributes(obj, old_Poly4_0, old_Poly4_1, [1.0,1.0,1.0,1.0], old_tolerance, old_reverse, latest_version)
+		# need to recompute otherwise the poles remain unpopulated?
+		obj.recompute()
+
+	def onChanged(self, fp, prop):
+		if prop == "reverse":
+			fp.Weights = list(reversed(fp.Weights))
+
+	def execute(self, fp):
+		'''Do something when doing a recomputation, this method is mandatory'''
+		# process Poly4_0
+		if fp.Poly4_0.object_type == 'ControlPoly4_3L':
+			xy_sketch = fp.Poly4_0.Sketch
+		elif fp.Poly4_0.object_type == 'ControlPoly4_2N':
+			xy_sketch = fp.Poly4_0.Sketch0
+		elif fp.Poly4_0.object_type == 'ControlPoly4_FirstElement':
+			xy_sketch = fp.Poly4_0.Sketch
+		else:
+			message = "the first ControPoly4 must be sketch based: 3L, 2N, or FirstElement"
+			print (fp.Name, ", labeled ", fp.Label , "\n", \
+				message, "\n")
+			fake_name_to_trigger_error = please_read_message_above
+			return
+		
+		# i need to:
+		# get xy values for all poles of Poly4_0 in xy_sketch local coords
+		# get z values for all poles of Poly4_1 in xy_sketch local coords
+		# compose the xyz of all poles in xy_sketch local coords
+		# transform from xy_sketch local coords to world
+
+		# or work directly in 3D?
+		# get points from both poly4s		
+		p0_0_raw = fp.Poly4_0.Poles[0]
+		p0_1_raw = fp.Poly4_0.Poles[1]
+		p0_2_raw = fp.Poly4_0.Poles[2]
+		p0_3_raw = fp.Poly4_0.Poles[3]
+
+		p1_0_raw = fp.Poly4_1.Poles[0]
+		p1_1_raw = fp.Poly4_1.Poles[1]
+		p1_2_raw = fp.Poly4_1.Poles[2]
+		p1_3_raw = fp.Poly4_1.Poles[3]
+
+		# let's get the details of the xy_sketch placement
+		xy_plc = xy_sketch.Placement
+		xy_origin = xy_plc.Base
+
+		# hilariously bad Placement Matrix interpretation.
+		''' 
+		xy_mat = xy_plc.Matrix
+		xy_xVector = xy_mat.row(0)
+		xy_yVector = xy_mat.row(1)
+		xy_zVector = xy_mat.row(2)
+		'''
+		# i dont care about how the matirx works, i'll just use it.
+		xy_mat = xy_plc.Matrix
+		# project the world Z vector by the matrix, subtract the local origin, that's the local z vector
+		xy_zVector = xy_mat.multiply(Base.Vector(0,0,1))-xy_origin
+
+		print("xy_zVector",xy_zVector)
+		
+		# force the first poly4 onto the plane (in case it is a 2N poly4)
+		p0_0_toPlane = (p0_0_raw-xy_origin).dot(xy_zVector)
+		print("p0_0_toPlane",p0_0_toPlane)
+		p0_1_toPlane = (p0_1_raw-xy_origin).dot(xy_zVector)
+		print("p0_1_toPlane",p0_1_toPlane)
+		p0_2_toPlane = (p0_2_raw-xy_origin).dot(xy_zVector)
+		print("p0_2_toPlane",p0_2_toPlane)
+		p0_3_toPlane = (p0_3_raw-xy_origin).dot(xy_zVector)
+		print("p0_3_toPlane",p0_3_toPlane)
+
+		p0_0_onPlane = p0_0_raw - xy_zVector*p0_0_toPlane
+		p0_1_onPlane = p0_1_raw - xy_zVector*p0_1_toPlane
+		p0_2_onPlane = p0_2_raw - xy_zVector*p0_2_toPlane
+		p0_3_onPlane = p0_3_raw - xy_zVector*p0_3_toPlane
+
+		# get the z values from second poly
+		p1_0_toPlane = (p1_0_raw-xy_origin).dot(xy_zVector)
+		p1_1_toPlane = (p1_1_raw-xy_origin).dot(xy_zVector)
+		p1_2_toPlane = (p1_2_raw-xy_origin).dot(xy_zVector)
+		p1_3_toPlane = (p1_3_raw-xy_origin).dot(xy_zVector)
+		
+		# move poly4_0 along the Z
+		p0w = p0_0_onPlane + xy_zVector * p1_0_toPlane
+		p1w = p0_1_onPlane + xy_zVector * p1_1_toPlane
+		p2w = p0_2_onPlane + xy_zVector * p1_2_toPlane
+		p3w = p0_3_onPlane + xy_zVector * p1_3_toPlane
+
+		# set the poles
+		if fp.reverse == False:
+			fp.Poles=[p0w,p1w,p2w,p3w]
+		else:
+			fp.Poles=[p3w,p2w,p1w,p0w]
+		# prepare the polygon
+		Leg0=Part.LineSegment(p0w,p1w)
+		Leg1=Part.LineSegment(p1w,p2w)
+		Leg2=Part.LineSegment(p2w,p3w)
+		#set the polygon legs property
+		fp.Legs=[Leg0, Leg1, Leg2]
+		# define the shape for visualization
+		fp.Shape = Part.Shape(fp.Legs)
+
 class ControlPoly4_GridEdge:	# extract a ControlPoly4 from the edge of a ControlGrid44 - maybe also from Grid64?
 	# this is used on grids not directly defined by edge control polygons (and therefor these polygons are not 
 	# directly available). surface segmentation grids for example.
@@ -2529,7 +2720,6 @@ class ControlPoly4_GridEdge:	# extract a ControlPoly4 from the edge of a Control
 		fp.Legs=[Leg0, Leg1, Leg2]
 		# define the shape for visualization
 		fp.Shape = Part.Shape(fp.Legs)
-
 
 class ControlPoly6_5L:	# made from a single sketch containing 5 line objects connected end to end
 	def __init__(self, obj , sketch):
@@ -6441,7 +6631,8 @@ class CubicSurface_64:
 #	00 01 02 03
 #
 # this will be annoying to rewrite.
-#
+# 2026-06-28
+# actually, i don't know if can store a 2D array of vectors in my featurepython objects' attributes
 
 #### surface derived objects (+surf to input)
 
@@ -7126,11 +7317,13 @@ class ControlGrid64_2Grid44:  # surfaces not strictly used as input, but this is
 				old_scale_inner_1 = obj.scale_inner_1
 				obj.removeProperty("scale_inner_1")
 			if hasattr(obj, "autoG3"):
-				if obj.autoG3 == 0 or obj.autoG3 == False:
-					old_autoG3 = False
+				if obj.autoG3 == 1 or obj.autoG3 == True:
+					old_autoG3 = True
 				else:
 					old_autoG3 = False
 				obj.removeProperty("autoG3")
+			else:
+				old_autoG3 = False
 			if hasattr(obj, "tolerance"): 
 				old_tolerance = obj.tolerance
 				obj.removeProperty("tolerance")
@@ -8823,8 +9016,33 @@ class ControlGridNStar66_NSub:
 		return 0
 
 	def StarDiag3_Sub(self, fp, Sub_i):
-		fp.StarGrid[Sub_i][21][0] = fp.StarGrid[Sub_i][20][0] + fp.StarGrid[Sub_i][15][0] - fp.StarGrid[Sub_i][14][0]
+		# original was just a full parallelogram
+		#fp.StarGrid[Sub_i][21][0] = fp.StarGrid[Sub_i][20][0] + fp.StarGrid[Sub_i][15][0] - fp.StarGrid[Sub_i][14][0]
 
+		inside_corner = fp.StarGrid[Sub_i][14][0]
+		next_u = fp.StarGrid[Sub_i][15][0]
+		next_v = fp.StarGrid[Sub_i][20][0]
+
+		blind_u = next_u - inside_corner
+		blind_v = next_v - inside_corner
+
+		
+		u_rescale = (next_v - fp.StarGrid[Sub_i][19][0]).Length / (inside_corner - fp.StarGrid[Sub_i][13][0]).Length
+		v_rescale = (next_u - fp.StarGrid[Sub_i][9][0]).Length / (inside_corner - fp.StarGrid[Sub_i][8][0]).Length
+
+		scaled_u = blind_u * u_rescale
+		scaled_v = blind_v * v_rescale
+
+		p33_u = next_v + scaled_u
+		p33_v = next_u + scaled_v
+
+		p33 = 0.5 * (p33_u + p33_v)
+		# try using the scale as inverse weights
+		p33 = (p33_u * v_rescale + p33_v * u_rescale) / (v_rescale + u_rescale)
+
+
+		fp.StarGrid[Sub_i][21][0] = p33
+		
 		# control leg visualization
 		Legs_Diag3 = [0,0]
 		Legs_Diag3[0] = Part.LineSegment(fp.StarGrid[Sub_i][15][0], fp.StarGrid[Sub_i][21][0])
@@ -8841,17 +9059,36 @@ class ControlGridNStar66_NSub:
 		return 0
 
 	def StarRow3_2Sub(self, fp, Sub_0_i, Sub_1_i):
-		# prepare seam point
-		Mid_p2 = fp.StarGrid[Sub_0_i][17][0] + 0.5 * (fp.StarGrid[Sub_0_i][21][0]-fp.StarGrid[Sub_0_i][15][0]+fp.StarGrid[Sub_1_i][21][0]-fp.StarGrid[Sub_1_i][20][0])
+		# current seam point
+		Mid_p2 = fp.StarGrid[Sub_0_i][17][0]
+
+		# current guides
+		left_v = fp.StarGrid[Sub_0_i][21][0]-fp.StarGrid[Sub_0_i][15][0]
+		right_u = fp.StarGrid[Sub_1_i][21][0]-fp.StarGrid[Sub_1_i][20][0]
+
+		# prepare next seam point
+		Mid_p3 = Mid_p2 + 0.5 * (left_v + right_u)
 
 		# apply seam point locally
-		fp.StarGrid[Sub_0_i][23][0] = Mid_p2
-		fp.StarGrid[Sub_1_i][33][0] = Mid_p2
+		fp.StarGrid[Sub_0_i][23][0] = Mid_p3
+		fp.StarGrid[Sub_1_i][33][0] = Mid_p3
 
 		# average to seam neighbor locally
-		fp.StarGrid[Sub_0_i][22][0] = fp.StarGrid[Sub_0_i][16][0] + 0.5 * (fp.StarGrid[Sub_0_i][21][0]-fp.StarGrid[Sub_0_i][15][0]+fp.StarGrid[Sub_0_i][23][0]-fp.StarGrid[Sub_0_i][17][0])
-		fp.StarGrid[Sub_1_i][27][0] = fp.StarGrid[Sub_1_i][26][0] + 0.5 * (fp.StarGrid[Sub_1_i][21][0]-fp.StarGrid[Sub_1_i][20][0]+fp.StarGrid[Sub_1_i][33][0]-fp.StarGrid[Sub_1_i][32][0])
+		#fp.StarGrid[Sub_0_i][22][0] = fp.StarGrid[Sub_0_i][16][0] + 0.5 * (fp.StarGrid[Sub_0_i][21][0]-fp.StarGrid[Sub_0_i][15][0]+fp.StarGrid[Sub_0_i][23][0]-fp.StarGrid[Sub_0_i][17][0])
+		#fp.StarGrid[Sub_1_i][27][0] = fp.StarGrid[Sub_1_i][26][0] + 0.5 * (fp.StarGrid[Sub_1_i][21][0]-fp.StarGrid[Sub_1_i][20][0]+fp.StarGrid[Sub_1_i][33][0]-fp.StarGrid[Sub_1_i][32][0])
 
+		center_guide = Mid_p3 - Mid_p2
+
+		seam_w_0 = (fp.StarGrid[Sub_0_i][17][0]-fp.StarGrid[Sub_0_i][16][0]).Length
+		inner_w_0 = (fp.StarGrid[Sub_0_i][16][0]-fp.StarGrid[Sub_0_i][15][0]).Length
+
+		seam_w_1 = (fp.StarGrid[Sub_0_i][32][0]-fp.StarGrid[Sub_0_i][26][0]).Length
+		inner_w_1 = (fp.StarGrid[Sub_0_i][26][0]-fp.StarGrid[Sub_0_i][20][0]).Length
+
+		
+		fp.StarGrid[Sub_0_i][22][0] = fp.StarGrid[Sub_0_i][16][0] + 1/(seam_w_0 + inner_w_0) * (left_v * seam_w_0 + center_guide * inner_w_0)
+		fp.StarGrid[Sub_1_i][27][0] = fp.StarGrid[Sub_1_i][26][0] + 1/(seam_w_1 + inner_w_1) * (right_u * seam_w_1 + center_guide * inner_w_1)
+		
 		Legs_Row3 = []
 		Legs_Row3_i = [[[16,22],[17,23],[21,22],[22,23]],[[21,27],[26,27],[27,33]]]
 		for i in Legs_Row3_i[0]:
@@ -8880,26 +9117,42 @@ class ControlGridNStar66_NSub:
 		u_28_i = fp.StarGrid[Sub_i][22][0] - fp.StarGrid[Sub_i][21][0]
 		v_28_i = fp.StarGrid[Sub_i][27][0] - fp.StarGrid[Sub_i][21][0]
 
+		'''
 		u_28_prev_i = fp.StarGrid[Sub_prev_i][27][0] - fp.StarGrid[Sub_prev_i][21][0]
 		v_28_next_i = fp.StarGrid[Sub_next_i][22][0] - fp.StarGrid[Sub_next_i][21][0]
-
 		scaled_u_28_i = u_28_i * ( 1 +  ( u_28_prev_i.Length - u_28_i.Length ) / ( 3.0 * u_28_i.Length ) )
 		scaled_v_28_i = v_28_i * ( 1 +  ( v_28_next_i.Length - v_28_i.Length ) / ( 3.0 * v_28_i.Length ) )
-
-		Sub_28_raw = fp.StarGrid[Sub_i][21][0] + scaled_u_28_i +scaled_v_28_i
+		'''
+		
+		# last four lines above make no sense.
+		# scaled_u_28_i should consider v_28_prev_i, not u_28_prev_i.
+		# scaled_v_28_i should consider u_28_next_i, not v_28_next_i.
+		u_28_next_i = fp.StarGrid[Sub_next_i][27][0] - fp.StarGrid[Sub_next_i][21][0]
+		v_28_prev_i = fp.StarGrid[Sub_prev_i][22][0] - fp.StarGrid[Sub_prev_i][21][0]
+		u_28_i_norm = Base.Vector(u_28_i).normalize()
+		v_28_i_norm = Base.Vector(v_28_i).normalize()
+		scaled_u_28_i = u_28_i * ( 1 + ( v_28_prev_i.dot(u_28_i_norm) - u_28_i.Length ) / u_28_i.Length  )
+		scaled_v_28_i = v_28_i * ( 1 + ( u_28_next_i.dot(v_28_i_norm) - v_28_i.Length ) / v_28_i.Length  )
 
 		# scaling factor. based on N? 
 		# no. need to fix this. the scaling factor needs to achieve alignment between neighboring subgrids if they align,
 		# and a smooth rotation if they do not align.
 		# something...something...angle in the normal or maybe tangent plane. something...(1-cos()) factor.
-
 		if fp.N == 3:
-			scale = 0.75 # scaled down 75% to spread out center this works quite well for triangles actually
+			scale = .75 # scaled down 75% to spread out center this works quite well for triangles actually
+		if fp.N == 4:
+			scale = 1 # i just added the case N = 4, i haven't looked at this function in years
 		if fp.N == 5:
 			scale = 1.25 # this is a mess. a single factor doesn't do it. oh well, moving on.
 		if fp.N == 6:
 			scale = 1.5
 
+		# Sub_28_raw = fp.StarGrid[Sub_i][21][0] + scaled_u_28_i +scaled_v_28_i
+		Sub_28_scaled = fp.StarGrid[Sub_i][21][0] + scale * (u_28_i + v_28_i)
+
+		fp.StarGrid[Sub_i][28][0] = Sub_28_scaled
+		
+		'''
 		Sub_28_scaled = fp.StarGrid[Sub_i][21][0] + scale * (Sub_28_raw - fp.StarGrid[Sub_i][21][0])
 
 		Plane_prev = Part.Plane(fp.StarGrid[Sub_i][33][0],fp.StarGrid[Sub_i][23][0],fp.StarGrid[Sub_prev_i][33][0])
@@ -8912,6 +9165,8 @@ class ControlGridNStar66_NSub:
 		Sub_28_next_proj = Plane_next.value(Sub_28_next_param[0],Sub_28_next_param[1])
 
 		fp.StarGrid[Sub_i][28][0] = 0.5 * Sub_28_scaled + 0.25 * (Sub_28_prev_proj + Sub_28_next_proj) 
+		'''
+
 		# best first round result for N=3, bad for recursion. N=5 is distorted in the center
 		
 		# fp.StarGrid[Sub_i][28][0] = 0.0 * Sub_28_scaled + 0.5 * (Sub_28_prev_proj + Sub_28_next_proj) 
