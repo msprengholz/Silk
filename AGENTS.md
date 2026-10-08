@@ -1,5 +1,19 @@
 # Silk Workbench — Agent Notes
 
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `msprengholz/Silk` (the fork), via the `gh` CLI — always pass `-R msprengholz/Silk` or the `upstream` remote is inferred. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), plus `wayfinder:*` labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
 ## Core Object Architecture
 
 ### Edge (`SilkEdge.py`)
