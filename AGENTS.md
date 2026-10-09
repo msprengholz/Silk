@@ -14,6 +14,10 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 
 Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+### Discussion vs implementation (standing process)
+
+Wayfinder discussion and the code that grows from it live in **separate contexts**. The main session is for discussion, decisions, and recording them (map #1 on the tracker). Implementation is always **handed off**: each build ticket goes to a **subagent in a fresh context** (per-ticket, TDD + oracle, returns a diff + report), reviewed before the ticket is marked done. Hand every build off to a subagent; keep code out of the discussion context.
+
 ## Core Object Architecture
 
 ### Edge (`SilkEdge.py`)
