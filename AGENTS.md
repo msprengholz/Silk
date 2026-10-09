@@ -201,7 +201,7 @@ class CaptureConsole:
 
 ### Test suite (two launchers, one suite)
 - `Tests/suite.py` — auto-discovers `Tests/test_*.py` modules (uses `ALL_TESTS` if present, else top-level `test_*` functions)
-- `Tests/run_all.py` — **primary launcher**: `python3 Tests/run_all.py` connects via XML-RPC to the user's already-running FreeCAD GUI (127.0.0.1:9875, no restart). Takes an optional substring filter (e.g. `python3 Tests/run_all.py chain`) and `--inspect` to leave test documents open for stage-2 human inspection. Exit codes: 0 = all pass, 1 = failures, 2 = FreeCAD unreachable.
+- `Tests/run_all.py` — **primary launcher**: `python3 Tests/run_all.py` connects via XML-RPC to the user's already-running FreeCAD GUI (127.0.0.1:9875, no restart). Takes an optional substring filter (e.g. `python3 Tests/run_all.py chain`), `--inspect` to leave test documents open for stage-2 human inspection, and `--save` to persist the leftover geometry to `Resources/Test_files/_inspect/` (gitignored) so each test's final state can be reopened even after FreeCAD closes (implies `--inspect`). Exit codes: 0 = all pass, 1 = failures, 2 = FreeCAD unreachable.
 - `freecad Tests/run_all.py` — fallback in-process mode (spawns its own FreeCAD)
 - Stage tests: `test_edge_stage.py` (E1–E4 oracle), `test_patch_stage.py` (P1–P4), `test_blend_stage.py` (B1–B4), `test_chain.py` (full 9→7→2→1 rebuild, the acceptance gate — always runs)
 - Ops layer: `SilkWorkflowOps.py` (`create_edge`, `create_patch`, `create_blend`) — the only construction path; oracle: `SilkChecks.py` (`check_edge`, `check_patch44`, `check_blend`)
