@@ -13,6 +13,7 @@ import FreeCAD
 
 from SilkEdge import Edge, EdgeViewProvider
 from SilkPatch44 import Patch44, Patch44ViewProvider
+from SilkPatch33 import Patch33, Patch33ViewProvider
 from SilkBlend import BlendStrip, BlendStripViewProvider
 
 
@@ -31,6 +32,26 @@ def create_edge(sketches, name="Edge"):
     EdgeViewProvider(obj.ViewObject)
     obj.ViewObject.LineWidth = 2.00
     obj.ViewObject.LineColor = (0.00, 1.00, 0.00)
+    obj.ViewObject.PointSize = 4.00
+    obj.ViewObject.PointColor = (0.00, 0.33, 1.00)
+    doc.recompute()
+    return obj
+
+
+def create_patch33(edge0, edge1, edge2, name="Patch33"):
+    """Create a Patch33 from 3 boundary edges in cyclic loop order.
+
+    The 3 edges form a closed curved triangle whose degenerate U=0 control
+    column sits at the corner shared by edge0 and edge2 (the "point").
+    Mirrors create_patch (addObject -> constructor -> view provider ->
+    recompute -> return).
+    """
+    doc = FreeCAD.ActiveDocument
+    obj = doc.addObject("Part::FeaturePython", name)
+    Patch33(obj, edge0, edge1, edge2)
+    Patch33ViewProvider(obj.ViewObject)
+    obj.ViewObject.LineWidth = 1.50
+    obj.ViewObject.LineColor = (0.67, 1.00, 1.00)
     obj.ViewObject.PointSize = 4.00
     obj.ViewObject.PointColor = (0.00, 0.33, 1.00)
     doc.recompute()

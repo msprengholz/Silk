@@ -350,6 +350,99 @@ def _check_patch44(patch, edges):
     return results
 
 
+def check_patch33(patch, edges):
+    """Check a Patch33 against its 3 driving edges.
+
+    C1_corner_order : the 3 shared loop corners are on the right edges
+    C2_boundary_match: row U0 / col V3 / row U3 match their driving edges
+    C3_degenerate_pt: the U=0 control column collapses to a single point
+    C4_surface_valid: Shape valid + no self-intersection + normal field
+    Returns [(name, ok, detail), ...]; never raises.
+    """
+    try:
+        return _check_patch33(patch, list(edges))
+    except Exception as e:
+        return [("structural", False, "oracle error: %r" % e)]
+
+
+def _check_patch33(patch, edges):
+    results = []
+    errs = []
+    if getattr(patch, "object_type", None) != "Patch33":
+        errs.append("object_type=%r" % getattr(patch, "object_type", None))
+    poles = list(patch.Poles)
+    if len(poles) != 16:
+        errs.append("%d poles (want 16)" % len(poles))
+    if len(list(patch.Weights)) != 16:
+        errs.append("%d weights (want 16)" % len(list(patch.Weights)))
+    if not all(getattr(patch, "Poly%d" % i, None) for i in range(3)):
+        errs.append("missing Poly0-2 edge links")
+    if patch.Shape.isNull():
+        errs.append("empty Shape")
+    results.append(("structural", not errs, "; ".join(errs) if errs else
+                    "object_type, 3 edge links, 16 poles/weights, shape"))
+    if len(poles) != 16 or len(edges) != 3:
+        return results
+
+    e = [list(ed.Poles) for ed in edges]
+    # C1: corners. (0,0) = point, shared by edges 0+2; (0,3) by 0+1;
+    # (3,3) by 1+2. Match each corner against both edge endpoints.
+    corner_errs = []
+    for (u, v), (a, b) in [((0, 0), (0, 2)), ((0, 3), (0, 1)), ((3, 3), (1, 2))]:
+        p = poles[u * 4 + v]
+        for ei in (a, b):
+            if not any(_dist(p, q) <= TOL for q in (e[ei][0], e[ei][3])):
+                corner_errs.append("corner p%d%d not on edge%d" % (u, v, ei))
+    results.append(("C1_corner_order", not corner_errs, "; ".join(corner_errs)
+                    if corner_errs else "all 3 corners on shared loop corners"))
+
+    # C2: boundary match. row U0=edge0, col V3=edge1, row U3=edge2.
+    row_u0 = [poles[0], poles[1], poles[2], poles[3]]
+    col_v3 = [poles[3], poles[7], poles[11], poles[15]]
+    row_u3 = [poles[12], poles[13], poles[14], poles[15]]
+    berrs = []
+    for label, row, ep in [("row U0", row_u0, e[0]),
+                           ("col V3", col_v3, e[1]),
+                           ("row U3", row_u3, e[2])]:
+        if not _multiset_match_within(row, ep, TOL):
+            berrs.append("%s does not match its edge" % label)
+    results.append(("C2_boundary_match", not berrs, "; ".join(berrs)
+                    if berrs else "U0/V3/U3 boundaries match their edges"))
+
+    # C3: U=0 control column collapses to a single point (the "point").
+    col0 = [poles[i * 4] for i in range(4)]
+    devs = [(_c - col0[0]).Length for _c in col0]
+    results.append(("C3_degenerate_pt", all(d <= TOL for d in devs),
+                    "U=0 column collapsed to a point" if all(d <= TOL for d in devs)
+                    else "U=0 column not degenerate: dev %r" % devs))
+
+    # C4: surface valid, no self-intersection, normal field consistent.
+    try:
+        surf = _build_bicubic(poles, list(patch.Weights))
+        flips, any_normal = _normal_field_flips(surf)
+        results.append(("C4_normal_field", bool(any_normal) and not flips,
+                        "normal flips: %s" % ", ".join(flips) if flips else
+                        ("no normal" if not any_normal else "consistent")))
+    except Exception as e2:
+        results.append(("C4_normal_field", False, "C4 error: %r" % e2))
+    try:
+        import MeshPart
+        faces = patch.Shape.Faces
+        if not faces:
+            results.append(("C4_surface_valid", False, "no face in Shape"))
+        else:
+            surf2 = max(faces, key=lambda f: f.Area)
+            valid = patch.Shape.isValid()
+            mesh = MeshPart.meshFromShape(
+                Shape=surf2, LinearDeflection=0.5, AngularDeflection=0.5, Relative=False)
+            si = mesh.hasSelfIntersections()
+            results.append(("C4_surface_valid", valid and not si,
+                            "valid=%s, self-intersections=%s" % (valid, si)))
+    except Exception as e2:
+        results.append(("C4_surface_valid", False, "C4 error: %r" % e2))
+    return results
+
+
 def check_patch44(patch, edges):
     """Check a Patch44 against its 4 driving edges (explicit arguments --
     ground-truth patches store no links). Returns [(name, ok, detail), ...];
