@@ -11,21 +11,15 @@ from FreeCAD import Gui
 import ArachNURBS as AN
 from popup import tipsDialog
 
+from SilkMachinery import build_intervals, build_subgrids, build_display
+
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
 iconPath = path_Silk_icons + "/Patch44.svg"
 
 
-def _normalize_splits(values):
-    return sorted(set(v for v in values if 0.0 < v < 1.0))
-
-
-def _build_intervals(values):
-    splits = _normalize_splits(list(values))
-    if not splits:
-        return [(0.0, 1.0)]
-    return list(zip([0.0] + splits, splits + [1.0]))
+_build_intervals = build_intervals  # re-export (imported by SilkChecks/SilkCorner)
 
 
 class Patch44:
@@ -176,74 +170,18 @@ class Patch44:
         legs = AN.drawGrid(poles, 4)
         fp.Legs = legs
 
-        # Subdivision
-        self._subgrids = []
-        self._subsurfaces = []
-        u_splits = list(fp.USplits) if fp.USplits else []
-        v_splits = list(fp.VSplits) if fp.VSplits else []
-        sub_legs = []  # subgrid legs (more detailed lines for subdivided view)
-
-        if u_splits or v_splits:
-            intervals_u = _build_intervals(u_splits)
-            intervals_v = _build_intervals(v_splits)
-            shapes = []
-            sub_legs = []
-            for u0, u1 in intervals_u:
-                for v0, v1 in intervals_v:
-                    seg = surf.copy()
-                    seg.segment(u0, u1, v0, v1)
-                    seg_poles = seg.getPoles()
-                    flat = []
-                    for r in range(4):
-                        for c in range(4):
-                            flat.append(seg_poles[r][c])
-                    self._subgrids.append(flat)
-                    sub_shape = seg.toShape()
-                    if sub_shape:
-                        shapes.append(sub_shape)
-                    sub_legs.extend(AN.drawGrid(flat, 4))
-            self._subsurfaces = shapes
+        # Subdivision (shared core)
+        self._subgrids, self._subsurfaces, sub_legs = build_subgrids(
+            surf, fp.USplits, fp.VSplits)
+        if fp.USplits or fp.VSplits:
             fp.Legs = sub_legs
 
-        # Build display Shape
+        # Build display Shape (shared core)
         # ShowSurface: show/hide surface. ShowSubgrids: show subdivided detail. ShowGrid: grid lines.
         # AutoHideBlend: hide the subgrid cells covered by blends
         # (via _HiddenSubgridIdxs; legacy single _HideSubgridIdx also honoured)
-        if fp.AutoHideBlend:
-            hide_idxs = set(list(getattr(fp, "_HiddenSubgridIdxs", []) or []))
-            legacy = getattr(fp, "_HideSubgridIdx", -1)
-            if isinstance(legacy, int) and legacy >= 0:
-                hide_idxs.add(legacy)
-        else:
-            hide_idxs = set()
-
-        shapes_to_compound = []
-        if fp.ShowSurface:
-            if fp.ShowSubgrids and self._subsurfaces:
-                # Show only non-blended subgrid surfaces
-                for i, sub in enumerate(self._subsurfaces):
-                    if i not in hide_idxs:
-                        shapes_to_compound.append(sub)
-            else:
-                shapes_to_compound.append(surf.toShape())
-
-        # Grid lines: subgrid lines when showing subgrids, base grid otherwise
-        draw_legs = sub_legs if (u_splits or v_splits) and fp.ShowSubgrids else legs
-        if fp.ShowGrid and draw_legs:
-            for leg in draw_legs:
-                if hasattr(leg, "toShape"):
-                    shapes_to_compound.append(leg.toShape())
-
-        if shapes_to_compound:
-            try:
-                fp.Shape = Part.Compound(shapes_to_compound)
-            except Exception:
-                if len(shapes_to_compound) == 1:
-                    fp.Shape = shapes_to_compound[0]
-                else:
-                    fp.Shape = Part.Shape(shapes_to_compound)
-        else:
-            fp.Shape = Part.Shape()
+        build_display(fp, surf.toShape(), self._subsurfaces, legs, sub_legs,
+                      bool(fp.USplits or fp.VSplits))
 
 
 class Patch44ViewProvider:
