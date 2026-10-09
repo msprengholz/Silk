@@ -14,6 +14,7 @@ import FreeCAD
 from SilkEdge import Edge, EdgeViewProvider
 from SilkPatch44 import Patch44, Patch44ViewProvider
 from SilkPatch33 import Patch33, Patch33ViewProvider
+from SilkPatch import Patch, PatchViewProvider
 from SilkBlend import BlendStrip, BlendStripViewProvider
 
 
@@ -68,6 +69,27 @@ def create_patch(edge0, edge1, edge2, edge3, name="Patch44"):
     obj = doc.addObject("Part::FeaturePython", name)
     Patch44(obj, edge0, edge1, edge2, edge3)
     Patch44ViewProvider(obj.ViewObject)
+    obj.ViewObject.LineWidth = 1.50
+    obj.ViewObject.LineColor = (0.67, 1.00, 1.00)
+    obj.ViewObject.PointSize = 4.00
+    obj.ViewObject.PointColor = (0.00, 0.33, 1.00)
+    doc.recompute()
+    return obj
+
+
+def create_patch_unified(edges, name="Patch"):
+    """Create the unified Patch (#37) from a variable-length Edges list.
+
+    execute() selects the fill from the edge count; #37 implements only
+    the 4-edge quad fill. Mirrors create_patch (addObject -> constructor
+    -> view provider -> recompute -> return). The rename to create_patch
+    happens at retirement (#40/#42); this additive entry coexists with
+    the Patch44 create_patch for now.
+    """
+    doc = FreeCAD.ActiveDocument
+    obj = doc.addObject("Part::FeaturePython", name)
+    Patch(obj, list(edges))
+    PatchViewProvider(obj.ViewObject)
     obj.ViewObject.LineWidth = 1.50
     obj.ViewObject.LineColor = (0.67, 1.00, 1.00)
     obj.ViewObject.PointSize = 4.00

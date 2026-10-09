@@ -252,6 +252,122 @@ def _normal_field_flips(surf, n=9):
     return flips, any(v is not None for v in ns)
 
 
+def check_patch(patch, edges):
+    """Check the unified Patch (#37) against its boundary Edges list.
+
+    P1_corner_order : patch corners sit on the shared corners of the edge
+                      loop (same layout as Patch44: Edges[0..3] map to
+                      the U0/V3/U3/V0 boundary rows).
+    P2_boundary_match: boundary row/col pole sets match their driving edges
+    P3_no_fold_flip : the built surface's normal field is consistent
+    P4_surface_valid: Shape valid + no self-intersection
+    Returns [(name, ok, detail), ...]; never raises.
+    """
+    try:
+        return _check_patch(patch, list(edges))
+    except Exception as e:
+        return [("structural", False, "oracle error: %r" % e)]
+
+
+def _check_patch(patch, edges):
+    """Internal oracle body for the unified Patch (#37). Mirrors the
+    Patch44 quad checks but asserts object_type=='Patch' and the Edges
+    link list, and reads the fill off the free-standing Edges list."""
+    results = []
+
+    # structural
+    errs = []
+    if getattr(patch, "object_type", None) != "Patch":
+        errs.append("object_type=%r" % getattr(patch, "object_type", None))
+    poles = list(patch.Poles)
+    if len(poles) != 16:
+        errs.append("%d poles (want 16)" % len(poles))
+    weights = list(patch.Weights)
+    if len(weights) != 16:
+        errs.append("%d weights (want 16)" % len(weights))
+    elif any(abs(w - 1.0) > 1e-12 for w in weights):
+        errs.append("weights not all 1.0")
+    if len(list(getattr(patch, "Edges", None) or [])) != 4:
+        errs.append("Edges link list != 4 entries")
+    if patch.Shape is None or patch.Shape.isNull():
+        errs.append("empty Shape")
+    results.append((
+        "structural", not errs,
+        "; ".join(errs) if errs else "object_type, 4 Edges links, 16 poles/weights, shape",
+    ))
+
+    if len(poles) != 16 or len(edges) != 4:
+        return results
+
+    e = [list(ed.Poles) for ed in edges]
+
+    # P1: corner poles on shared corners of the edge loop.
+    # Same layout as Patch44: (0,0) shared by edges 0+3, (0,3) by 0+1,
+    # (3,3) by 1+2, (3,0) by 2+3; orientation within an edge is up to
+    # orient_a_to_b, so each corner is matched against both endpoints.
+    corner_errs = []
+    for (u, v), (a, b) in [((0, 0), (0, 3)), ((0, 3), (0, 1)),
+                           ((3, 3), (1, 2)), ((3, 0), (2, 3))]:
+        p = poles[u * 4 + v]
+        for ei in (a, b):
+            if not any(_dist(p, q) <= TOL for q in (e[ei][0], e[ei][3])):
+                corner_errs.append("corner p%d%d not on edge%d" % (u, v, ei))
+    results.append((
+        "P1_corner_order", not corner_errs,
+        "; ".join(corner_errs) if corner_errs else "all 4 corners on shared loop corners",
+    ))
+
+    # P2: boundary row/col pole sets match their driving edges
+    row_u0 = [poles[0], poles[1], poles[2], poles[3]]
+    col_v3 = [poles[3], poles[7], poles[11], poles[15]]
+    row_u3 = [poles[12], poles[13], poles[14], poles[15]]
+    col_v0 = [poles[0], poles[4], poles[8], poles[12]]
+    berrs = []
+    for label, row, ep in [("row U0", row_u0, e[0]), ("col V3", col_v3, e[1]),
+                           ("row U3", row_u3, e[2]), ("col V0", col_v0, e[3])]:
+        if not _multiset_match_within(row, ep, TOL):
+            berrs.append("%s does not match its edge" % label)
+    results.append((
+        "P2_boundary_match", not berrs,
+        "; ".join(berrs) if berrs else "all 4 boundary rows/cols match their edges",
+    ))
+
+    # P3: surface normal field consistently oriented
+    try:
+        surf = _build_bicubic(poles, weights)
+        flips, any_normal = _normal_field_flips(surf)
+        if not any_normal:
+            results.append(("P3_no_fold_flip", False, "surface degenerate: no normal"))
+        else:
+            results.append((
+                "P3_no_fold_flip", not flips,
+                "normal flips: " + ", ".join(flips) if flips else "normal field consistent",
+            ))
+    except Exception as e2:
+        results.append(("P3_no_fold_flip", False, "P3 check error: %r" % e2))
+
+    # P4: surface valid + no self-intersection
+    try:
+        import MeshPart
+        faces = patch.Shape.Faces
+        if not faces:
+            results.append(("P4_surface_valid", False, "no face in Shape"))
+        else:
+            surf = max(faces, key=lambda f: f.Area)
+            valid = patch.Shape.isValid()
+            mesh = MeshPart.meshFromShape(
+                Shape=surf, LinearDeflection=0.5, AngularDeflection=0.5, Relative=False)
+            si = mesh.hasSelfIntersections()
+            results.append((
+                "P4_surface_valid", valid and not si,
+                "valid=%s, self-intersections=%s" % (valid, si),
+            ))
+    except Exception as e2:
+        results.append(("P4_surface_valid", False, "P4 check error: %r" % e2))
+
+    return results
+
+
 def _check_patch44(patch, edges):
     results = []
 
