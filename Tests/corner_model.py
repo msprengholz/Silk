@@ -185,13 +185,23 @@ def fixture_path():
     return os.path.join(root, "Resources", "Test_files", "Silk_Corner2x2.FCStd")
 
 
+def build_corner_model_with_blend(doc):
+    """build_corner_model plus the #28 corner blend, completing the
+    2x2 tiling (4 patches, 4 ring strips, 1 corner blend)."""
+    model = build_corner_model(doc)
+    strips = [doc.getObject(n) for n in ("B12", "B24", "B43", "B31")]
+    corner = ops.create_corner_blend(*strips, name="CornerBlend")
+    model["corner_blend"] = corner
+    return model
+
+
 def save_fixture():
     """Regenerate the 2x2 corner reference fixture headlessly."""
     for d in FreeCAD.listDocuments().values():
         if d.Name == "CornerFixture":
             FreeCAD.closeDocument("CornerFixture")
     doc = FreeCAD.newDocument("CornerFixture")
-    model = build_corner_model(doc)
+    model = build_corner_model_with_blend(doc)
     path = fixture_path()
     doc.saveAs(path)
     return doc, model, path

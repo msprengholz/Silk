@@ -30,6 +30,13 @@ Blends (B1-B4):
       2x tangent scale (1e-6)
   B3  blend surface valid + no self-intersection + normal field coherent
   B4  full 24-pole match against a provided reference (optional)
+Corner blends (CB1-CB4, #28):
+  CB1 C0 boundary: the 6x6 grid's 4 boundary sides match the 4 ring
+      strips' corner-end rows, orientation-independent (1e-6)
+  CB2 interior fill: all 36 poles match the ControlGrid66_4 fill of the
+      independently derived boundary rows (1e-6)
+  CB3 corner surface valid + no self-intersection + normal field coherent
+  CB4 full 36-pole match against a provided reference (optional)
 
 Tolerances (spec #16): poles 1e-6, weights exact (1.0).
 """
@@ -555,6 +562,204 @@ def _check_blend(blend, pa, pb, reference_poles):
                             "max deviation from reference %.3e" % b4_dev))
 
     return results
+
+
+def _corner_reference_rows(strips, tol=0.01):
+    """Independently derive each ring strip's corner-end row — the
+    6-pole edge of the strip's blend surface at the corner-cell side.
+
+    Mirrors SilkCorner's derivation from the patches' splits and band
+    cells (not from the corner blend itself). Returns (rows,
+    corner_cells) or (None, None) on any inconsistency.
+    """
+    from SilkBlend import band_cells, _patch_side
+    from SilkPatch44 import _build_intervals
+    rows = []
+    corner_cells = {}
+    for s in strips:
+        pa, pb = s.PatchA, s.PatchB
+        if pa is None or pb is None:
+            return None, None
+        e_a, ss_a = _patch_side(pa, pb, tol)
+        e_b, ss_b = _patch_side(pb, pa, tol)
+        if not e_a or not e_b:
+            return None, None
+        bca = band_cells(pa, e_a, ss_a)
+        bcb = band_cells(pb, e_b, ss_b)
+        if len(bca) != 1 or len(bcb) != 1:
+            return None, None
+        li_map = {}
+        for pth, e, bc in ((pa, e_a, bca), (pb, e_b, bcb)):
+            nu = len(_build_intervals(list(pth.USplits or [])))
+            nv = len(_build_intervals(list(pth.VSplits or [])))
+            iu_c = iv_c = None
+            for t in strips:
+                other = t.PatchB if t.PatchA is pth else t.PatchA
+                if other is None:
+                    continue
+                te, tss = _patch_side(pth, other, tol)
+                if not te:
+                    continue
+                if te[0] == "U":
+                    iv_c = nv - 1 if te[1] == "1" else 0
+                else:
+                    iu_c = nu - 1 if te[1] == "1" else 0
+            if iu_c is None or iv_c is None:
+                return None, None
+            iu_b, iv_b = divmod(bc[0], nv)
+            if e[0] == "U":
+                li_map[pth.Name] = 3 if iu_c > iu_b else 0
+            else:
+                li_map[pth.Name] = 3 if iv_c > iv_b else 0
+            corner_cells[pth.Name] = (pth, iu_c, iv_c, nu, nv)
+        if li_map[pa.Name] != li_map[pb.Name]:
+            return None, None
+        poles = s.Poles or []
+        if len(poles) != 24:
+            return None, None
+        li = li_map[pa.Name]
+        rows.append(list(poles[li * 6: li * 6 + 6]))
+    return rows, corner_cells
+
+
+def _check_corner_blend(cb, strips, reference_poles):
+    results = []
+
+    # structural
+    st = getattr(cb, "object_type", None)
+    poles = cb.Poles or []
+    weights = cb.Weights or []
+    ok = (st == "CornerBlend" and len(poles) == 36
+          and len(weights) == 36 and all(abs(w - 1.0) < 1e-12 for w in weights)
+          and len(list(getattr(cb, "Strips", []) or [])) == 4
+          and getattr(cb, "Shape", None) is not None
+          and not cb.Shape.isNull())
+    results.append(("structural", ok,
+                    "type=%s poles=%d weights=%d shape=%s" % (
+                        st, len(poles), len(weights),
+                        "ok" if ok else "bad")))
+
+    rows, _ = _corner_reference_rows(
+        strips, tol=getattr(cb, "tolerance", 0.01))
+    if rows is None:
+        results.append(("CB1_c0_boundary", False,
+                        "could not derive corner-end rows from the strips"))
+        results.append(("CB2_interior_fill", False,
+                        "could not derive corner-end rows from the strips"))
+        return results
+
+    # CB1: C0 boundary -- each reference row appears among the 4
+    # boundary sides of the 6x6 grid (orientation-independent), each
+    # side used exactly once
+    sides = [list(poles[0:6]), list(poles[30:36]),
+             list(poles[0::6]), list(poles[5::6])]
+    if any(len(side) != 6 for side in sides):
+        results.append(("CB1_c0_boundary", False,
+                        "grid does not hold 36 poles"))
+    else:
+        import math
+        used = set()
+        cb1_dev = 0.0
+        for row in rows:
+            best, bi = math.inf, None
+            for k, side in enumerate(sides):
+                if k in used:
+                    continue
+                d = min(max((a - b).Length for a, b in zip(row, side)),
+                        max((a - b).Length
+                            for a, b in zip(row, list(reversed(side)))))
+                if d < best:
+                    best, bi = d, k
+            if bi is None:
+                cb1_dev = math.inf
+                break
+            used.add(bi)
+            cb1_dev = max(cb1_dev, best)
+        results.append(("CB1_c0_boundary", cb1_dev <= TOL,
+                        "max boundary deviation %.3e" % cb1_dev))
+
+    # CB2: interior fill -- all 36 poles must match the ControlGrid66_4
+    # fill of the independently derived boundary rows
+    try:
+        import ArachNURBS as AN
+        doc = cb.Document
+        carriers = []
+        for i, row in enumerate(rows):
+            c = doc.addObject("Part::FeaturePython", "_cb_ref_poly")
+            c.addProperty("App::PropertyVectorList", "Poles", "Internal",
+                          "p").Poles
+            c.addProperty("App::PropertyFloatList", "Weights", "Internal",
+                          "w").Weights
+            c.Poles = row
+            c.Weights = [1.0] * 6
+            carriers.append(c)
+        grid = doc.addObject("Part::FeaturePython", "_cb_ref_grid")
+        AN.ControlGrid66_4(grid, *carriers)
+        grid.recompute()
+        ref_poles = list(grid.Poles) if hasattr(grid, "Poles") else []
+        doc.removeObject(grid.Name)
+        for c in carriers:
+            doc.removeObject(c.Name)
+        if len(ref_poles) != 36:
+            results.append(("CB2_interior_fill", False,
+                            "reference fill produced %d poles" % len(ref_poles)))
+        else:
+            cb2_dev = max((p - r).Length for p, r in zip(poles, ref_poles))
+            results.append(("CB2_interior_fill", cb2_dev <= TOL,
+                            "max deviation from reference fill %.3e" % cb2_dev))
+    except Exception as e2:
+        results.append(("CB2_interior_fill", False,
+                        "CB2 check error: %r" % e2))
+
+    # CB3: surface valid + no self-intersection + normal field coherent
+    try:
+        import MeshPart
+        faces = cb.Shape.Faces
+        if not faces:
+            results.append(("CB3_surface_valid", False, "no face in Shape"))
+        else:
+            surf = max(faces, key=lambda f: f.Area)
+            valid = cb.Shape.isValid()
+            mesh = MeshPart.meshFromShape(
+                Shape=surf, LinearDeflection=0.5, AngularDeflection=0.5,
+                Relative=False)
+            si = mesh.hasSelfIntersections()
+            bad_normals, any_normal = _normal_field_flips(surf.Surface)
+            ok_b3 = valid and not si and not bad_normals and any_normal
+            results.append(("CB3_surface_valid", ok_b3,
+                            "valid=%s, self-intersections=%s, "
+                            "flipped normals=%d" % (valid, si,
+                                                    len(bad_normals))))
+    except Exception as e2:
+        results.append(("CB3_surface_valid", False, "CB3 check error: %r" % e2))
+
+    # CB4: full 36-pole match against a provided reference
+    if reference_poles is None:
+        results.append(("CB4_pole_match", True,
+                        "no reference given (skipped)"))
+    else:
+        if len(reference_poles) != 36:
+            results.append(("CB4_pole_match", False,
+                            "reference has %d poles, want 36" %
+                            len(reference_poles)))
+        else:
+            cb4_dev = max((p - r).Length for p, r in zip(poles,
+                                                         reference_poles))
+            results.append(("CB4_pole_match", cb4_dev <= TOL,
+                            "max deviation from reference %.3e" % cb4_dev))
+
+    return results
+
+
+def check_corner_blend(cb, strip0=None, strip1=None, strip2=None,
+                       strip3=None, reference_poles=None):
+    """Corner blend oracle (CB1-CB4). Accepts the 4 ring strips either
+    as 4 arguments or (as the only argument) as a list."""
+    if isinstance(cb, (list, tuple)):
+        strips = list(cb)
+    else:
+        strips = [strip0, strip1, strip2, strip3]
+    return _check_corner_blend(cb, strips, reference_poles)
 
 
 def check_blend(blend, patch_a, patch_b, reference_poles=None):

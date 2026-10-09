@@ -41,6 +41,36 @@ def _patch_side(pa, pb, tol=0.01):
     return ea, (0 if ea[1] == "0" else 1)
 
 
+def band_cells(p, ea, ss):
+    """Subgrid cell indices covered by a strip's band on patch p.
+
+    The band runs along the seam in the band interval (0 or last, per
+    ss). A cell at a seam end with a seam-axis split is a corner cell —
+    excluded from the band (reserved for the four-cell corner blend
+    op, #28).
+    """
+    from SilkPatch44 import _build_intervals
+    ivs_u = _build_intervals(list(p.USplits or []))
+    ivs_v = _build_intervals(list(p.VSplits or []))
+    nu, nv = len(ivs_u), len(ivs_v)
+    if ea[0] == "U":  # seam along U: band fixes V interval, spans U cells
+        b = (nv - 1) if ss else 0
+        keep_u = set(range(nu))
+        if any(abs(s - 0.1) < 1e-9 for s in (p.USplits or [])):
+            keep_u.discard(0)
+        if any(abs(s - 0.9) < 1e-9 for s in (p.USplits or [])):
+            keep_u.discard(nu - 1)
+        return [a * nv + b for a in sorted(keep_u)]
+    # seam along V: band fixes U interval, spans V cells
+    a = (nu - 1) if ss else 0
+    keep_v = set(range(nv))
+    if any(abs(s - 0.1) < 1e-9 for s in (p.VSplits or [])):
+        keep_v.discard(0)
+    if any(abs(s - 0.9) < 1e-9 for s in (p.VSplits or [])):
+        keep_v.discard(nv - 1)
+    return [a * nv + b for b in sorted(keep_v)]
+
+
 class BlendStrip:
     """FeaturePython: joins two Patch44 objects at their shared edge."""
 
@@ -135,37 +165,10 @@ class BlendStrip:
 
         # #33: the blend band comes from the patch's own subgrid cells —
         # the UV splits already subdivide the surface, so pick the seam-
-        # adjacent cell(s) instead of re-segmenting the base surface. The
-        # 0.1x0.1 corner cell at a 4-patch junction is not part of the band
-        # (reserved for the four-cell corner blend op).
-        def band_cells(p, ea, ss):
-            """Subgrid cell indices covered by this strip's band.
-
-            The band runs along the seam in the band interval (0 or last,
-            per ss). A cell at a seam end with a seam-axis split is a
-            corner cell — excluded from the band.
-            """
-            from SilkPatch44 import _build_intervals
-            ivs_u = _build_intervals(list(p.USplits or []))
-            ivs_v = _build_intervals(list(p.VSplits or []))
-            nu, nv = len(ivs_u), len(ivs_v)
-            if ea[0] == "U":  # seam along U: band fixes V interval, spans U cells
-                b = (nv - 1) if ss else 0
-                keep_u = set(range(nu))
-                if any(abs(s - 0.1) < 1e-9 for s in (p.USplits or [])):
-                    keep_u.discard(0)
-                if any(abs(s - 0.9) < 1e-9 for s in (p.USplits or [])):
-                    keep_u.discard(nu - 1)
-                return [a * nv + b for a in sorted(keep_u)]
-            # seam along V: band fixes U interval, spans V cells
-            a = (nu - 1) if ss else 0
-            keep_v = set(range(nv))
-            if any(abs(s - 0.1) < 1e-9 for s in (p.VSplits or [])):
-                keep_v.discard(0)
-            if any(abs(s - 0.9) < 1e-9 for s in (p.VSplits or [])):
-                keep_v.discard(nv - 1)
-            return [a * nv + b for b in sorted(keep_v)]
-
+        # adjacent cell(s) instead of re-segmenting the base surface (see
+        # module-level band_cells). The 0.1x0.1 corner cell at a 4-patch
+        # junction is not part of the band (reserved for the corner
+        # blend op, #28).
         def get_strip(p, ea, ss):
             """Extract the band cell's flat 16-pole array poles[U][V] = flat[U*4+V]
             from the patch's pre-computed subgrids.
@@ -205,6 +208,25 @@ class BlendStrip:
                 e_j, ss_j = _patch_side(p_i, other, fp.tolerance)
                 if e_j:
                     idxs |= set(band_cells(p_i, e_j, ss_j))
+            # corner cells owned by corner blends on this patch (#28): the
+            # strip must not wipe them, else the display ping-pongs between
+            # the strip writing its band cells and the corner blend
+            # re-unioning the corner cell on the next recompute pass.
+            try:
+                from SilkCorner import CornerBlend as _CB
+                for ob in fp.Document.Objects:
+                    if getattr(ob, "object_type", "") != "CornerBlend":
+                        continue
+                    for so in list(getattr(ob, "Strips", []) or []):
+                        if so.PatchA is p_i or so.PatchB is p_i:
+                            cc = _CB._corner_cell(
+                                p_i, list(ob.Strips), fp.tolerance)
+                            if cc[0] is not None and cc[1] is not None:
+                                iu_c, iv_c, nu, nv = cc
+                                idxs.add(iu_c * nv + iv_c)
+                            break
+            except ImportError:
+                pass
             try:
                 p_i.removeProperty("_HideSubgridIdx")  # superseded by the list
             except Exception:
@@ -307,6 +329,13 @@ class BlendStrip:
                 fp.Shape = Part.Compound(shapes)
             except Exception:
                 fp.Shape = surf_shape
+
+        # Auto-update chain (#28): touch corner blends fed by this strip.
+        # Next doc.recompute() runs them against the updated strip poles.
+        for o in fp.Document.Objects:
+            if (getattr(o, "object_type", "") == "CornerBlend"
+                    and fp in list(getattr(o, "Strips", []) or [])):
+                o.touch()
 
 
 class BlendStripViewProvider:

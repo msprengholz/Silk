@@ -74,3 +74,26 @@ def create_blend(patch_a, patch_b, name="BlendStrip"):
     obj.ViewObject.Transparency = 30
     doc.recompute()
     return obj
+
+
+def create_corner_blend(strip0, strip1, strip2, strip3, name="CornerBlend"):
+    """Create a CornerBlend filling the central region where 4 patches
+    meet (#28). Takes the 4 ring BlendStrips in cyclic order; each
+    strip's corner-end row feeds AN.ControlGrid66_4 + AN.CubicSurface_66.
+
+    addObject -> CornerBlend constructor -> view provider -> recompute ->
+    return the created object.
+    """
+    from SilkCorner import CornerBlend, CornerBlendViewProvider
+    doc = FreeCAD.ActiveDocument
+    obj = doc.addObject("Part::FeaturePython", name)
+    CornerBlend(obj, strip0, strip1, strip2, strip3)
+    CornerBlendViewProvider(obj.ViewObject)
+    obj.ViewObject.LineWidth = 1.50
+    obj.ViewObject.LineColor = (1.00, 0.67, 0.00)
+    obj.ViewObject.PointSize = 4.00
+    obj.ViewObject.DisplayMode = "Shaded"
+    obj.ViewObject.ShapeColor = (1.00, 0.67, 0.00)
+    obj.ViewObject.Transparency = 30
+    doc.recompute()
+    return obj
