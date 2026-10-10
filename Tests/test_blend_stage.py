@@ -61,10 +61,12 @@ def _build_gt_chain(doc, fixture_doc):
         edges_by_name.setdefault(edge_name, e)
 
     g = edges_by_name
-    patch_a = create_patch(g["E_Top"], g["E_Left"], g["E_BtmL"], g["E_Shr"],
-                           name="Patch44")
-    patch_b = create_patch(g["E_Shr"], g["E_BtmR"], g["E_CurR"], g["E_TopR"],
-                           name="Patch001")
+    patch_a = create_patch(
+        [g["E_Top"], g["E_Left"], g["E_BtmL"], g["E_Shr"]],
+        name="PatchA")
+    patch_b = create_patch(
+        [g["E_Shr"], g["E_BtmR"], g["E_CurR"], g["E_TopR"]],
+        name="PatchB")
     return patch_a, patch_b, edges_by_name
 
 

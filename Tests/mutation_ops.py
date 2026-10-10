@@ -17,7 +17,7 @@ nor leaves stale state).
 
 import FreeCAD
 
-from SilkChecks import check_edge, check_patch, check_patch44, check_blend
+from SilkChecks import check_edge, check_patch, check_blend
 
 
 def _doc(model):
@@ -55,20 +55,15 @@ def _oracle_obj(obj):
         return check_edge(obj)
     if t == "Patch":   # the unified Patch (#37 quad / #38 pointed):
         return check_patch(obj, list(obj.Edges))   # quad->quad, pointed->pointed
-    if t == "Patch44":
-        return check_patch44(obj, [obj.Poly0, obj.Poly1, obj.Poly2, obj.Poly3])
     if t in ("Blend", "BlendStrip"):
         return check_blend(obj, obj.PatchA, obj.PatchB)
     return []
 
 
 def _oracle_patch(p):
-    """The patch oracle matching an object's type: the unified Patch
-    via check_patch (the Edges count dispatches quad vs pointed, #37/#38),
-    anything else via the legacy check_patch44 (Poly0-3 links)."""
-    if getattr(p, "object_type", None) == "Patch":
-        return check_patch(p, list(p.Edges))
-    return check_patch44(p, [p.Poly0, p.Poly1, p.Poly2, p.Poly3])
+    """The patch oracle for a unified Patch: check_patch (the
+    Edges count dispatches quad vs pointed, #37/#38)."""
+    return check_patch(p, list(p.Edges))
 
 
 def _oracle_green(prefix, results):
@@ -101,8 +96,8 @@ def move_boundary_pole(model, *, edge=None, pole_index=1, delta=None):
 
 
 def change_splits(model, *, patch=None, splits_sweep=None, splits_axis="USplits"):
-    """Set / remove / sweep the split parameters on a patch (legacy
-    Patch44 or the unified Patch, dispatched on object_type); subgrid
+    """Set / remove / sweep the split parameters on a unified
+    Patch (dispatched on the USplits/VSplits properties); subgrid
     cells rebuild and the object revalidates. `splits_axis` picks the
     swept property ("USplits" or "VSplits" -- the pointed seams often
     carry their band split on the other axis than the quad ones).

@@ -137,7 +137,8 @@ def build_corner_model(doc):
         patches = {}
         for (pname, e0, e1, e2, e3) in PATCHES:
             patches[pname] = ops.create_patch(
-                edges[e0], edges[e1], edges[e2], edges[e3], name=pname)
+                [edges[e0], edges[e1], edges[e2], edges[e3]],
+                name=pname)
 
         strips = {}
         for (bname, pa, pb) in STRIPS:
@@ -167,12 +168,12 @@ def build_corner_pair(doc):
             sk_b = node_sketch(doc, "NS_%s_b" % ename, ekey, p2)
             edges[ename] = ops.create_edge([sk_a, sk_b], name=ename)
         patches = {
-            "Patch44": ops.create_patch(edges["E_b1"], edges["E_s12"],
-                                        edges["E_s13"], edges["E_l1"],
-                                        name="Patch44"),
-            "Patch001": ops.create_patch(edges["E_b2"], edges["E_r2"],
-                                         edges["E_s24"], edges["E_s12"],
-                                         name="Patch001"),
+            "Patch44": ops.create_patch(
+                [edges["E_b1"], edges["E_s12"],
+                 edges["E_s13"], edges["E_l1"]], name="Patch44"),
+            "Patch001": ops.create_patch(
+                [edges["E_b2"], edges["E_r2"],
+                 edges["E_s24"], edges["E_s12"]], name="Patch001"),
         }
         strip = ops.create_blend(patches["Patch44"], patches["Patch001"], name="B12")
         return {"edges": edges, "patches": patches, "strip": strip}

@@ -5,15 +5,16 @@ Thin GUI-free wrappers over the existing FeaturePython constructors
 (spec #16 / #14): tests and the future wizard call these functions,
 never the constructors or Gui.runCommand. No existing module is modified.
 
-Ticket #18: create_edge. Ticket #19: create_patch. Ticket #20:
-create_blend.
+Ticket #18: create_edge. Ticket #19/#20: create_patch / create_blend.
+Ticket #42: the ops layer creates ONLY the unified object types
+(Edge / Patch / Blend) -- the legacy per-fill builders (Patch44,
+Patch33) are gone; the classes survive in their modules as
+old-document restore shims only.
 """
 
 import FreeCAD
 
 from SilkEdge import Edge, EdgeViewProvider
-from SilkPatch44 import Patch44, Patch44ViewProvider
-from SilkPatch33 import Patch33, Patch33ViewProvider
 from SilkPatch import Patch, PatchViewProvider
 from SilkBlend import Blend, BlendStripViewProvider
 
@@ -21,9 +22,9 @@ from SilkBlend import Blend, BlendStripViewProvider
 def create_edge(sketches, name="Edge"):
     """Create a SilkEdge from one or two ControlPoly4 sketches.
 
-    addObject -> Edge constructor -> view provider -> recompute -> return
-    the created object, so later steps can consume the result in one
-    script. No selection, no commands, no dialogs.
+    addObject -> Edge constructor -> view provider -> recompute ->
+    return the created object, so later steps can consume the result
+    in one script. No selection, no commands, no dialogs.
     """
     doc = FreeCAD.ActiveDocument
     if not isinstance(sketches, (list, tuple)):
@@ -39,53 +40,18 @@ def create_edge(sketches, name="Edge"):
     return obj
 
 
-def create_patch33(edge0, edge1, edge2, name="Patch33"):
-    """Create a Patch33 from 3 boundary edges in cyclic loop order.
+def create_patch(edges, name="Patch"):
+    """Create the unified Patch (#37/#38/#42) from a variable-length
+    Edges list.
 
-    The 3 edges form a closed curved triangle whose degenerate U=0 control
-    column sits at the corner shared by edge0 and edge2 (the "point").
-    Mirrors create_patch (addObject -> constructor -> view provider ->
-    recompute -> return).
-    """
-    doc = FreeCAD.ActiveDocument
-    obj = doc.addObject("Part::FeaturePython", name)
-    Patch33(obj, edge0, edge1, edge2)
-    Patch33ViewProvider(obj.ViewObject)
-    obj.ViewObject.LineWidth = 1.50
-    obj.ViewObject.LineColor = (0.67, 1.00, 1.00)
-    obj.ViewObject.PointSize = 4.00
-    obj.ViewObject.PointColor = (0.00, 0.33, 1.00)
-    doc.recompute()
-    return obj
-
-
-def create_patch(edge0, edge1, edge2, edge3, name="Patch44"):
-    """Create a Patch44 from 4 boundary edges in cyclic loop order.
-
-    addObject -> Patch44 constructor -> view provider -> recompute ->
-    return the created object.
-    """
-    doc = FreeCAD.ActiveDocument
-    obj = doc.addObject("Part::FeaturePython", name)
-    Patch44(obj, edge0, edge1, edge2, edge3)
-    Patch44ViewProvider(obj.ViewObject)
-    obj.ViewObject.LineWidth = 1.50
-    obj.ViewObject.LineColor = (0.67, 1.00, 1.00)
-    obj.ViewObject.PointSize = 4.00
-    obj.ViewObject.PointColor = (0.00, 0.33, 1.00)
-    doc.recompute()
-    return obj
-
-
-def create_patch_unified(edges, name="Patch"):
-    """Create the unified Patch (#37/#38) from a variable-length Edges list.
-
-    execute() selects the fill from the edge count: 4 edges -> the quad
-    fill (#37), 3 edges -> the pointed fill (#38); other counts leave the
-    object empty/valid. Mirrors create_patch (addObject -> constructor ->
-    view provider -> recompute -> return). The rename to create_patch
-    happens at retirement (#40/#42); this additive entry coexists with
-    the Patch44 create_patch for now.
+    execute() selects the fill from the edge count: 4 edges -> the
+    quad fill (#37), 3 edges -> the pointed fill (#38); other counts
+    leave the object empty/valid. Mirrors create_edge (addObject ->
+    constructor -> view provider -> recompute -> return). Renamed from
+    create_patch_unified at the #42 retirement; the legacy per-fill
+    create_patch (Patch44) / create_patch33 (Patch33) builders are
+    gone -- direct construction of the legacy classes survives only
+    for parity evidence and old-document restore.
     """
     doc = FreeCAD.ActiveDocument
     obj = doc.addObject("Part::FeaturePython", name)
@@ -109,9 +75,7 @@ def create_blend(patch_a, patch_b, edge=None, name="Blend"):
     must sit on a corner pair of BOTH patches). A non-shared edge or a
     Blend fed as a patch refuses gracefully: empty valid object +
     console error, no crash. Mirrors the other ops (addObject ->
-    constructor -> view provider -> recompute -> return); the legacy
-    BlendStrip class behind the Silk_CreateBlend GUI command is
-    untouched (retired later, #42).
+    constructor -> view provider -> recompute -> return).
     """
     doc = FreeCAD.ActiveDocument
     obj = doc.addObject("Part::FeaturePython", name)

@@ -4,12 +4,18 @@
 #    NURBS Surface modeling tools focused on low degree and seam continuity (FreeCAD Workbench)
 #
 #    Patch44 — single FeaturePython combining ControlGrid44 + CubicSurface_44 + subgrids.
+#
+#    RETAINED FOR OLD-DOCUMENT RESTORE ONLY (ticket #42): nothing
+#    creates this type anymore. The ops layer (SilkWorkflowOps.
+#    create_patch) and the Silk_CreatePatch GUI command build the
+#    unified Patch (SilkPatch), which delegates to the same shared
+#    machinery core (SilkMachinery) this class uses. The class +
+#    view provider below stay so Silk_Workflow.FCStd and other old
+#    documents restore their stored Patch44 objects.
 
 import FreeCAD
 import Part
-from FreeCAD import Gui
 import ArachNURBS as AN
-from popup import tipsDialog
 
 from SilkMachinery import build_intervals, build_subgrids, build_display
 
@@ -18,8 +24,11 @@ path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
 iconPath = path_Silk_icons + "/Patch44.svg"
 
-
-_build_intervals = build_intervals  # re-export (imported by SilkChecks/SilkCorner)
+# Canonical implementation lives in the shared machinery core
+# (SilkMachinery); re-exported under the legacy name for old
+# callers (SilkCorner / SilkChecks import it from SilkMachinery
+# directly since #42).
+_build_intervals = build_intervals
 
 
 class Patch44:
@@ -205,35 +214,3 @@ class Patch44ViewProvider:
 
     def __setstate__(self, state):
         return None
-
-
-class CreateSilkPatch44:
-    def GetResources(self):
-        return {'Pixmap': iconPath, 'MenuText': 'Silk Patch44',
-                'ToolTip': 'Create a 44 patch from 4 boundary edges.'}
-
-    def Activated(self):
-        sel = Gui.Selection.getSelection()
-        if len(sel) == 0:
-            tipsDialog("Silk: Patch44", "Select exactly 4 boundary edges (with 4 Poles each).")
-            return
-        if len(sel) != 4:
-            FreeCAD.Console.PrintError("Silk: Patch44 requires exactly 4 selected edges.\n")
-            return
-
-        doc = FreeCAD.ActiveDocument
-        obj = doc.addObject("Part::FeaturePython", "Patch44")
-        Patch44(obj, sel[0], sel[1], sel[2], sel[3])
-        Patch44ViewProvider(obj.ViewObject)
-        obj.ViewObject.LineWidth = 1.50
-        obj.ViewObject.LineColor = (0.67, 1.00, 1.00)
-        obj.ViewObject.PointSize = 4.00
-        obj.ViewObject.PointColor = (0.00, 0.33, 1.00)
-        doc.recompute()
-        FreeCAD.Console.PrintMessage(f"Patch44 created: {obj.Name}\n")
-
-    def IsActive(self):
-        return Gui is not None
-
-
-Gui.addCommand("Silk_Patch44", CreateSilkPatch44())

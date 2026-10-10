@@ -26,7 +26,7 @@ import Part
 import ArachNURBS as AN
 
 from SilkBlend import _patch_side, band_cells
-from SilkPatch44 import _build_intervals
+from SilkMachinery import build_intervals as _build_intervals
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)

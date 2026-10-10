@@ -142,11 +142,11 @@ def _build_cone_pair(doc):
     """Two unified pointed cone quarters sharing the profile seam.
     Returns (pa, pb, pa_edges, pb_edges); the shared seam is q1.edge2
     (== reverse of q2.edge0)."""
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     qa = _make_quarter_cone_edges(doc)
     qb = _make_cone_quarter2_edges(doc)
-    pa = create_patch_unified(qa, name="ConeA")
-    pb = create_patch_unified(qb, name="ConeB")
+    pa = create_patch(qa, name="ConeA")
+    pb = create_patch(qb, name="ConeB")
     return pa, pb, qa, qb
 
 
@@ -154,11 +154,11 @@ def _build_cone_hood(doc):
     """Unified pointed cone + unified quad hood sharing the rim arc.
     Returns (cone, hood, cone_edges, hood_edges); the shared seam is
     cone.edge1 (== hood.edge0)."""
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     qc = _make_quarter_cone_edges(doc)
     qh = _make_hood_edges(doc)
-    cone = create_patch_unified(qc, name="Cone")
-    hood = create_patch_unified(qh, name="Hood")
+    cone = create_patch(qc, name="Cone")
+    hood = create_patch(qh, name="Hood")
     return cone, hood, qc, qh
 
 

@@ -68,7 +68,7 @@ class Silk (Workbench):
 		import CubicNStarSurface_NStar66
 		import StarTrim_CubicNStar
 		import SilkPose
-		import SilkPatch44
+		import SilkPatch
 		import SilkBlend
 		import SilkWorkflow
 		import Reload_Silk
@@ -106,7 +106,7 @@ class Silk (Workbench):
 					"Reload_Silk",
 					"Silk_CreateBoundarySpline",
 					"Silk_CreateControlGridPatch",
-					"Silk_Patch44",
+					"Silk_CreatePatch",
 					"Silk_CreateBlend"] 
 					
 		

@@ -123,9 +123,58 @@ def test_oracle_flags_excessive_arc(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_edge_2n(doc):
+    """Edge from 2 sketches (2N mode: circle+line each), built
+    through the SilkEdge.CreateEdge GUI command (ported from the
+    retired test_patch44_comprehensive.py -- the Edge 2N GUI path
+    is otherwise only covered headlessly via the create_edge op)."""
+    errors, checks = [], []
+    from FreeCAD import Gui
+    import SilkEdge
+
+    sk1 = doc.addObject("Sketcher::SketchObject", "SK_A")
+    sk1.Placement = FreeCAD.Placement(Vector(88.4507, 0, 9.0377),
+                                      FreeCAD.Rotation(-90, 0, 45.5543))
+    sk1.addGeometry([
+        Part.Circle(Vector(0, 0, 0), Vector(0, 0, 1), 10.995),
+        Part.LineSegment(Vector(0, 0, 0), Vector(-14.4129, 29.393, 0)),
+    ])
+    sk2 = doc.addObject("Sketcher::SketchObject", "SK_B")
+    sk2.Placement = FreeCAD.Placement(Vector(138.2692, 50, 0),
+                                      FreeCAD.Rotation(-113.309, 0, 90))
+    sk2.addGeometry([
+        Part.Circle(Vector(0, 0, 0), Vector(0, 0, 1), 9.1779),
+        Part.LineSegment(Vector(0, 0, 0), Vector(20.5843, 19.925, 0)),
+    ])
+    doc.recompute()
+
+    Gui.Selection.clearSelection()
+    Gui.Selection.addSelection(sk1)
+    Gui.Selection.addSelection(sk2)
+    SilkEdge.CreateEdge().Activated()
+    doc.recompute()
+
+    edges = [o for o in doc.Objects
+             if hasattr(o, "object_type") and o.object_type == "Edge"]
+    if not (len(edges) >= 1):
+        errors.append("Expected >=1 Edge, got %d" % len(edges))
+    if edges:
+        e = edges[-1]
+        if len(e.Poles) != 4:
+            errors.append("Expected 4 poles, got %d" % len(e.Poles))
+        if len(e.Sketches) != 2:
+            errors.append("Expected 2 sketches, got %d"
+                          % len(e.Sketches))
+        checks.append("2N Edge: %d poles from %d sketches"
+                      % (len(e.Poles), len(e.Sketches)))
+
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_create_edge_3l,
     test_oracle_flags_misordered_poles,
     test_oracle_flags_selfintersecting_polygon,
     test_oracle_flags_excessive_arc,
+    test_edge_2n,
 ]

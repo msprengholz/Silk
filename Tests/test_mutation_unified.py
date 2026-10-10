@@ -21,7 +21,7 @@ Scenario coverage (criterion 5):
 
 Builders reuse existing fixtures, nothing duplicated silently:
   - GT chain: Tests.test_blend_stage.GT_CHAIN_EDGES +
-    Tests.test_patch_stage._copy_fixture_edge + create_patch_unified +
+    Tests.test_patch_stage._copy_fixture_edge + create_patch +
     create_blend + the Silk_Workflow.FCStd fixture for pole comparison.
     The chain builder lives HERE rather than factored out of
     Tests/test_chain.py because that gate's inline build is entangled
@@ -87,7 +87,7 @@ def _build_unified_gt_chain(doc, fixture):
     must be open. Returns the mutation model dict."""
     from Tests.test_patch_stage import _copy_fixture_edge
     from Tests.test_blend_stage import GT_CHAIN_EDGES
-    from SilkWorkflowOps import create_patch_unified, create_blend
+    from SilkWorkflowOps import create_patch, create_blend
 
     edges = {}
     for edge_name, sketch_names in GT_CHAIN_EDGES:
@@ -98,7 +98,7 @@ def _build_unified_gt_chain(doc, fixture):
     patches, patch_edges = {}, {}
     for key, loop in loops.items():
         eds = [edges[n] for n in loop]
-        patches[key] = create_patch_unified(eds, name="Patch_%s" % key)
+        patches[key] = create_patch(eds, name="Patch_%s" % key)
         patch_edges[key] = eds
     blend = create_blend(patches["pa"], patches["pb"], name="Blend")
     return {"doc": doc, "edges": edges, "patches": patches,

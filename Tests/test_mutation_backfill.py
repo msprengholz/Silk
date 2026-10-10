@@ -3,8 +3,9 @@ Tests/test_mutation_backfill.py — mutation backfill (issue #43).
 
 Demonstrates every mutation operator from Tests.mutation_ops.py on the
 current stable objects: a single Edge (via SilkWorkflowOps.create_edge)
-and the existing 2-patch Patch44/BlendStrip pipeline (the corner_pair
-fixture from Tests.corner_model), including a shared-edge mutation that
+and the existing 2-patch Blend pipeline (the corner_pair fixture from
+Tests.corner_model, unified Patch objects since #42), including a
+shared-edge mutation that
 makes both patches + the blend rebuild and revalidate with the seam still
 clean. Also confirms the ground-truth chain recomputes stably at 1e-6.
 
@@ -66,11 +67,11 @@ def _oracle_edge(model):
 
 def _oracle_corner_pair(model):
     """Full correctness check for the pipeline: both patches + the blend."""
-    from SilkChecks import check_patch44, check_blend
+    from SilkChecks import check_patch, check_blend
     res = []
     for name, p in model["patches"].items():
         res += [("patch:%s:%s" % (name, n), ok, d)
-                for n, ok, d in check_patch44(p, model["patch_edges"][name])]
+                for n, ok, d in check_patch(p, model["patch_edges"][name])]
     res += [("blend:%s" % n, ok, d)
             for n, ok, d in check_blend(
                 model["strip"], model["patches"]["Patch44"],
@@ -168,7 +169,7 @@ def test_mutation_chain_recompute_convergence(doc):
     fixture at 1e-6."""
     import os
     from Tests.test_blend_stage import _build_gt_chain, FIXTURE
-    from SilkChecks import check_blend, check_patch44
+    from SilkChecks import check_blend, check_patch
 
     errors, checks = [], []
     fixture = FreeCAD.openDocument(FIXTURE)
@@ -190,12 +191,10 @@ def test_mutation_chain_recompute_convergence(doc):
             bad = [(n, d) for n, ok, d in
                    check_blend(blend, pa, pb, reference_poles=stored_blend)
                    if not ok]
-            bad += [(n, d) for n, ok, d in check_patch44(pa, [pa.Poly0, pa.Poly1,
-                                                              pa.Poly2, pa.Poly3])
-                    if not ok]
-            bad += [(n, d) for n, ok, d in check_patch44(pb, [pb.Poly0, pb.Poly1,
-                                                              pb.Poly2, pb.Poly3])
-                    if not ok]
+            bad += [(n, d) for n, ok, d in
+                    check_patch(pa, list(pa.Edges)) if not ok]
+            bad += [(n, d) for n, ok, d in
+                    check_patch(pb, list(pb.Edges)) if not ok]
             if bad:
                 errors.append("chain iter %d: oracle not green: %s" % (i, bad))
             if max(bdev, padev, pbdev) > CHAIN_GT_TOL:

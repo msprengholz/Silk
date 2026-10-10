@@ -2,7 +2,7 @@
 Chain test (ticket #21; migrated to the unified objects in ticket #40):
 the full 9 -> 7 -> 2 -> 1 rebuild of the ground-truth document from a
 blank document, entirely through the ops layer on UNIFIED objects only
-(create_edge via _copy_fixture_edge, create_patch_unified, create_blend).
+(create_edge via _copy_fixture_edge, create_patch, create_blend).
 
 Every object is oracle-checked (check_edge / check_patch / check_blend)
 and pole-matched against its stored fixture counterpart at 1e-6 (the 7
@@ -48,7 +48,7 @@ def test_chain_ground_truth(doc):
     try:
         from Tests.test_patch_stage import _copy_fixture_edge
         from Tests.test_blend_stage import GT_CHAIN_EDGES
-        from SilkWorkflowOps import create_patch_unified, create_blend
+        from SilkWorkflowOps import create_patch, create_blend
         from SilkChecks import check_edge, check_patch, check_blend
 
         with _CaptureConsole() as cap:
@@ -88,7 +88,7 @@ def test_chain_ground_truth(doc):
             patch_devs = []
             for label, fixture_name, loop in patch_specs:
                 ed4 = [g[n] for n in loop]
-                p = create_patch_unified(ed4, name=label)
+                p = create_patch(ed4, name=label)
                 patches[fixture_name] = p
                 for cname, ok, detail in check_patch(p, ed4):
                     if not ok:

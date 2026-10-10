@@ -6,8 +6,10 @@ never raises: "is this correct?" is a query; deciding what a failure
 means is the caller's job (tests assert on it, the future wizard will
 display it).
 
-Ticket #18: check_edge (structural + E1-E4). check_patch44 lands with
-#19; check_blend with #20.
+Ticket #18: check_edge (structural + E1-E4). check_patch (the
+unified patch oracle, dispatching on the edge count) is the only
+patch oracle since #42 (the legacy check_patch44 / check_patch33
+are gone with the per-fill types); check_blend with #20.
 
 Check menu (locked in #14):
   E1  endpoints anchored to the driving sketch
@@ -494,207 +496,6 @@ def _check_patch_pointed(patch, edges):
     return results
 
 
-def _check_patch44(patch, edges):
-    results = []
-
-    # structural
-    errs = []
-    if getattr(patch, "object_type", None) != "Patch44":
-        errs.append("object_type=%r" % getattr(patch, "object_type", None))
-    poles = list(patch.Poles)
-    if len(poles) != 16:
-        errs.append("%d poles (want 16)" % len(poles))
-    weights = list(patch.Weights)
-    if len(weights) != 16:
-        errs.append("%d weights (want 16)" % len(weights))
-    elif any(abs(w - 1.0) > 1e-12 for w in weights):
-        errs.append("weights not all 1.0")
-    if not all(getattr(patch, "Poly%d" % i, None) for i in range(4)):
-        errs.append("missing Poly0-3 edge links")
-    if patch.Shape.isNull():
-        errs.append("empty Shape")
-    results.append((
-        "structural", not errs,
-        "; ".join(errs) if errs else "object_type, 4 edge links, 16 poles/weights, shape",
-    ))
-
-    if len(poles) != 16 or len(edges) != 4:
-        return results
-
-    e = [list(ed.Poles) for ed in edges]
-
-    # P1: corner poles on shared corners of the edge loop.
-    # patch (u,v): (0,0) shared by edges 0+3, (0,3) by 0+1, (3,3) by 1+2,
-    # (3,0) by 2+3 -- orientation within an edge is up to orient_a_to_b,
-    # so each corner is matched against the two edge endpoints.
-    corner_errs = []
-    for (u, v), (a, b) in [((0, 0), (0, 3)), ((0, 3), (0, 1)),
-                           ((3, 3), (1, 2)), ((3, 0), (2, 3))]:
-        p = poles[u * 4 + v]
-        for ei in (a, b):
-            if not any(_dist(p, q) <= TOL for q in (e[ei][0], e[ei][3])):
-                corner_errs.append("corner p%d%d not on edge%d" % (u, v, ei))
-    results.append((
-        "P1_corner_order", not corner_errs,
-        "; ".join(corner_errs) if corner_errs else "all 4 corners on shared loop corners",
-    ))
-
-    # P2: boundary row/col pole sets match their driving edges
-    row_u0 = [poles[0], poles[1], poles[2], poles[3]]
-    col_v3 = [poles[3], poles[7], poles[11], poles[15]]
-    row_u3 = [poles[12], poles[13], poles[14], poles[15]]
-    col_v0 = [poles[0], poles[4], poles[8], poles[12]]
-    berrs = []
-    for label, row, ep in [("row U0", row_u0, e[0]), ("col V3", col_v3, e[1]),
-                           ("row U3", row_u3, e[2]), ("col V0", col_v0, e[3])]:
-        if not _multiset_match_within(row, ep, TOL):
-            berrs.append("%s does not match its edge" % label)
-    results.append((
-        "P2_boundary_match", not berrs,
-        "; ".join(berrs) if berrs else "all 4 boundary rows/cols match their edges",
-    ))
-
-    # P3: surface normal field consistently oriented (catches folds/flips
-    # on the evaluated surface; a raw control-net cross test false-positives
-    # on legitimately twisted curved grids)
-    try:
-        surf = _build_bicubic(poles, weights)
-        flips, any_normal = _normal_field_flips(surf)
-        if not any_normal:
-            results.append(("P3_no_fold_flip", False, "surface degenerate: no normal"))
-        else:
-            results.append((
-                "P3_no_fold_flip", not flips,
-                "normal flips: " + ", ".join(flips) if flips else "normal field consistent",
-            ))
-    except Exception as e2:
-        results.append(("P3_no_fold_flip", False, "P3 check error: %r" % e2))
-
-    # P4: surface valid + no self-intersection
-    try:
-        import MeshPart
-        faces = patch.Shape.Faces
-        if not faces:
-            results.append(("P4_surface_valid", False, "no face in Shape"))
-        else:
-            surf = max(faces, key=lambda f: f.Area)
-            valid = patch.Shape.isValid()
-            mesh = MeshPart.meshFromShape(
-                Shape=surf, LinearDeflection=0.5, AngularDeflection=0.5, Relative=False)
-            si = mesh.hasSelfIntersections()
-            results.append((
-                "P4_surface_valid", valid and not si,
-                "valid=%s, self-intersections=%s" % (valid, si),
-            ))
-    except Exception as e2:
-        results.append(("P4_surface_valid", False, "P4 check error: %r" % e2))
-
-    return results
-
-
-def check_patch33(patch, edges):
-    """Check a Patch33 against its 3 driving edges.
-
-    C1_corner_order : the 3 shared loop corners are on the right edges
-    C2_boundary_match: row U0 / col V3 / row U3 match their driving edges
-    C3_degenerate_pt: the U=0 control column collapses to a single point
-    C4_surface_valid: Shape valid + no self-intersection + normal field
-    Returns [(name, ok, detail), ...]; never raises.
-    """
-    try:
-        return _check_patch33(patch, list(edges))
-    except Exception as e:
-        return [("structural", False, "oracle error: %r" % e)]
-
-
-def _check_patch33(patch, edges):
-    results = []
-    errs = []
-    if getattr(patch, "object_type", None) != "Patch33":
-        errs.append("object_type=%r" % getattr(patch, "object_type", None))
-    poles = list(patch.Poles)
-    if len(poles) != 16:
-        errs.append("%d poles (want 16)" % len(poles))
-    if len(list(patch.Weights)) != 16:
-        errs.append("%d weights (want 16)" % len(list(patch.Weights)))
-    if not all(getattr(patch, "Poly%d" % i, None) for i in range(3)):
-        errs.append("missing Poly0-2 edge links")
-    if patch.Shape.isNull():
-        errs.append("empty Shape")
-    results.append(("structural", not errs, "; ".join(errs) if errs else
-                    "object_type, 3 edge links, 16 poles/weights, shape"))
-    if len(poles) != 16 or len(edges) != 3:
-        return results
-
-    e = [list(ed.Poles) for ed in edges]
-    # C1: corners. (0,0) = point, shared by edges 0+2; (0,3) by 0+1;
-    # (3,3) by 1+2. Match each corner against both edge endpoints.
-    corner_errs = []
-    for (u, v), (a, b) in [((0, 0), (0, 2)), ((0, 3), (0, 1)), ((3, 3), (1, 2))]:
-        p = poles[u * 4 + v]
-        for ei in (a, b):
-            if not any(_dist(p, q) <= TOL for q in (e[ei][0], e[ei][3])):
-                corner_errs.append("corner p%d%d not on edge%d" % (u, v, ei))
-    results.append(("C1_corner_order", not corner_errs, "; ".join(corner_errs)
-                    if corner_errs else "all 3 corners on shared loop corners"))
-
-    # C2: boundary match. row U0=edge0, col V3=edge1, row U3=edge2.
-    row_u0 = [poles[0], poles[1], poles[2], poles[3]]
-    col_v3 = [poles[3], poles[7], poles[11], poles[15]]
-    row_u3 = [poles[12], poles[13], poles[14], poles[15]]
-    berrs = []
-    for label, row, ep in [("row U0", row_u0, e[0]),
-                           ("col V3", col_v3, e[1]),
-                           ("row U3", row_u3, e[2])]:
-        if not _multiset_match_within(row, ep, TOL):
-            berrs.append("%s does not match its edge" % label)
-    results.append(("C2_boundary_match", not berrs, "; ".join(berrs)
-                    if berrs else "U0/V3/U3 boundaries match their edges"))
-
-    # C3: U=0 control column collapses to a single point (the "point").
-    col0 = [poles[i * 4] for i in range(4)]
-    devs = [(_c - col0[0]).Length for _c in col0]
-    results.append(("C3_degenerate_pt", all(d <= TOL for d in devs),
-                    "U=0 column collapsed to a point" if all(d <= TOL for d in devs)
-                    else "U=0 column not degenerate: dev %r" % devs))
-
-    # C4: surface valid, no self-intersection, normal field consistent.
-    try:
-        surf = _build_bicubic(poles, list(patch.Weights))
-        flips, any_normal = _normal_field_flips(surf)
-        results.append(("C4_normal_field", bool(any_normal) and not flips,
-                        "normal flips: %s" % ", ".join(flips) if flips else
-                        ("no normal" if not any_normal else "consistent")))
-    except Exception as e2:
-        results.append(("C4_normal_field", False, "C4 error: %r" % e2))
-    try:
-        import MeshPart
-        faces = patch.Shape.Faces
-        if not faces:
-            results.append(("C4_surface_valid", False, "no face in Shape"))
-        else:
-            surf2 = max(faces, key=lambda f: f.Area)
-            valid = patch.Shape.isValid()
-            mesh = MeshPart.meshFromShape(
-                Shape=surf2, LinearDeflection=0.5, AngularDeflection=0.5, Relative=False)
-            si = mesh.hasSelfIntersections()
-            results.append(("C4_surface_valid", valid and not si,
-                            "valid=%s, self-intersections=%s" % (valid, si)))
-    except Exception as e2:
-        results.append(("C4_surface_valid", False, "C4 error: %r" % e2))
-    return results
-
-
-def check_patch44(patch, edges):
-    """Check a Patch44 against its 4 driving edges (explicit arguments --
-    ground-truth patches store no links). Returns [(name, ok, detail), ...];
-    never raises."""
-    try:
-        return _check_patch44(patch, list(edges))
-    except Exception as e:
-        return [("structural", False, "oracle error: %r" % e)]
-
-
 # The blend strip width used by SilkBlend when it segments the patches'
 # base surfaces perpendicular to the shared edge.
 BLEND_STRIP_WIDTH = 0.1
@@ -763,7 +564,7 @@ def _blend_reference_rows(pa, pb, tol=0.01):
     # #33: the blend band comes from the patch's own subgrid cells
     # (mirrors SilkBlend.run_blend band_cells/get_strip).
     def band_cells(p, etype, ss):
-        from SilkPatch44 import _build_intervals
+        from SilkMachinery import build_intervals as _build_intervals
         ivs_u = _build_intervals(list(p.USplits or []))
         ivs_v = _build_intervals(list(p.VSplits or []))
         nu, nv = len(ivs_u), len(ivs_v)
@@ -942,7 +743,7 @@ def _corner_reference_rows(strips, tol=0.01):
     corner_cells) or (None, None) on any inconsistency.
     """
     from SilkBlend import band_cells, _patch_side
-    from SilkPatch44 import _build_intervals
+    from SilkMachinery import build_intervals as _build_intervals
     rows = []
     corner_cells = {}
     for s in strips:

@@ -20,6 +20,11 @@ Wayfinder discussion and the code that grows from it live in **separate contexts
 
 ## Core Object Architecture
 
+Three types, one per process step (#42): `Edge` → `Patch` → `Blend`.
+`Patch44` / `Patch33` / `BlendStrip` survive in their modules only
+as **old-document restore shims** (class + view provider) — nothing
+creates them anymore.
+
 ### Edge (`SilkEdge.py`)
 - `Part::FeaturePython` (renders Shape in 3D view)
 - Properties: Sketches (PropertyLinkList), Poles (4 vec), Weights, Legs, object_type="Edge"
@@ -27,37 +32,40 @@ Wayfinder discussion and the code that grows from it live in **separate contexts
 - Custom view provider: `EdgeViewProvider` (custom tree icon)
 - Sketches are linked via `Sketches` property (not tree children — Part::FeaturePython can't nest)
 
-### Patch44 (`SilkPatch44.py`)
-- `Part::FeaturePython` (not group)
+### Patch (`SilkPatch.py`)
+- `Part::FeaturePython` (not group); object_type="Patch"
+- One variable-length `Edges` link list (PropertyLinkList) is the single boundary input; `execute()` picks the fill from the count (4 edges → quad, 3 edges → pointed — same 16 poles as the legacy fills at 1e-6)
 - 16 poles + 16 weights (4×4 grid)
 - Subgrids stored internally in `_subgrids` and `_subsurfaces` (not in FreeCAD tree)
 - Display toggles: ShowSurface, ShowGrid, ShowSubgrids, AutoHideBlend
-- Linked BlendStrips auto-hide the blended subgrid strip via `_HideSubgridIdx`
-- Custom view provider: `Patch44ViewProvider` (custom tree icon)
+- Linked Blends auto-hide the blended subgrid strip via `_HiddenSubgridIdxs`
+- Subdivision / band / hidden-cell bookkeeping / compound display all delegate to the shared machinery core (`SilkMachinery`)
+- Custom view provider: `PatchViewProvider` (custom tree icon)
 
-### BlendStrip (`SilkBlend.py`)
-- `Part::FeaturePython`
-- Properties: PatchA, PatchB (PropertyLinks), tolerance, Poles (24), Weights, Legs
-- Auto-detects shared edge between two Patch44 objects
+### Blend (`SilkBlend.py`)
+- `Part::FeaturePython`; object_type="Blend"
+- Properties: PatchA, PatchB (PropertyLinks), Edge (optional seam pin), tolerance, Poles (24), Weights, Legs
+- Auto-detects shared edge between two patches (robust against degenerate pointed corners)
 - Auto-updates when patches' USplits/VSplits change
-- Custom view provider: `BlendStripViewProvider` (custom tree icon)
+- Fed only patch subgrid cells — never a Blend
+- Custom view provider: `BlendViewProvider` (custom tree icon)
 - Surface built via `AN.CubicSurface_64` (NOT manual knot insertion)
 
 ## Full Workflow Pipeline
 ```
 Sketches (9 reference sketches)
   → Edges (7, each linked to 1-2 sketches via Sketches property)
-    → Patch44 (2 from 4 Edges each)
-      → BlendStrip (1 between the 2 Patch44)
+    → Patch (2 from 4 Edges each)
+      → Blend (1 between the 2 Patch)
 ```
 
 ## Module Reload Pattern
 Each MCP `execute_code` call runs in the same FreeCAD process. Python caches modules:
 ```python
 for m in list(sys.modules.keys()):
-    if 'SilkPatch44' in m or 'SilkBlend' in m or 'SilkEdge' in m:
+    if 'SilkPatch' in m or 'SilkPatch44' in m or 'SilkBlend' in m or 'SilkEdge' in m or 'SilkMachinery' in m:
         del sys.modules[m]
-import SilkPatch44, SilkBlend, SilkEdge
+import SilkPatch, SilkBlend, SilkEdge, SilkMachinery
 ```
 
 ## Shared Edge Detection & Blend Algorithm
@@ -136,20 +144,20 @@ doc.removeObject(tmp.Name)
 
 ## Auto-Update Chain
 
-When a Patch44's USplits/VSplits change, the BlendStrip auto-updates:
+When a Patch's USplits/VSplits change, the Blend auto-updates:
 
-1. `Patch44.onChanged("USplits")` → `fp.touch()` + `fp.recompute()` → `execute()` runs
-2. `execute()` searches doc for BlendStrip objects linked to this patch → calls `blend.touch()`
-3. Next `doc.recompute()` → BlendStrip is touched → `execute()` reads updated subgrids → blend recomputes
+1. `Patch.onChanged("USplits")` → `fp.touch()` + `fp.recompute()` → `execute()` runs
+2. `execute()` searches doc for Blend objects linked to this patch → calls `blend.touch()`
+3. Next `doc.recompute()` → Blend is touched → `execute()` reads updated subgrids → blend recomputes
 
-## Display Toggles (Patch44)
+## Display Toggles (Patch)
 
 - **ShowSurface**: controls surface visibility (base or subdivided)
 - **ShowGrid**: controls grid line visibility
 - **ShowSubgrids**: when True and splits exist, shows subdivided surfaces instead of smooth surface
-- **AutoHideBlend**: when True and a BlendStrip links to this patch, hides the blended subgrid strip (via `_HideSubgridIdx` property set by BlendStrip)
+- **AutoHideBlend**: when True and a Blend links to this patch, hides the blended subgrid strip (via `_HiddenSubgridIdxs` property set by Blend)
 
-## Surface Creation for Patch44 (bicubic Bezier)
+## Surface Creation for Patch (bicubic Bezier)
 ```python
 surf = Part.BSplineSurface()
 surf.increaseDegree(3, 3)
@@ -185,8 +193,7 @@ Usage: `MyViewProvider(obj.ViewObject)` (NOT `obj.ViewObject.Proxy = MyViewProvi
 
 ### MCP Harness
 - `Tests/mcp_harness.py`: `run_tests(*funcs)`, each func takes doc, returns dict
-- `Tests/test_patch44_comprehensive.py`: All Patch44 tests with `CaptureConsole`
-- `Tests/test_blend.py`: Blend strip tests
+- `Tests/test_blend.py`: Blend strip tests (with `CaptureConsole`)
 
 ### Console Error Capture
 ```python
@@ -204,7 +211,7 @@ class CaptureConsole:
 - `Tests/run_all.py` — **primary launcher**: `python3 Tests/run_all.py` connects via XML-RPC to the user's already-running FreeCAD GUI (127.0.0.1:9875, no restart). Takes an optional substring filter (e.g. `python3 Tests/run_all.py chain`), `--inspect` to leave test documents open for stage-2 human inspection, and `--save` to persist the leftover geometry to `Resources/Test_files/_inspect/` (gitignored) so each test's final state can be reopened even after FreeCAD closes (implies `--inspect`). Exit codes: 0 = all pass, 1 = failures, 2 = FreeCAD unreachable.
 - `freecad Tests/run_all.py` — fallback in-process mode (spawns its own FreeCAD)
 - Stage tests: `test_edge_stage.py` (E1–E4 oracle), `test_patch_stage.py` (P1–P4), `test_blend_stage.py` (B1–B4), `test_chain.py` (full 9→7→2→1 rebuild, the acceptance gate — always runs)
-- Ops layer: `SilkWorkflowOps.py` (`create_edge`, `create_patch`, `create_blend`) — the only construction path; oracle: `SilkChecks.py` (`check_edge`, `check_patch44`, `check_blend`)
+- Ops layer: `SilkWorkflowOps.py` (`create_edge`, `create_patch`, `create_blend`) — the only construction path; oracle: `SilkChecks.py` (`check_edge`, `check_patch`, `check_blend`)
 - The harness monkey-patches `popup.tipsDialog` to a console stub so unattended runs never block on modal popups
 - RPC runs must `del` all `sys.modules` entries starting with `Silk`/`Tests`/`ArachNURBS` before importing (done in `run_all.py`'s remote code) — otherwise the long-lived RPC process runs stale cached modules
 

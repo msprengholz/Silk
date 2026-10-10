@@ -20,12 +20,23 @@
 
 import FreeCAD
 import Part
+from FreeCAD import Gui
 
 import ArachNURBS as AN
+from popup import tipsDialog
 
 from SilkMachinery import build_subgrids, build_display
 
+import os, Silk_dummy
+path_Silk = os.path.dirname(Silk_dummy.__file__)
+path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
+iconPath = path_Silk_icons + "/ControlGridPatch.svg"
+
 ICON = "Resources/Icons/ControlGridPatch.svg"
+
+PATCH_TOOLTIP = ('Create a unified Patch from 3 or 4 selected '
+                 'Silk Edge objects. The edge count picks the '
+                 'fill: 3 edges -> pointed, 4 edges -> quad.')
 
 
 class Patch:
@@ -301,3 +312,50 @@ class PatchViewProvider:
 
     def __setstate__(self, state):
         return None
+
+
+class CreatePatch:
+    """GUI command — select 3 or 4 Edge objects -> unified Patch.
+
+    The edge count picks the fill (3 -> pointed, 4 -> quad);
+    there is no fill-type knob. Mirrors SilkEdge.CreateEdge's
+    selection-driven pattern (read Gui.Selection, build via the
+    ops-layer constructor sequence, apply the patch color)."""
+
+    def GetResources(self):
+        return {'Pixmap': iconPath, 'MenuText': 'Patch',
+                'ToolTip': PATCH_TOOLTIP}
+
+    def Activated(self):
+        sel = Gui.Selection.getSelection()
+        if len(sel) == 0:
+            tipsDialog("Silk: Patch",
+                       "Select 3 or 4 boundary Edges (Silk Edge "
+                       "objects).")
+            return
+
+        edges = [o for o in sel
+                 if getattr(o, "object_type", None) == "Edge"]
+        if len(edges) not in (3, 4):
+            FreeCAD.Console.PrintError(
+                "Silk: Patch requires exactly 3 or 4 selected Edge "
+                "objects (got %d Edge objects among %d selected).\n"
+                % (len(edges), len(sel)))
+            return
+
+        doc = FreeCAD.ActiveDocument
+        obj = doc.addObject("Part::FeaturePython", "Patch")
+        Patch(obj, edges)
+        PatchViewProvider(obj.ViewObject)
+        obj.ViewObject.LineWidth = 1.50
+        obj.ViewObject.LineColor = (0.67, 1.00, 1.00)
+        obj.ViewObject.PointSize = 4.00
+        obj.ViewObject.PointColor = (0.00, 0.33, 1.00)
+        doc.recompute()
+        FreeCAD.Console.PrintMessage(f"Patch created: {obj.Name}\n")
+
+    def IsActive(self):
+        return Gui is not None
+
+
+Gui.addCommand("Silk_CreatePatch", CreatePatch())

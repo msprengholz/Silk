@@ -3,9 +3,11 @@ SilkBlend — the blend strip between two adjacent patches.
 
 Two object types share ONE implementation (ticket #39):
 
-  BlendStrip  the legacy type (#28/#30/#31/#32/#33 ring strips); stays
-              for old documents and the Silk_CreateBlend GUI command
-              (retired later, #42).
+  BlendStrip  the legacy type (#28/#30/#31/#32/#33 ring strips);
+              retained for old-document restore only (ticket
+              #42: nothing creates it anymore -- the
+              Silk_CreateBlend GUI command and the ops layer
+              build the unified Blend).
   Blend       the unified blend (#39): same strip algorithm, plus an
               optional Edge property that pins the seam geometrically,
               object_type "Blend".
@@ -432,22 +434,24 @@ class BlendStripViewProvider:
 BlendViewProvider = BlendStripViewProvider
 
 
-class CreateBlendStrip:
-    """GUI command — select 2 Patch44 objects → BlendStrip (legacy; the
-    unified Blend via create_blend supersedes this, retired in #42)."""
+class CreateBlend:
+    """GUI command — select 2 adjacent patches -> unified
+    Blend (ticket #42: the legacy BlendStrip construction
+    is retired; the command builds the unified Blend, the
+    same strip algorithm via the shared run_blend)."""
 
     def GetResources(self):
-        return {'Pixmap': iconPath, 'MenuText': 'Silk BlendStrip',
-                'ToolTip': 'Create a blend strip between two adjacent Patch44 objects.'}
+        return {'Pixmap': iconPath, 'MenuText': 'Silk Blend',
+                'ToolTip': 'Create a blend between two adjacent patches.'}
 
     def Activated(self):
         sel = Gui.Selection.getSelection()
         if len(sel) != 2:
-            FreeCAD.Console.PrintError("Silk: BlendStrip requires exactly 2 selected Patch44 objects.\n")
+            FreeCAD.Console.PrintError("Silk: Blend requires exactly 2 selected patches.\n")
             return
         doc = FreeCAD.ActiveDocument
-        obj = doc.addObject("Part::FeaturePython", "BlendStrip")
-        BlendStrip(obj, sel[0], sel[1])
+        obj = doc.addObject("Part::FeaturePython", "Blend")
+        Blend(obj, sel[0], sel[1])
         BlendStripViewProvider(obj.ViewObject)
         obj.ViewObject.LineWidth = 2.00
         obj.ViewObject.LineColor = (0.00, 1.00, 0.00)
@@ -456,10 +460,10 @@ class CreateBlendStrip:
         obj.ViewObject.ShapeColor = (0.00, 1.00, 0.00)
         obj.ViewObject.Transparency = 30
         doc.recompute()
-        FreeCAD.Console.PrintMessage(f"BlendStrip created: {obj.Name}\n")
+        FreeCAD.Console.PrintMessage(f"Blend created: {obj.Name}\n")
 
     def IsActive(self):
         return Gui is not None
 
 
-Gui.addCommand("Silk_CreateBlend", CreateBlendStrip())
+Gui.addCommand("Silk_CreateBlend", CreateBlend())

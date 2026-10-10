@@ -1,5 +1,9 @@
 """
-Patch stage (ticket #19): create_patch op + check_patch44 oracle.
+Patch stage (ticket #19): create_patch op + check_patch oracle.
+
+The op builds the unified Patch (#42: the legacy per-fill
+create_patch/Patch44 builder is retired); check_patch is the
+only patch oracle (dispatches on the edge count).
 
 Positive: 4 loop edges (a 50x50 square) -> create_patch -> full oracle
 green (structural + P1-P4), no console errors.
@@ -104,7 +108,7 @@ def _build_gt_patch(doc, fixture_doc):
     fixture's sketches. `fixture_doc` must already be open."""
     from SilkWorkflowOps import create_patch
     edges = _build_gt_edges(doc, fixture_doc, GT_PATCH44_EDGES)
-    patch = create_patch(edges[0], edges[1], edges[2], edges[3], name="Patch44")
+    patch = create_patch(edges, name="Patch")
     return patch, edges
 
 
@@ -113,7 +117,7 @@ def test_create_patch_ground_truth(doc):
     and 16 weights must match the stored ground-truth patch exactly, and
     the oracle must be fully green."""
     errors, checks = [], []
-    from SilkChecks import check_patch44
+    from SilkChecks import check_patch
 
     fixture_doc = FreeCAD.openDocument(FIXTURE)
     FreeCAD.setActiveDocument(doc.Name)  # openDocument activates the fixture
@@ -140,7 +144,7 @@ def test_create_patch_ground_truth(doc):
             errors.append("weights deviate from stored by %.3e" % wmax)
         checks.append("patch: max weight deviation %.2e" % wmax)
 
-        results = check_patch44(patch, edges)
+        results = check_patch(patch, edges)
         bad = [(n, d) for (n, ok, d) in results if not ok]
         if bad:
             errors.append("oracle flagged the ground-truth patch: %s" % bad)
@@ -154,19 +158,19 @@ def test_create_patch_4_edges(doc):
     """4 loop edges -> create_patch -> oracle fully green."""
     errors, checks = [], []
     from SilkWorkflowOps import create_patch
-    from SilkChecks import check_patch44
+    from SilkChecks import check_patch
 
     edges = _make_loop_edges(doc)
     with _CaptureConsole() as cap:
-        patch = create_patch(edges[0], edges[1], edges[2], edges[3], name="PatchTest")
+        patch = create_patch(edges, name="Patch")
     if cap.errors:
         errors.append("console errors during create_patch: %s" % cap.errors)
-    if patch is None or getattr(patch, "object_type", None) != "Patch44":
-        errors.append("create_patch did not return a Patch44 object")
+    if patch is None or getattr(patch, "object_type", None) != "Patch":
+        errors.append("create_patch did not return a unified Patch object")
         return {"pass": False, "errors": errors, "checks": checks}
     checks.append("create_patch returned %s with %d poles" % (patch.Name, len(patch.Poles)))
 
-    results = check_patch44(patch, edges)
+    results = check_patch(patch, edges)
     bad = [(n, d) for (n, ok, d) in results if not ok]
     if bad:
         errors.append("oracle flagged a valid patch: %s" % bad)
@@ -179,7 +183,7 @@ def test_oracle_flags_flipped_row(doc):
     fold/flip check (P3) must fail. (A flat square would stay planar
     under a row flip, so the GT patch is used.)"""
     errors, checks = [], []
-    from SilkChecks import check_patch44
+    from SilkChecks import check_patch
 
     fixture_doc = FreeCAD.openDocument(FIXTURE)
     FreeCAD.setActiveDocument(doc.Name)
@@ -189,7 +193,7 @@ def test_oracle_flags_flipped_row(doc):
         poles[4:8] = list(reversed(poles[4:8]))  # flip row U1
         patch.Poles = poles
 
-        results = check_patch44(patch, edges)
+        results = check_patch(patch, edges)
         failed = {n: d for (n, ok, d) in results if not ok}
         flip_fails = [n for n in failed if "flip" in n or "fold" in n]
         if not flip_fails:
@@ -205,15 +209,15 @@ def test_oracle_flags_seam_offset(doc):
     """Boundary pole shifted off its edge -> P2 must fail."""
     errors, checks = [], []
     from SilkWorkflowOps import create_patch
-    from SilkChecks import check_patch44
+    from SilkChecks import check_patch
 
     edges = _make_loop_edges(doc)
-    patch = create_patch(edges[0], edges[1], edges[2], edges[3], name="PatchTest")
+    patch = create_patch(edges, name="Patch")
     poles = list(patch.Poles)
     poles[1] = poles[1] + Vector(0.5, 0, 0)  # p01 off edge0
     patch.Poles = poles
 
-    results = check_patch44(patch, edges)
+    results = check_patch(patch, edges)
     failed = {n: d for (n, ok, d) in results if not ok}
     seam_fails = [n for n in failed if "boundary" in n]
     if not seam_fails:
@@ -227,12 +231,12 @@ def test_oracle_flags_misassigned_edge(doc):
     """Wrong edge->patch correspondence in the arguments -> P1 must fail."""
     errors, checks = [], []
     from SilkWorkflowOps import create_patch
-    from SilkChecks import check_patch44
+    from SilkChecks import check_patch
 
     edges = _make_loop_edges(doc)
-    patch = create_patch(edges[0], edges[1], edges[2], edges[3], name="PatchTest")
+    patch = create_patch(edges, name="Patch")
 
-    results = check_patch44(patch, [edges[0], edges[2], edges[1], edges[3]])
+    results = check_patch(patch, [edges[0], edges[2], edges[1], edges[3]])
     failed = {n: d for (n, ok, d) in results if not ok}
     corner_fails = [n for n in failed if "corner" in n]
     if not corner_fails:

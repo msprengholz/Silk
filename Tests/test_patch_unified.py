@@ -1,6 +1,6 @@
 """
 Unified Patch (tickets #37/#38): fills from a variable-length Edges list,
-built through the ops layer (create_patch_unified) and validated by the
+built through the ops layer (create_patch) and validated by the
 check_patch oracle. The edge count picks the fill: 4 edges -> quad fill
 (#37), 3 edges -> pointed fill (#38).
 
@@ -8,9 +8,12 @@ Positive: 4 loop edges -> quad fill -> check_patch fully green; 3 loop
 edges -> pointed fill -> check_patch fully green including the degenerate
 U=0 column; pole parity vs the legacy Patch44/Patch33 at 1e-6 (the same
 ControlGrid44_4/_3 layouts, so the unified pipeline reproduces the chain
-later); mutation of USplits/VSplits recomputes cleanly on BOTH fills and
-the oracle stays green (the 3-edge fill gets the full subgrid machinery
-the legacy Patch33 lacked).
+later -- the legacy baselines are built by DIRECT restore-shim
+construction, #42: only the ops layer is retired); mutation of
+USplits/VSplits recomputes cleanly on BOTH fills and the oracle stays
+green (the 3-edge fill gets the full subgrid machinery the legacy
+Patch33 lacked); the unified Patch survives a save/reopen round trip
+(16 poles, subgrid machinery re-derives, oracle green after reload).
 
 Negative: a boundary pole corrupted WITHOUT recompute must be flagged by
 the boundary check (P2/C2) -- the oracle returns a failure, never raises.
@@ -292,21 +295,21 @@ def _assert_pointed_display_contract(doc, patch, edges, errors, checks,
 
 
 def test_unified_patch_4_edges(doc):
-    """4 loop edges -> create_patch_unified -> check_patch fully green."""
+    """4 loop edges -> create_patch -> check_patch fully green."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     from SilkChecks import check_patch
 
     edges = _make_loop_edges(doc)
-    patch = create_patch_unified(edges, name="PatchU")
+    patch = create_patch(edges, name="PatchU")
     if patch is None or getattr(patch, "object_type", None) != "Patch":
-        errors.append("create_patch_unified did not return a unified Patch")
+        errors.append("create_patch did not return a unified Patch")
         return {"pass": False, "errors": errors, "checks": checks}
     if len(list(patch.Edges)) != 4:
         errors.append("Edges link list != 4 entries")
     if len(patch.Poles) != 16:
         errors.append("expected 16 poles, got %d" % len(patch.Poles))
-    checks.append("create_patch_unified -> %s (%d poles, %d edges)"
+    checks.append("create_patch -> %s (%d poles, %d edges)"
                   % (patch.Name, len(patch.Poles), len(list(patch.Edges))))
 
     results = check_patch(patch, edges)
@@ -314,15 +317,42 @@ def test_unified_patch_4_edges(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def _make_legacy_patch44(doc, edges, name):
+    """Direct Patch44 construction for pole-parity evidence (#42).
+
+    The ops layer is retired (nothing creates this type anymore),
+    but the class survives in SilkPatch44 as an old-document
+    restore shim -- direct construction is legitimate HERE only,
+    as the 1e-6 parity baseline the unified fill must reproduce."""
+    import SilkPatch44
+    obj = doc.addObject("Part::FeaturePython", name)
+    SilkPatch44.Patch44(obj, edges[0], edges[1], edges[2], edges[3])
+    SilkPatch44.Patch44ViewProvider(obj.ViewObject)
+    doc.recompute()
+    return obj
+
+
+def _make_legacy_patch33(doc, edges, name):
+    """Direct Patch33 construction for pole-parity evidence (#42) --
+    same rationale as _make_legacy_patch44 (restore shim; only the
+    ops layer is retired)."""
+    import SilkPatch33
+    obj = doc.addObject("Part::FeaturePython", name)
+    SilkPatch33.Patch33(obj, edges[0], edges[1], edges[2])
+    SilkPatch33.Patch33ViewProvider(obj.ViewObject)
+    doc.recompute()
+    return obj
+
+
 def test_unified_patch_pole_parity(doc):
     """Unified Patch reproduces the SAME 16 poles as Patch44 for identical
     edges in the same order (tolerance 1e-6)."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch, create_patch_unified
+    from SilkWorkflowOps import create_patch
 
     edges = _make_loop_edges(doc)
-    p44 = create_patch(edges[0], edges[1], edges[2], edges[3], name="P44")
-    pun = create_patch_unified(edges, name="PUn")
+    p44 = _make_legacy_patch44(doc, edges, name="P44")
+    pun = create_patch(edges, name="PUn")
 
     if len(p44.Poles) != 16 or len(pun.Poles) != 16:
         errors.append("missing poles (Patch44=%d, unified=%d)"
@@ -345,11 +375,11 @@ def test_unified_oracle_flags_c_boundary(doc):
     """A boundary pole corrupted WITHOUT recompute must be flagged by the
     C-boundary (P2) check -- check_patch never raises."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     from SilkChecks import check_patch
 
     edges = _make_loop_edges(doc)
-    patch = create_patch_unified(edges, name="PatchU")
+    patch = create_patch(edges, name="PatchU")
     poles = list(patch.Poles)
     poles[1] = poles[1] + FreeCAD.Vector(0.5, 0, 0)  # p01 off edge0
     patch.Poles = poles  # no recompute -> oracle reads the stale boundary
@@ -368,11 +398,11 @@ def test_unified_mutation_splits(doc):
     """Editing USplits/VSplits on a built unified Patch and recomputing
     stays clean: surface valid, subgrids rebuild, oracle still passes."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     from SilkChecks import check_patch
 
     edges = _make_loop_edges(doc)
-    patch = create_patch_unified(edges, name="PatchU")
+    patch = create_patch(edges, name="PatchU")
 
     patch.USplits = [0.3]
     patch.VSplits = [0.7]
@@ -400,22 +430,22 @@ def test_unified_mutation_splits(doc):
 
 
 def test_unified_patch_3_edges(doc):
-    """3 loop edges -> create_patch_unified -> pointed fill on the shared
+    """3 loop edges -> create_patch -> pointed fill on the shared
     Patch type, check_patch fully green (including degenerate column)."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     from SilkChecks import check_patch
 
     edges = _make_triangle_edges(doc)
-    patch = create_patch_unified(edges, name="PatchU3")
+    patch = create_patch(edges, name="PatchU3")
     if patch is None or getattr(patch, "object_type", None) != "Patch":
-        errors.append("create_patch_unified did not return a unified Patch")
+        errors.append("create_patch did not return a unified Patch")
         return {"pass": False, "errors": errors, "checks": checks}
     if len(list(patch.Edges)) != 3:
         errors.append("Edges link list != 3 entries")
     if len(patch.Poles) != 16:
         errors.append("expected 16 poles, got %d" % len(patch.Poles))
-    checks.append("create_patch_unified -> %s (%d poles, %d edges)"
+    checks.append("create_patch -> %s (%d poles, %d edges)"
                   % (patch.Name, len(patch.Poles), len(list(patch.Edges))))
 
     results = check_patch(patch, edges)
@@ -427,11 +457,11 @@ def test_unified_pointed_pole_parity(doc):
     """Unified 3-edge fill reproduces the SAME 16 poles/weights as the
     legacy Patch33 for identical edges in the same order (tol 1e-6)."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch33, create_patch_unified
+    from SilkWorkflowOps import create_patch
 
     edges = _make_triangle_edges(doc)
-    p33 = create_patch33(edges[0], edges[1], edges[2], name="P33")
-    pun = create_patch_unified(edges, name="PUn3")
+    p33 = _make_legacy_patch33(doc, edges, name="P33")
+    pun = create_patch(edges, name="PUn3")
 
     if len(p33.Poles) != 16 or len(pun.Poles) != 16:
         errors.append("missing poles (Patch33=%d, unified=%d)"
@@ -455,11 +485,11 @@ def test_unified_pointed_degenerate_column(doc):
     sitting on the corner shared by edges 0 and 2 (explicit assert, the
     oracle checks it too)."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     from SilkChecks import TOL
 
     edges = _make_triangle_edges(doc)
-    patch = create_patch_unified(edges, name="PatchU3")
+    patch = create_patch(edges, name="PatchU3")
     poles = list(patch.Poles)
     if len(poles) != 16:
         errors.append("expected 16 poles, got %d" % len(poles))
@@ -486,11 +516,11 @@ def test_unified_pointed_subgrid_machinery(doc):
     USplits/VSplits recompute rebuilds the subgrids and a valid display,
     the oracle stays green, and clearing the splits recomputes clean."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     from SilkChecks import check_patch
 
     edges = _make_triangle_edges(doc)
-    patch = create_patch_unified(edges, name="PatchU3")
+    patch = create_patch(edges, name="PatchU3")
 
     patch.USplits = [0.3]
     patch.VSplits = [0.7]
@@ -531,15 +561,15 @@ def test_unified_pointed_graceful_degradation(doc):
     leave a valid empty object, and check_patch returns failures without
     raising. Wrong edge counts (2, 5) still hit the empty branch."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     from SilkChecks import check_patch
 
     # (a) 3 edges whose loop does not connect
     strays = _make_stray_edges(doc, 3)
     try:
-        bad3 = create_patch_unified(strays, name="PatchBad3")
+        bad3 = create_patch(strays, name="PatchBad3")
     except Exception as e:
-        errors.append("create_patch_unified raised on non-connecting "
+        errors.append("create_patch raised on non-connecting "
                       "3 edges: %r" % e)
         return {"pass": False, "errors": errors, "checks": checks}
     if len(bad3.Poles) != 0:
@@ -563,10 +593,10 @@ def test_unified_pointed_graceful_degradation(doc):
     loop = _make_loop_edges(doc)
     edges5 = list(loop) + [strays[0]]
     try:
-        p2 = create_patch_unified(loop[:2], name="PatchU2")
-        p5 = create_patch_unified(edges5, name="PatchU5")
+        p2 = create_patch(loop[:2], name="PatchU2")
+        p5 = create_patch(edges5, name="PatchU5")
     except Exception as e:
-        errors.append("create_patch_unified raised on wrong edge count: %r" % e)
+        errors.append("create_patch raised on wrong edge count: %r" % e)
         return {"pass": False, "errors": errors, "checks": checks}
     for p, eds, want in ((p2, loop[:2], 2), (p5, edges5, 5)):
         if len(p.Poles) != 0:
@@ -588,11 +618,11 @@ def test_unified_oracle_flags_pointed_boundary(doc):
     """A boundary pole of the 3-edge fill corrupted WITHOUT recompute must
     be flagged by the C2 boundary check -- check_patch never raises."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     from SilkChecks import check_patch
 
     edges = _make_triangle_edges(doc)
-    patch = create_patch_unified(edges, name="PatchU3")
+    patch = create_patch(edges, name="PatchU3")
     poles = list(patch.Poles)
     poles[1] = poles[1] + FreeCAD.Vector(0.5, 0, 0)  # p01 off edge0
     patch.Poles = poles  # no recompute -> oracle reads the stale boundary
@@ -615,10 +645,10 @@ def test_unified_pointed_display_contract(doc):
     face/edge counts at every state, with check_patch green in every
     surface-visible state."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
 
     edges = _make_triangle_edges(doc)
-    patch = create_patch_unified(edges, name="PatchU3")
+    patch = create_patch(edges, name="PatchU3")
 
     # 1. display/subdivision properties exist and are editable
     for prop in ("ShowSurface", "ShowGrid", "ShowSubgrids",
@@ -637,17 +667,17 @@ def test_unified_pointed_display_contract(doc):
 
 
 def test_unified_pointed_cone_build(doc):
-    """Quarter-cone edges -> create_patch_unified -> pointed fill builds
+    """Quarter-cone edges -> create_patch -> pointed fill builds
     on the shared Patch type with the full oracle green (object_type,
     16 poles, C1-C3 incl. the degenerate column, P3/P4)."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
     from SilkChecks import check_patch
 
     edges = _make_quarter_cone_edges(doc)
-    patch = create_patch_unified(edges, name="PatchCone")
+    patch = create_patch(edges, name="PatchCone")
     if patch is None or getattr(patch, "object_type", None) != "Patch":
-        errors.append("create_patch_unified did not return a unified Patch")
+        errors.append("create_patch did not return a unified Patch")
         return {"pass": False, "errors": errors, "checks": checks}
     if len(list(patch.Edges)) != 3:
         errors.append("Edges link list != 3 entries")
@@ -675,7 +705,7 @@ def test_unified_pointed_cone_curved(doc):
     smoothstep fixture would give 20), and the rim arc bulges > 5.0 off
     its chord."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
 
     edges = _make_quarter_cone_edges(doc)
 
@@ -692,7 +722,7 @@ def test_unified_pointed_cone_curved(doc):
     checks.append("cone edge poles on intended 3D coordinates "
                   "(max dev %.2e, tol 1e-6)" % max_dev)
 
-    patch = create_patch_unified(edges, name="PatchCone")
+    patch = create_patch(edges, name="PatchCone")
 
     # 2. the fill poles are not coplanar (doubly curved)
     poles = list(patch.Poles)
@@ -737,12 +767,70 @@ def test_unified_pointed_cone_display(doc):
     quarter-cone fixture: 4 cells of 16 poles, the concrete face/edge
     toggle counts, oracle green, and a clean clear."""
     errors, checks = [], []
-    from SilkWorkflowOps import create_patch_unified
+    from SilkWorkflowOps import create_patch
 
     edges = _make_quarter_cone_edges(doc)
-    patch = create_patch_unified(edges, name="PatchCone")
+    patch = create_patch(edges, name="PatchCone")
     _assert_pointed_display_contract(doc, patch, edges, errors, checks,
                                      "quarter cone")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_unified_serialization(doc):
+    """Save/reopen round trip (ported from the retired
+    test_patch44_comprehensive, rebuilt on the unified Patch through
+    the ops layer): 16 poles/weights survive the round trip identical,
+    the subgrid machinery re-derives after reload, and check_patch is
+    green against the reloaded edges."""
+    errors, checks = [], []
+    import os
+    from SilkWorkflowOps import create_patch
+    from SilkChecks import check_patch
+
+    edges = _make_loop_edges(doc)
+    patch = create_patch(edges, name="PatchU")
+    patch.USplits = [0.3]
+    doc.recompute()
+    poles_before = [tuple(v) for v in patch.Poles]
+    weights_before = [round(w, 12) for w in patch.Weights]
+    subgrids_before = len(patch.Proxy._subgrids)
+
+    save_path = "/tmp/_test_patch_unified_serialize.FCStd"
+    doc.saveAs(save_path)
+    FreeCAD.closeDocument(doc.Name)
+
+    doc2 = FreeCAD.openDocument(save_path)
+    try:
+        p2 = [o for o in doc2.Objects
+              if getattr(o, "object_type", None) == "Patch"][0]
+        if len(p2.Poles) != 16:
+            errors.append("reload: expected 16 poles, got %d"
+                          % len(p2.Poles))
+        poles_after = [tuple(v) for v in p2.Poles]
+        if poles_before != poles_after:
+            errors.append("reload: poles changed")
+        weights_after = [round(w, 12) for w in p2.Weights]
+        if weights_before != weights_after:
+            errors.append("reload: weights changed")
+        p2.USplits = [0.3]
+        doc2.recompute()
+        if len(p2.Proxy._subgrids) != subgrids_before:
+            errors.append("reload: expected %d subgrids, got %d"
+                          % (subgrids_before, len(p2.Proxy._subgrids)))
+        edges2 = sorted(
+            (o for o in doc2.Objects
+             if getattr(o, "object_type", None) == "Edge"),
+            key=lambda e: e.Name)
+        results = check_patch(p2, edges2)
+        bad = [(n, d) for (n, ok, d) in results if not ok]
+        if bad:
+            errors.append("reload: oracle not green: %s" % bad)
+        checks.append("save/reopen: 16 poles, weights identical, "
+                      "%d subgrids re-derived, oracle green"
+                      % len(p2.Proxy._subgrids))
+    finally:
+        os.remove(save_path)
+        FreeCAD.closeDocument(doc2.Name)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -761,4 +849,5 @@ ALL_TESTS = [
     test_unified_pointed_cone_build,
     test_unified_pointed_cone_curved,
     test_unified_pointed_cone_display,
+    test_unified_serialization,
 ]

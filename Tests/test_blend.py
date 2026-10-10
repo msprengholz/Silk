@@ -1,10 +1,40 @@
 """
 Blend test: two adjacent patches with a blend strip between them.
+
+#42: the patches are built through the ops layer (the unified
+Patch; the legacy CreateSilkPatch44 GUI command is retired). The
+CaptureConsole / check helpers lived in the retired
+test_patch44_comprehensive.py and moved here.
 """
 import FreeCAD
 import Part
-from FreeCAD import Vector, Gui
-from Tests.test_patch44_comprehensive import CaptureConsole, check
+from FreeCAD import Vector
+
+
+class CaptureConsole:
+    """Captures FreeCAD PrintError/PrintWarning during test execution."""
+    def __init__(self):
+        self.errors = []
+        self.warnings = []
+        self._orig_error = None
+        self._orig_warn = None
+
+    def __enter__(self):
+        self._orig_error = FreeCAD.Console.PrintError
+        self._orig_warn = FreeCAD.Console.PrintWarning
+        FreeCAD.Console.PrintError = lambda msg: (self.errors.append(msg), self._orig_error(msg) if self._orig_error else None)
+        FreeCAD.Console.PrintWarning = lambda msg: (self.warnings.append(msg), self._orig_warn(msg) if self._orig_warn else None)
+        return self
+
+    def __exit__(self, *args):
+        FreeCAD.Console.PrintError = self._orig_error
+        FreeCAD.Console.PrintWarning = self._orig_warn
+
+
+def check(cond, msg, errors):
+    if not cond:
+        errors.append(msg)
+    return cond
 
 
 def _run_with_capture(doc, test_fn):
@@ -17,13 +47,10 @@ def _run_with_capture(doc, test_fn):
     return result
 
 
-def _get_patches(doc):
-    import SilkPatch44
-    return [o for o in doc.Objects if hasattr(o, "object_type") and o.object_type == "Patch44"]
-
-
 def _make_patch(doc, edge_data):
-    import SilkPatch44
+    """One unified Patch from bare 4-pole loop data (the fill only
+    reads the poles/weights, so the drivers need no sketches)."""
+    from SilkWorkflowOps import create_patch
     edges = []
     for i, poles in enumerate(edge_data):
         e = doc.addObject("Part::FeaturePython", f"E{i}")
@@ -34,11 +61,7 @@ def _make_patch(doc, edge_data):
         e.Proxy = 0; e.Shape = Part.Shape(legs)
         edges.append(e)
     doc.recompute()
-    Gui.Selection.clearSelection()
-    for e in edges: Gui.Selection.addSelection(e)
-    SilkPatch44.CreateSilkPatch44().Activated()
-    doc.recompute()
-    return _get_patches(doc)[-1]
+    return create_patch(edges, name="Patch")
 
 
 def _flat_blend_strip(doc):
