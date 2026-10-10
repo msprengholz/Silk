@@ -626,8 +626,14 @@ def blend_poly_2x4_1x6(poles_0,weights_0, poles_1, weights_1, scale_0, scale_1, 
 		p2_scl = [p2[0], p2[1]]
 
 	## end point
-	if (equalVectors(poles_6_0[0],poles_6_0[3], .000001) == 0):
-		# the first curve is non degenerate
+	# The end tangent is taken from the SECOND curve's last leg, so BOTH
+	# curves must be non-degenerate here (#41: the guard used to inspect
+	# only the first curve -- a degenerate second curve, e.g. a cone
+	# apex column in a pointed patch's blend band, crashed
+	# tan4.normalize() with "Cannot normalize null vector").
+	if (equalVectors(poles_6_0[0],poles_6_0[3], .000001) == 0 and
+	    equalVectors(poles_6_1[0],poles_6_1[3], .000001) == 0):
+		# both curves are non degenerate
 		l4 = p4[0]-p5[0]					# last control leg
 		tan4=Base.Vector(l4)				# make clean copy
 		tan4.normalize()					# unit tangent direction

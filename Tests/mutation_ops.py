@@ -17,7 +17,7 @@ nor leaves stale state).
 
 import FreeCAD
 
-from SilkChecks import check_edge, check_patch44, check_blend
+from SilkChecks import check_edge, check_patch, check_patch44, check_blend
 
 
 def _doc(model):
@@ -53,11 +53,22 @@ def _oracle_obj(obj):
         return []
     if t == "Edge":
         return check_edge(obj)
+    if t == "Patch":   # the unified Patch (#37 quad / #38 pointed):
+        return check_patch(obj, list(obj.Edges))   # quad->quad, pointed->pointed
     if t == "Patch44":
         return check_patch44(obj, [obj.Poly0, obj.Poly1, obj.Poly2, obj.Poly3])
     if t in ("Blend", "BlendStrip"):
         return check_blend(obj, obj.PatchA, obj.PatchB)
     return []
+
+
+def _oracle_patch(p):
+    """The patch oracle matching an object's type: the unified Patch
+    via check_patch (the Edges count dispatches quad vs pointed, #37/#38),
+    anything else via the legacy check_patch44 (Poly0-3 links)."""
+    if getattr(p, "object_type", None) == "Patch":
+        return check_patch(p, list(p.Edges))
+    return check_patch44(p, [p.Poly0, p.Poly1, p.Poly2, p.Poly3])
 
 
 def _oracle_green(prefix, results):
@@ -89,11 +100,25 @@ def move_boundary_pole(model, *, edge=None, pole_index=1, delta=None):
     return checks, errors
 
 
-def change_splits(model, *, patch=None, splits_sweep=None):
-    """Set / remove / sweep the perpendicular split parameters on a Patch44;
-    subgrid cells rebuild and the object revalidates. Only splits that keep
-    the blend's band a single seam-adjacent cell are swept (per #33 the
-    blend supports single-cell bands), so the seam stays clean."""
+def change_splits(model, *, patch=None, splits_sweep=None, splits_axis="USplits"):
+    """Set / remove / sweep the split parameters on a patch (legacy
+    Patch44 or the unified Patch, dispatched on object_type); subgrid
+    cells rebuild and the object revalidates. `splits_axis` picks the
+    swept property ("USplits" or "VSplits" -- the pointed seams often
+    carry their band split on the other axis than the quad ones).
+
+    Only sweeps that keep the blend's band a single seam-adjacent cell
+    are safe (per #33 the blend supports single-cell bands), so the seam
+    stays clean. Which values those are depends on the axis (#41):
+    - the split axis PARALLEL to the shared seam controls the band's
+      cell COUNT, so there only [], [0.1], [0.9]-style values keep a
+      single cell (0.1/0.9 are the corner-cell exclusions that leave
+      exactly one band cell);
+    - the PERPENDICULAR axis never affects the band count, so any
+      values are safe.
+    Callers pass the safe sweep per model; the default sweep (legacy
+    behavior, unchanged) is only safe on the perpendicular axis (or on
+    models without a blend) and ends at [0.9]."""
     doc = _doc(model)
     if patch is None:
         patch = model.get("patch")
@@ -105,19 +130,20 @@ def change_splits(model, *, patch=None, splits_sweep=None):
         splits_sweep = ([0.5], [0.25, 0.75], [], [0.1], [0.9])
     checks, errors = [], []
     for splits in splits_sweep:
-        patch.USplits = splits
+        setattr(patch, splits_axis, splits)
         doc.recompute()
-        res = check_patch44(patch, [patch.Poly0, patch.Poly1,
-                                    patch.Poly2, patch.Poly3])
+        res = _oracle_patch(patch)
         bad = [(n, d) for n, ok, d in res if not ok]
         if bad:
-            errors.append("change_splits USplits=%s not green: %s"
-                          % (splits, bad))
+            errors.append("change_splits %s=%s not green: %s"
+                          % (splits_axis, splits, bad))
             continue
         if patch.Shape.isNull() or not patch.Shape.isValid():
-            errors.append("change_splits USplits=%s: invalid shape" % splits)
+            errors.append("change_splits %s=%s: invalid shape"
+                          % (splits_axis, splits))
             continue
-        checks.append("USplits=%s -> oracle green, shape valid" % (splits,))
+        checks.append("%s=%s -> oracle green, shape valid"
+                      % (splits_axis, splits))
     return checks, errors
 
 
@@ -209,10 +235,20 @@ def _objects(model):
 def recompute_convergence(model, *, iterations=5, tol=1e-6):
     """Recompute repeatedly. Hidden-cell sets / geometry must converge
     (no ping-pong, no stale state): every object's oracle stays green on
-    every iteration and no pole set drifts beyond tol."""
+    every iteration, no pole set drifts beyond tol, and every object
+    exposing _HiddenSubgridIdxs keeps the IDENTICAL set across all
+    iterations with every index inside [0, nu*nv), where nu/nv are
+    derived from the public USplits/VSplits (a set that is stale from
+    before the first iteration, ping-pongs, or holds out-of-range cell
+    indices after a split change is flagged)."""
     doc = _doc(model)
     objs = _objects(model)
     base = {o.Name: list(o.Poles) for o in objs}
+    hidden0 = {}
+    for o in objs:
+        h = getattr(o, "_HiddenSubgridIdxs", None)
+        if h is not None:
+            hidden0[o.Name] = sorted(h)
     checks, errors = [], []
     for i in range(iterations):
         doc.recompute()
@@ -225,10 +261,28 @@ def recompute_convergence(model, *, iterations=5, tol=1e-6):
             if dev > tol:
                 errors.append("recompute_convergence iter %d: %s drifted %.3e"
                               % (i, o.Name, dev))
+            h = getattr(o, "_HiddenSubgridIdxs", None)
+            if h is None:
+                continue    # only patches carry the auto-hide bookkeeping
+            h = sorted(h)
+            if o.Name in hidden0 and h != hidden0[o.Name]:
+                errors.append("recompute_convergence iter %d: %s hidden-cell "
+                              "set %r != baseline %r (ping-pong / stale)"
+                              % (i, o.Name, h, hidden0[o.Name]))
+            nu = len(list(getattr(o, "USplits", []) or [])) + 1
+            nv = len(list(getattr(o, "VSplits", []) or [])) + 1
+            oob = [k for k in h if not (0 <= k < nu * nv)]
+            if oob:
+                errors.append("recompute_convergence iter %d: %s hidden-cell "
+                              "indices %r out of [0, %d)"
+                              % (i, o.Name, oob, nu * nv))
     if not errors:
-        checks.append("%d recomputes converged: oracle green, poles stable "
-                      "within %.0e across %d objects" % (iterations, tol,
-                                                          len(objs)))
+        msg = ("%d recomputes converged: oracle green, poles stable "
+               "within %.0e across %d objects" % (iterations, tol,
+                                                  len(objs)))
+        if hidden0:
+            msg += "; hidden-cell sets identical across all iterations, in range"
+        checks.append(msg)
     return checks, errors
 
 
