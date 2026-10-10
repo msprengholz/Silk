@@ -171,10 +171,48 @@ def test_edge_2n(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_edge_first_element(doc):
+    """create_edge builds a valid Edge from a single non-3-line sketch
+    (FirstElement mode -- SilkEdge routes !=3-visible-line sketches
+    through ArachNURBS.ControlPoly4_FirstElement); oracle green.
+
+    #26: replaces the retired test_api_smoke FirstElement coverage with
+    a modern test that drives the unified Edge instead of the legacy
+    ControlPoly4 command."""
+    errors, checks = [], []
+    from SilkWorkflowOps import create_edge
+    from SilkChecks import check_edge
+
+    sk = doc.addObject("Sketcher::SketchObject", "Sketch")
+    sk.Placement = FreeCAD.Placement(
+        FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(90, 0, 90))
+    sk.addGeometry(Part.LineSegment(FreeCAD.Vector(0, 40, 0),
+                                    FreeCAD.Vector(50, 0, 0)))
+    doc.recompute()
+
+    with _CaptureConsole() as cap:
+        edge = create_edge(sk, name="EdgeFirstElement")
+    if cap.errors:
+        errors.append("console errors during create_edge: %s" % cap.errors)
+    if edge is None or getattr(edge, "object_type", None) != "Edge":
+        errors.append("create_edge did not return an Edge object")
+        return {"pass": False, "errors": errors, "checks": checks}
+    checks.append("FirstElement Edge: %d poles" % len(edge.Poles))
+
+    results = check_edge(edge)
+    bad = [(n, d) for (n, ok, d) in results if not ok]
+    if bad:
+        errors.append("oracle flagged a FirstElement edge: %s" % bad)
+    else:
+        checks.append("FirstElement edge oracle green (E1-E4)")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_create_edge_3l,
     test_oracle_flags_misordered_poles,
     test_oracle_flags_selfintersecting_polygon,
     test_oracle_flags_excessive_arc,
     test_edge_2n,
+    test_edge_first_element,
 ]
