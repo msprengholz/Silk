@@ -55,7 +55,7 @@ def _oracle_obj(obj):
         return check_edge(obj)
     if t == "Patch44":
         return check_patch44(obj, [obj.Poly0, obj.Poly1, obj.Poly2, obj.Poly3])
-    if t == "BlendStrip":
+    if t in ("Blend", "BlendStrip"):
         return check_blend(obj, obj.PatchA, obj.PatchB)
     return []
 

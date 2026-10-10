@@ -15,7 +15,7 @@ from SilkEdge import Edge, EdgeViewProvider
 from SilkPatch44 import Patch44, Patch44ViewProvider
 from SilkPatch33 import Patch33, Patch33ViewProvider
 from SilkPatch import Patch, PatchViewProvider
-from SilkBlend import BlendStrip, BlendStripViewProvider
+from SilkBlend import Blend, BlendStripViewProvider
 
 
 def create_edge(sketches, name="Edge"):
@@ -99,16 +99,23 @@ def create_patch_unified(edges, name="Patch"):
     return obj
 
 
-def create_blend(patch_a, patch_b, name="BlendStrip"):
-    """Create a BlendStrip joining two adjacent Patch44 objects.
+def create_blend(patch_a, patch_b, edge=None, name="Blend"):
+    """Create the unified Blend (#39) joining two adjacent patches.
 
-    The shared edge is auto-detected from the patches' corner poles
-    (see SilkBlend). addObject -> BlendStrip constructor -> view
-    provider -> recompute -> return the created object.
+    The shared seam is auto-detected from the patches' corner poles
+    (robust against degenerate pointed corners), or pinned geometrically
+    from `edge`'s endpoint poles when given -- edge OBJECT identity is
+    irrelevant, only the endpoint geometry is validated (both endpoints
+    must sit on a corner pair of BOTH patches). A non-shared edge or a
+    Blend fed as a patch refuses gracefully: empty valid object +
+    console error, no crash. Mirrors the other ops (addObject ->
+    constructor -> view provider -> recompute -> return); the legacy
+    BlendStrip class behind the Silk_CreateBlend GUI command is
+    untouched (retired later, #42).
     """
     doc = FreeCAD.ActiveDocument
     obj = doc.addObject("Part::FeaturePython", name)
-    BlendStrip(obj, patch_a, patch_b)
+    Blend(obj, patch_a, patch_b, edge)
     BlendStripViewProvider(obj.ViewObject)
     obj.ViewObject.LineWidth = 2.00
     obj.ViewObject.LineColor = (0.00, 1.00, 0.00)

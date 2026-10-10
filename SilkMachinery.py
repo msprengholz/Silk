@@ -5,11 +5,11 @@ One reusable implementation of the machinery every patch fill shares:
 subdivision (USplits/VSplits -> subgrid pole arrays + trimmed surfaces),
 blend-band selection, hidden-cell bookkeeping, and compound display.
 
-Patch44 (the quad fill) consumes this core for all four; BlendStrip
-resolves its seam-adjacent subgrid cell through band_cells here. The
-unified Patch's fills (the #37 quad and the #38 pointed fill) and the
-future unified Blend delegate to the same implementation instead of
-reimplementing it.
+Patch44 (the quad fill) consumes this core for all four; BlendStrip and
+the unified Blend resolve their seam (shared_seam) and seam-adjacent
+subgrid cell (band_cells) through here. The unified Patch's fills (the
+#37 quad and the #38 pointed fill) delegate to the same implementation
+instead of reimplementing it.
 
 Only behavior shared verbatim across consumers lives here — no object
 type or geometry logic is introduced.
@@ -69,6 +69,55 @@ def build_subgrids(base_surface, u_splits, v_splits):
 
 # ---- blend band / shared-edge selection --------------------------------
 
+# Boundary-edge label per adjacent corner pair. Corner i of a patch is
+# Poles[0], Poles[3], Poles[15], Poles[12] in cyclic order, so boundary
+# edge k runs corner k -> corner k+1; the label fixes the band split
+# direction (perpendicular to the seam) and side.
+_EDGE_OF = {(0, 1): "U0", (1, 2): "V1", (2, 3): "U1", (3, 0): "V0",
+            (1, 0): "U0", (2, 1): "V1", (3, 2): "U1", (0, 3): "V0"}
+
+
+def _cyclic_adjacent(i, j):
+    """Corner indices i, j adjacent on the 4-corner cycle."""
+    return (j - i) % 4 == 1 or (i - j) % 4 == 1
+
+
+def shared_seam(a_c, b_c, tol=0.01):
+    """Detect the shared seam between two patches from their corner poles.
+
+    Returns (ea, eb, pairs): the boundary-edge labels on patch A and B
+    plus the two matched corner pairs ([(i, j), (i2, j2)] with i~j,
+    i2~j2), or None when no seam is found.
+
+    Robust against degenerate corners (#39, criterion 6): a pointed
+    patch carries its apex twice in the corner list (Poles[0] ==
+    Poles[12]), so naive matched-pair collection double-counts the point
+    and the sorted-ids edge lookup used to find no seam at all. This
+    instead picks an adjacent cyclic pair of corners on A whose matches
+    form an adjacent cyclic pair on B, requiring both pairs to be
+    non-degenerate (endpoints distinct -- same-patch-coincident corners,
+    i.e. the apex duplicates, are ignored as pair members).
+    """
+    matches = {i: [j for j in range(4)
+                   if (a_c[i] - b_c[j]).Length < tol]
+               for i in range(4)}
+    for i in range(4):
+        i2 = (i + 1) % 4
+        if (a_c[i] - a_c[i2]).Length < tol:
+            continue  # degenerate pair on the same patch (pointed apex)
+        for j in matches[i]:
+            for j2 in matches[i2]:
+                if not _cyclic_adjacent(j, j2):
+                    continue
+                if (b_c[j] - b_c[j2]).Length < tol:
+                    continue  # degenerate pair on the other patch
+                ea = _EDGE_OF.get((i, i2))
+                eb = _EDGE_OF.get((j, j2))
+                if ea and eb:
+                    return ea, eb, [(i, j), (i2, j2)]
+    return None
+
+
 def patch_side(pa, pb, tol=0.01):
     """Edge type and side of the shared edge as seen from pa (toward pb).
 
@@ -77,17 +126,10 @@ def patch_side(pa, pb, tol=0.01):
     """
     a_c = [pa.Poles[0], pa.Poles[3], pa.Poles[15], pa.Poles[12]]
     b_c = [pb.Poles[0], pb.Poles[3], pb.Poles[15], pb.Poles[12]]
-    pairs = [(i, j) for i, ac in enumerate(a_c)
-             for j, bc in enumerate(b_c) if (ac - bc).Length < tol]
-    if len(pairs) < 2:
+    seam = shared_seam(a_c, b_c, tol)
+    if seam is None:
         return None, None
-    edges = {(0, 1): "U0", (1, 2): "V1", (2, 3): "U1", (3, 0): "V0",
-             (1, 0): "U0", (2, 1): "V1", (3, 2): "U1", (0, 3): "V0"}
-    ids_a = sorted(x[0] for x in pairs)
-    ids_b = sorted(x[1] for x in pairs)
-    ea = edges.get((ids_a[0], ids_a[1]))
-    if not ea:
-        return None, None
+    ea = seam[0]
     return ea, (0 if ea[1] == "0" else 1)
 
 

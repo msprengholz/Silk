@@ -221,6 +221,20 @@ class Patch:
     # ---- execute ---------------------------------------------------------
 
     def execute(self, fp):
+        # Auto-update chain (#39 decision F): touch every blend that reads
+        # this patch, so it recomputes against the updated subgrids --
+        # the mirror of Patch44.execute's legacy strip touch (both blend
+        # types scan; a document may mix unified Blends and legacy
+        # BlendStrips during migration). Touch first, so the dependent
+        # blend is covered even when this execute leaves early.
+        doc = fp.Document
+        if doc:
+            for obj in doc.Objects:
+                if getattr(obj, "object_type", "") in ("Blend", "BlendStrip"):
+                    if (getattr(obj, "PatchA", None) == fp
+                            or getattr(obj, "PatchB", None) == fp):
+                        obj.touch()
+
         inputs = [e for e in getattr(fp, "Edges", []) or [] if e is not None]
         if len(inputs) not in (3, 4):
             # Fills are picked from the edge count (#37 quad, #38

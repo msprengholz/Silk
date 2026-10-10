@@ -703,11 +703,49 @@ BLEND_STRIP_WIDTH = 0.1
 BLEND_TANGENT_SCALE = 2.0
 
 
+def _detect_seam(a_c, b_c, tol):
+    """Mirror of SilkMachinery.shared_seam (#39): the oracle re-derives
+    the seam detection itself instead of trusting the object code.
+
+    Robust against degenerate corners (#39 criterion 6): a pointed patch
+    carries its apex twice in [Poles[0], Poles[3], Poles[15], Poles[12]]
+    (Poles[0] == Poles[12]), so naive matched-pair collection
+    double-counts the point. Picks an adjacent cyclic pair of corners on
+    A whose matches form an adjacent cyclic pair on B, both pairs
+    non-degenerate (endpoints distinct). Returns (ea, eb, pairs) or
+    None.
+    """
+    edges = {(0, 1): "U0", (1, 2): "V1", (2, 3): "U1", (3, 0): "V0",
+             (1, 0): "U0", (2, 1): "V1", (3, 2): "U1", (0, 3): "V0"}
+
+    def adjacent(i, j):
+        return (j - i) % 4 == 1 or (i - j) % 4 == 1
+
+    matches = {i: [j for j in range(4)
+                   if (a_c[i] - b_c[j]).Length < tol]
+               for i in range(4)}
+    for i in range(4):
+        i2 = (i + 1) % 4
+        if (a_c[i] - a_c[i2]).Length < tol:
+            continue  # degenerate pair on the same patch
+        for j in matches[i]:
+            for j2 in matches[i2]:
+                if not adjacent(j, j2):
+                    continue
+                if (b_c[j] - b_c[j2]).Length < tol:
+                    continue  # degenerate pair on the other patch
+                ea = edges.get((i, i2))
+                eb = edges.get((j, j2))
+                if ea and eb:
+                    return ea, eb, [(i, j), (i2, j2)]
+    return None
+
+
 def _blend_reference_rows(pa, pb, tol=0.01):
     """Independently re-derive the 4 (l_rev, rc) strip-row pairs that drive
     a blend between two patches.
 
-    Mirrors SilkBlend._do_execute steps 2-7 (shared corners, edge type,
+    Mirrors SilkBlend's blend run (shared seam detection, edge type,
     strip segmentation, corner-pair row mapping) so the oracle checks the
     stored blend poles against geometry it derived itself. Returns
     [(l_rev, rc), ...] (4 rows, each a list of 4 Vectors) or None when
@@ -715,24 +753,15 @@ def _blend_reference_rows(pa, pb, tol=0.01):
     """
     a_c = [pa.Poles[0], pa.Poles[3], pa.Poles[15], pa.Poles[12]]
     b_c = [pb.Poles[0], pb.Poles[3], pb.Poles[15], pb.Poles[12]]
-    pairs = [(i, j) for i, ac in enumerate(a_c)
-             for j, bc in enumerate(b_c)
-             if (ac - bc).Length < tol]
-    if len(pairs) < 2:
+    seam = _detect_seam(a_c, b_c, tol)
+    if seam is None:
         return None
-    edges = {(0, 1): "U0", (1, 2): "V1", (2, 3): "U1", (3, 0): "V0",
-             (1, 0): "U0", (2, 1): "V1", (3, 2): "U1", (0, 3): "V0"}
-    ids_a = sorted(p[0] for p in pairs)
-    ids_b = sorted(p[1] for p in pairs)
-    ea = edges.get((ids_a[0], ids_a[1]))
-    eb = edges.get((ids_b[0], ids_b[1]))
-    if not ea or not eb:
-        return None
+    ea, eb, pairs = seam
     ss_a = 0 if ea[1] == "0" else 1
     ss_b = 0 if eb[1] == "0" else 1
 
     # #33: the blend band comes from the patch's own subgrid cells
-    # (mirrors SilkBlend._do_execute band_cells/get_strip).
+    # (mirrors SilkBlend.run_blend band_cells/get_strip).
     def band_cells(p, etype, ss):
         from SilkPatch44 import _build_intervals
         ivs_u = _build_intervals(list(p.USplits or []))
@@ -769,13 +798,16 @@ def _blend_reference_rows(pa, pb, tol=0.01):
     cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
             "V0": {0: 0, 3: 3}, "V1": {1: 0, 2: 3}}
     # Seam alignment (#30): middle rows follow the corner-pair alignment
-    # (identity or reversed), not an assumed reversal.
+    # (identity or reversed), not an assumed reversal. `pairs` holds only
+    # the seam's two matched corner pairs; the cmap lookups guard both
+    # sides (degenerate pointed corners must never KeyError).
     identity = None
     for lc_idx, rc_idx in pairs:
         la = cmap[ea].get(lc_idx)
-        if la is None:
-            continue
-        is_id = (la == cmap[eb][rc_idx])
+        rb = cmap[eb].get(rc_idx)
+        if la is None or rb is None:
+            return None
+        is_id = (la == rb)
         if identity is None:
             identity = is_id
         elif is_id != identity:
@@ -795,8 +827,9 @@ def _blend_reference_rows(pa, pb, tol=0.01):
         else:  # shared along V -> ROWS (const V)
             l_rev = list(reversed([sga[v * 4 + li] for v in va]))
         for lc_idx, rc_idx in pairs:
-            if li == cmap[ea].get(lc_idx):
-                ri = cmap[eb][rc_idx]
+            rb = cmap[eb].get(rc_idx)
+            if rb is not None and li == cmap[ea].get(lc_idx):
+                ri = rb
                 break
         else:
             ri = li if identity else 3 - li
@@ -811,11 +844,12 @@ def _blend_reference_rows(pa, pb, tol=0.01):
 def _check_blend(blend, pa, pb, reference_poles):
     results = []
 
-    # structural
+    # structural (both blend types accepted: the unified "Blend" #39 and
+    # the legacy "BlendStrip" that old documents / the GUI command create)
     st = getattr(blend, "object_type", None)
     poles = blend.Poles or []
     weights = blend.Weights or []
-    ok = (st == "BlendStrip" and len(poles) == 24
+    ok = (st in ("Blend", "BlendStrip") and len(poles) == 24
           and len(weights) == 24 and all(abs(w - 1.0) < 1e-12 for w in weights)
           and pa is not None and pb is not None
           and getattr(blend, "Shape", None) is not None
@@ -1098,7 +1132,8 @@ def check_corner_blend(cb, strip0=None, strip1=None, strip2=None,
 
 
 def check_blend(blend, patch_a, patch_b, reference_poles=None):
-    """Check a BlendStrip against its two patches (explicit arguments).
+    """Check a Blend / legacy BlendStrip against its two patches
+    (explicit arguments).
 
     reference_poles: optional 24-pole reference (e.g. the stored
     ground-truth blend) for the B4 full-pole match.

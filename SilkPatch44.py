@@ -89,11 +89,14 @@ class Patch44:
         if not hasattr(fp, "Poly3") or not fp.Poly3:
             return
 
-        # Touch any BlendStrip objects linked to this patch
+        # Touch any blend objects linked to this patch (the unified
+        # "Blend" #39 plus the legacy "BlendStrip"; old and new blends
+        # may mix in one document during migration)
         doc = fp.Document
         if doc:
             for obj in doc.Objects:
-                if hasattr(obj, "object_type") and obj.object_type == "BlendStrip":
+                if (hasattr(obj, "object_type")
+                        and obj.object_type in ("Blend", "BlendStrip")):
                     if getattr(obj, "PatchA", None) == fp or getattr(obj, "PatchB", None) == fp:
                         obj.touch()
 
