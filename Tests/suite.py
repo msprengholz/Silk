@@ -24,7 +24,13 @@ def collect_tests(test_filter=None):
     test_edge_stage.py). Lets a developer run one stage at a time.
     """
     funcs = []
-    for path in sorted(glob.glob(os.path.join(_TESTS_DIR, "test_*.py"))):
+    # Ticket #26: the chain gate is the acceptance gate and always runs
+    # LAST -- collect every other module alphabetically, then append
+    # test_chain.py's tests so it is literally the final test executed.
+    _paths = sorted(glob.glob(os.path.join(_TESTS_DIR, "test_*.py")))
+    _chain = [p for p in _paths if os.path.basename(p) == "test_chain.py"]
+    _paths = [p for p in _paths if os.path.basename(p) != "test_chain.py"]
+    for path in _paths + _chain:
         mod_name = "Tests." + os.path.splitext(os.path.basename(path))[0]
         mod = importlib.import_module(mod_name)
         if hasattr(mod, "ALL_TESTS"):
