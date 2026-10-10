@@ -6,9 +6,10 @@ subdivision (USplits/VSplits -> subgrid pole arrays + trimmed surfaces),
 blend-band selection, hidden-cell bookkeeping, and compound display.
 
 Patch44 (the quad fill) consumes this core for all four; BlendStrip
-resolves its seam-adjacent subgrid cell through band_cells here. Future
-fills (the 3-edge patch, the unified Patch/Blend) delegate to the same
-implementation instead of reimplementing it.
+resolves its seam-adjacent subgrid cell through band_cells here. The
+unified Patch's fills (the #37 quad and the #38 pointed fill) and the
+future unified Blend delegate to the same implementation instead of
+reimplementing it.
 
 Only behavior shared verbatim across consumers lives here — no object
 type or geometry logic is introduced.

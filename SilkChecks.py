@@ -253,14 +253,21 @@ def _normal_field_flips(surf, n=9):
 
 
 def check_patch(patch, edges):
-    """Check the unified Patch (#37) against its boundary Edges list.
+    """Check the unified Patch (#37 quad / #38 pointed) against its
+    boundary Edges list.
 
-    P1_corner_order : patch corners sit on the shared corners of the edge
-                      loop (same layout as Patch44: Edges[0..3] map to
-                      the U0/V3/U3/V0 boundary rows).
-    P2_boundary_match: boundary row/col pole sets match their driving edges
-    P3_no_fold_flip : the built surface's normal field is consistent
-    P4_surface_valid: Shape valid + no self-intersection
+    Dispatches on the edge count: 4 edges -> the quad layout, 3 edges ->
+    the pointed layout. Quad (P1-P4):
+      P1  patch corners sit on the shared corners of the 4-edge loop
+      P2  boundary row/col pole sets match their driving edges
+      P3  the built surface's normal field is consistently oriented
+      P4  surface is valid and free of self-intersection
+    Pointed (mirrors the legacy Patch33 oracle under the unified shell):
+      C1  corner order: (0,0) is the point shared by edges 0+2, (0,3) by
+          0+1, (3,3) by 1+2
+      C2  boundary match: row U0=edge0, col V3=edge1, row U3=edge2
+      C3  degenerate U=0 control column collapses to a single point
+      P3/P4 as above
     Returns [(name, ok, detail), ...]; never raises.
     """
     try:
@@ -270,9 +277,19 @@ def check_patch(patch, edges):
 
 
 def _check_patch(patch, edges):
-    """Internal oracle body for the unified Patch (#37). Mirrors the
-    Patch44 quad checks but asserts object_type=='Patch' and the Edges
-    link list, and reads the fill off the free-standing Edges list."""
+    """Internal oracle body dispatcher: the edge count picks the fill
+    (#37 quad, #38 pointed). Other counts fall through to the quad body,
+    which flags the count mismatch structurally."""
+    if len(edges) == 3:
+        return _check_patch_pointed(patch, edges)
+    return _check_patch_quad(patch, edges)
+
+
+def _check_patch_quad(patch, edges):
+    """Internal oracle body for the unified 4-edge quad fill (#37).
+    Mirrors the Patch44 quad checks but asserts object_type=='Patch' and
+    the Edges link list, and reads the fill off the free-standing Edges
+    list."""
     results = []
 
     # structural
@@ -330,6 +347,115 @@ def _check_patch(patch, edges):
     results.append((
         "P2_boundary_match", not berrs,
         "; ".join(berrs) if berrs else "all 4 boundary rows/cols match their edges",
+    ))
+
+    # P3: surface normal field consistently oriented
+    try:
+        surf = _build_bicubic(poles, weights)
+        flips, any_normal = _normal_field_flips(surf)
+        if not any_normal:
+            results.append(("P3_no_fold_flip", False, "surface degenerate: no normal"))
+        else:
+            results.append((
+                "P3_no_fold_flip", not flips,
+                "normal flips: " + ", ".join(flips) if flips else "normal field consistent",
+            ))
+    except Exception as e2:
+        results.append(("P3_no_fold_flip", False, "P3 check error: %r" % e2))
+
+    # P4: surface valid + no self-intersection
+    try:
+        import MeshPart
+        faces = patch.Shape.Faces
+        if not faces:
+            results.append(("P4_surface_valid", False, "no face in Shape"))
+        else:
+            surf = max(faces, key=lambda f: f.Area)
+            valid = patch.Shape.isValid()
+            mesh = MeshPart.meshFromShape(
+                Shape=surf, LinearDeflection=0.5, AngularDeflection=0.5, Relative=False)
+            si = mesh.hasSelfIntersections()
+            results.append((
+                "P4_surface_valid", valid and not si,
+                "valid=%s, self-intersections=%s" % (valid, si),
+            ))
+    except Exception as e2:
+        results.append(("P4_surface_valid", False, "P4 check error: %r" % e2))
+
+    return results
+
+
+def _check_patch_pointed(patch, edges):
+    """Internal oracle body for the unified 3-edge pointed fill (#38).
+    Mirrors the legacy _check_patch33 under the unified shell:
+    object_type=='Patch' with the Edges link list, the C1-C3 pointed
+    checks (corner order, boundary match, degenerate U=0 column), plus
+    the P3/P4 surface checks shared with the quad body."""
+    results = []
+
+    # structural
+    errs = []
+    if getattr(patch, "object_type", None) != "Patch":
+        errs.append("object_type=%r" % getattr(patch, "object_type", None))
+    poles = list(patch.Poles)
+    if len(poles) != 16:
+        errs.append("%d poles (want 16)" % len(poles))
+    weights = list(patch.Weights)
+    if len(weights) != 16:
+        errs.append("%d weights (want 16)" % len(weights))
+    if len(list(getattr(patch, "Edges", None) or [])) != 3:
+        errs.append("Edges link list != 3 entries")
+    if patch.Shape is None or patch.Shape.isNull():
+        errs.append("empty Shape")
+    results.append((
+        "structural", not errs,
+        "; ".join(errs) if errs else "object_type, 3 Edges links, 16 poles/weights, shape",
+    ))
+
+    if len(poles) != 16 or len(edges) != 3:
+        return results
+
+    e = [list(ed.Poles) for ed in edges]
+
+    # C1: corner poles on shared corners of the edge loop.
+    # (0,0) = the point, shared by edges 0+2; (0,3) by 0+1; (3,3) by
+    # 1+2 -- orientation within an edge is up to orient_a_to_b, so each
+    # corner is matched against both endpoints.
+    corner_errs = []
+    for (u, v), (a, b) in [((0, 0), (0, 2)), ((0, 3), (0, 1)),
+                           ((3, 3), (1, 2))]:
+        p = poles[u * 4 + v]
+        for ei in (a, b):
+            if not any(_dist(p, q) <= TOL for q in (e[ei][0], e[ei][3])):
+                corner_errs.append("corner p%d%d not on edge%d" % (u, v, ei))
+    results.append((
+        "C1_corner_order", not corner_errs,
+        "; ".join(corner_errs) if corner_errs else "all 3 corners on shared loop corners",
+    ))
+
+    # C2: boundary row/col pole sets match their driving edges
+    row_u0 = [poles[0], poles[1], poles[2], poles[3]]
+    col_v3 = [poles[3], poles[7], poles[11], poles[15]]
+    row_u3 = [poles[12], poles[13], poles[14], poles[15]]
+    berrs = []
+    for label, row, ep in [("row U0", row_u0, e[0]), ("col V3", col_v3, e[1]),
+                           ("row U3", row_u3, e[2])]:
+        if not _multiset_match_within(row, ep, TOL):
+            berrs.append("%s does not match its edge" % label)
+    results.append((
+        "C2_boundary_match", not berrs,
+        "; ".join(berrs) if berrs else "U0/V3/U3 boundaries match their edges",
+    ))
+
+    # C3: the U=0 control column collapses to a single point (the
+    # "point" of the pointed shape).
+    col0 = [poles[i * 4] for i in range(4)]
+    devs = [(_c - col0[0]).Length for _c in col0]
+    collapsed = all(d <= TOL for d in devs)
+    results.append((
+        "C3_degenerate_pt", collapsed,
+        "U=0 column collapsed to a point" if collapsed
+        else "U=0 column not degenerate: dev %r" % devs,
     ))
 
     # P3: surface normal field consistently oriented

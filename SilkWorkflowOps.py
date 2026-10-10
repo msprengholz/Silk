@@ -78,11 +78,12 @@ def create_patch(edge0, edge1, edge2, edge3, name="Patch44"):
 
 
 def create_patch_unified(edges, name="Patch"):
-    """Create the unified Patch (#37) from a variable-length Edges list.
+    """Create the unified Patch (#37/#38) from a variable-length Edges list.
 
-    execute() selects the fill from the edge count; #37 implements only
-    the 4-edge quad fill. Mirrors create_patch (addObject -> constructor
-    -> view provider -> recompute -> return). The rename to create_patch
+    execute() selects the fill from the edge count: 4 edges -> the quad
+    fill (#37), 3 edges -> the pointed fill (#38); other counts leave the
+    object empty/valid. Mirrors create_patch (addObject -> constructor ->
+    view provider -> recompute -> return). The rename to create_patch
     happens at retirement (#40/#42); this additive entry coexists with
     the Patch44 create_patch for now.
     """

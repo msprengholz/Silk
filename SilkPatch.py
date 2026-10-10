@@ -3,17 +3,20 @@
 #
 #    NURBS Surface modeling tools focused on low degree and seam continuity (FreeCAD Workbench)
 #
-#    Patch — the unified Patch object (ticket #37).
+#    Patch — the unified Patch object (tickets #37/#38).
 #
 #    One variable-length `Edges` link list (PropertyLinkList) is the single
-#    boundary input; execute() selects the fill from the edge count. For
-#    #37 only the 4-edge quad fill is implemented, reproducing the SAME 16
-#    poles as Patch44 for the identical 4 edges in the same order (the
-#    3-edge pointed fill is #38, the unified Blend #39 — out of scope).
+#    boundary input; execute() selects the fill from the edge count: 4
+#    edges -> the quad fill (#37, SAME 16 poles as Patch44), 3 edges ->
+#    the pointed fill (#38, SAME 16 poles as Patch33) for the identical
+#    edges in the same order (pole parity at 1e-6 is what later lets the
+#    unified pipeline reproduce the chain — #40; the unified Blend is
+#    #39). Other counts leave the object empty/valid.
 #
 #    Subdivision / band / hidden-cell bookkeeping / compound display all
 #    delegate to the shared machinery core (SilkMachinery) — nothing is
-#    reimplemented here.
+#    reimplemented here. That is the whole point of the unification: the
+#    pointed fill gets the subgrid machinery the legacy Patch33 lacked.
 
 import FreeCAD
 import Part
@@ -30,7 +33,7 @@ class Patch:
 
     def __init__(self, obj, edges):
         obj.addProperty("App::PropertyLinkList", "Edges", "C1 - Inputs",
-                        "boundary edges (4 for the quad fill)").Edges = list(edges)
+                        "boundary edges (3 for the pointed fill, 4 for the quad fill)").Edges = list(edges)
         obj.addProperty("App::PropertyFloat", "tolerance", "C1 - Inputs",
                         "endpoint matching tolerance").tolerance = AN.default_tol
         obj.addProperty("App::PropertyBool", "reverse", "C1 - Inputs",
@@ -146,21 +149,94 @@ class Patch:
 
         return poles, weights
 
+    def _pointed_fill(self, fp):
+        """Replicate Patch33's ControlGrid44_3 fill from Edges[0..2].
+
+        Produces the SAME 16 poles/weights/layout as Patch33 for the
+        identical 3 edges in the same order (pole parity at 1e-6): the
+        U=0 control column collapses to the point shared by edges 0 and
+        2. Patch33's TweakWeight11 defaults to 1.0 and is a legacy-fill
+        detail only -- the unified fill uses that default; no such
+        property is added to the unified Patch.
+        """
+        p0 = list(fp.Edges[0].Poles)
+        p1 = list(fp.Edges[1].Poles)
+        p2 = list(fp.Edges[2].Poles)
+        w0 = list(fp.Edges[0].Weights)
+        w1 = list(fp.Edges[1].Weights)
+        w2 = list(fp.Edges[2].Weights)
+        tol = fp.tolerance
+
+        quad12 = AN.orient_a_to_b(p0, p1, tol)
+        if quad12 == 0:
+            return None
+        quad23 = AN.orient_a_to_b(p1, p2, tol)
+        if quad23 == 0:
+            return None
+        quad31 = AN.orient_a_to_b(p2, p0, tol)
+        if quad31 == 0:
+            return None
+
+        if quad12[0] != p0[0] and quad12[0] == p0[-1]:
+            w0 = list(reversed(w0))
+        if quad23[0] != p1[0] and quad23[0] == p1[-1]:
+            w1 = list(reversed(w1))
+        if quad31[0] != p2[0] and quad31[0] == p2[-1]:
+            w2 = list(reversed(w2))
+
+        p00 = quad12[0]; p01 = quad12[1]; p02 = quad12[2]; p03 = quad12[3]
+        p13 = quad23[1]; p23 = quad23[2]; p33 = quad23[3]
+        p32 = quad31[1]; p31 = quad31[2]; p30 = p00
+
+        # degenerate U=0 column collapses to the point p00
+        p20 = p00
+        p10 = p00
+
+        p11 = p01 + p31 - p30
+        p12 = p02 + p13 - p03
+        p21 = p11
+        p22 = p23 + p32 - p33
+
+        poles = [p00, p01, p02, p03,
+                 p10, p11, p12, p13,
+                 p20, p21, p22, p23,
+                 p30, p31, p32, p33]
+
+        # Weights mirror ControlGrid44_3 (interior degenerate weights tie
+        # to the outer boundary weights; TweakWeight11 at its legacy
+        # default 1.0 scales the degenerate corner's draw).
+        tweak = 1.0
+        w00 = w0[0]; w01 = w0[1]; w02 = w0[2]; w03 = w0[3]
+        w13 = w1[1]; w23 = w1[2]; w33 = w1[3]
+        w32 = w2[1]; w31 = w2[2]; w30 = w2[3]
+        w10 = tweak
+        w20 = tweak
+        weights = [w00, w01, w02, w03,
+                   w10, w01 * w10, w02 * w13, w13,
+                   w20, w31 * w20, w23 * w32, w23,
+                   w30, w31, w32, w33]
+
+        return poles, weights
+
     # ---- execute ---------------------------------------------------------
 
     def execute(self, fp):
         inputs = [e for e in getattr(fp, "Edges", []) or [] if e is not None]
-        if len(inputs) != 4:
-            # #37 implements only the 4-edge quad fill; other counts are
-            # deferred (#38 pointed fill). Leave the object empty/valid.
+        if len(inputs) not in (3, 4):
+            # Fills are picked from the edge count (#37 quad, #38
+            # pointed); other counts leave the object empty/valid.
             fp.Poles = []; fp.Weights = []; fp.Legs = []
             self._subgrids = []; self._subsurfaces = []; self._base_surface = None
             build_display(fp, Part.Shape(), [], [], [], False)
             return
 
-        filled = self._quad_fill(fp)
+        filled = self._pointed_fill(fp) if len(inputs) == 3 else self._quad_fill(fp)
         if filled is None:
-            fp.Poles = []; fp.Weights = []; fp.Legs = []; fp.Shape = Part.Shape(); return
+            # degenerate / non-connecting loop: leave the object empty/valid
+            fp.Poles = []; fp.Weights = []; fp.Legs = []
+            self._subgrids = []; self._subsurfaces = []; self._base_surface = None
+            fp.Shape = Part.Shape()
+            return
         poles, weights = filled
 
         fp.Poles = poles
