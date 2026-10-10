@@ -78,35 +78,35 @@ def _make_triangle_edges(doc):
 
 # Ground-truth global 3D poles of the quarter-cone fixture (see
 # _make_quarter_cone_edges): a quarter of the paraboloid of revolution
-# z = 0.004*r^2, R = 50, rim z = 10. The profile edges (0, 2) are the
+# z = 0.016*r^2, R = 50, rim z = 40. The profile edges (0, 2) are the
 # EXACT degree-elevated quadratic Bezier of the parabola: uniform
-# x-poles (0, 50/3, 100/3, 50) with z-poles (0, 0, 10/3, 10), written
+# x-poles (0, 50/3, 100/3, 50) with z-poles (0, 0, 40/3, 40), written
 # with 3-decimal roundings below.
 _CONE_EDGE_POLES = [
-    [(0, 0, 0), (16.667, 0, 0), (33.333, 0, 3.333), (50, 0, 10)],
-    [(50, 0, 10), (50, 27.614, 10), (27.614, 50, 10), (0, 50, 10)],
-    [(0, 50, 10), (0, 33.333, 3.333), (0, 16.667, 0), (0, 0, 0)],
+    [(0, 0, 0), (16.667, 0, 0), (33.333, 0, 13.333), (50, 0, 40)],
+    [(50, 0, 40), (50, 27.614, 40), (27.614, 50, 40), (0, 50, 40)],
+    [(0, 50, 40), (0, 33.333, 13.333), (0, 16.667, 0), (0, 0, 0)],
 ]
 
 
 def _make_quarter_cone_edges(doc):
     """Three 4-pole edges forming a closed loop: a quarter of the
-    paraboloid of revolution z = 0.004*r^2 (R = 50, rim z = 10).
+    paraboloid of revolution z = 0.016*r^2 (R = 50, rim z = 40).
 
       edge0  profile parabola in the global XZ plane, origin -> rim --
-             EXACT degree-elevated quadratic Bezier of z = 0.004*x^2:
+             EXACT degree-elevated quadratic Bezier of z = 0.016*x^2:
              uniform x-poles (0, 50/3, 100/3, 50) with z-poles
-             (0, 0, 10/3, 10), so z(t) = 10*t^2 = 0.004*x(t)^2
-      edge1  rim quarter arc at z=10, rim -> rim (circular-arc cubic,
+             (0, 0, 40/3, 40), so z(t) = 40*t^2 = 0.016*x(t)^2
+      edge1  rim quarter arc at z=40, rim -> rim (circular-arc cubic,
              k = 4/3*tan(pi/8)*50 ~ 27.614)
       edge2  the profile rotated 90 deg about Z, reversed, rim -> origin
 
     The degenerate point sits at the origin, shared by edges 0+2 --
     matching the pointed-fill corner layout (C1: (0,0) shared by 0+2,
     (0,3) by 0+1, (3,3) by 1+2). Loop closes exactly:
-    e0.end == e1.start == (50,0,10), e1.end == e2.start == (0,50,10),
+    e0.end == e1.start == (50,0,40), e1.end == e2.start == (0,50,40),
     e2.end == e0.start == (0,0,0). Coordinates are written with
-    3-decimal roundings (3.333 ~ 10/3, residual ~1.25e-4 at t=0.5).
+    3-decimal roundings (13.333 ~ 40/3, residual ~1.25e-4 at t=0.5).
 
     Sketcher geometry lives in the sketch plane: addGeometry takes LOCAL
     x/y coordinates and silently drops z, so a bare XY sketch would
@@ -119,15 +119,15 @@ def _make_quarter_cone_edges(doc):
         # global (X,0,Z) <-> local (X,Z); rotX(90): local (x,y,0) -> (x,0,y)
         "edge0": (FreeCAD.Placement(FreeCAD.Vector(0, 0, 0),
                                     FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 90)),
-                  [(0, 0), (16.667, 0), (33.333, 3.333), (50, 10)]),
-        # global (X,Y,10) <-> local (X,Y); plane lifted by the position
-        "edge1": (FreeCAD.Placement(FreeCAD.Vector(0, 0, 10),
+                  [(0, 0), (16.667, 0), (33.333, 13.333), (50, 40)]),
+        # global (X,Y,40) <-> local (X,Y); plane lifted by the position
+        "edge1": (FreeCAD.Placement(FreeCAD.Vector(0, 0, 40),
                                     FreeCAD.Rotation()),
                   [(50, 0), (50, 27.614), (27.614, 50), (0, 50)]),
         # global (0,Y,Z) <-> local (-Z,Y); rotY(90): local (x,y,0) -> (0,y,-x)
         "edge2": (FreeCAD.Placement(FreeCAD.Vector(0, 0, 0),
                                     FreeCAD.Rotation(FreeCAD.Vector(0, 1, 0), 90)),
-                  [(-10, 50), (-3.333, 33.333), (0, 16.667), (0, 0)]),
+                  [(-40, 50), (-13.333, 33.333), (0, 16.667), (0, 0)]),
     }
     edges = []
     for i in range(3):
@@ -665,14 +665,15 @@ def test_unified_pointed_cone_curved(doc):
     """The quarter-cone fixture is genuinely 3D and doubly curved --
     NOT the flattened sketch-plane case: every Edge pole sits on the
     intended global 3D coordinate (z != 0, tol 1e-6; a bare XY sketch
-    silently drops z and deviates by up to 10), the 16 fill poles are
+    silently drops z and deviates by up to 40), the 16 fill poles are
     not coplanar (max deviation from the corner plane > 2.0, empirical
-    ~8.52), the
-    profile edges trace the EXACT parabola z = 0.004*r^2 (Bezier
+    ~23.46), the
+    profile edges trace the EXACT parabola z = 0.016*r^2 (Bezier
     midpoint at t=0.5 on the parabola within 5e-4; the degree-elevated
-    quadratic has z-poles (0,0,10/3,10), so z(0.5)=2.5 -- a smoothstep
-    fixture would give 5.0), and the rim arc bulges > 5.0 off its
-    chord."""
+    quadratic has z-poles (0,0,40/3,40), so z(0.5)=10.0 -- a 4x-too-
+    shallow (rim z=10) or flattened fixture would give 2.5 / 0, and a
+    smoothstep fixture would give 20), and the rim arc bulges > 5.0 off
+    its chord."""
     errors, checks = [], []
     from SilkWorkflowOps import create_patch_unified
 
@@ -704,20 +705,22 @@ def test_unified_pointed_cone_curved(doc):
     checks.append("fill poles not coplanar (max dev %.3f > 2.0)"
                   % max(devs))
 
-    # 3. the profile edges trace the EXACT parabola z = 0.004*r^2: the
+    # 3. the profile edges trace the EXACT parabola z = 0.016*r^2: the
     #    Bezier midpoint (Bernstein at t=0.5) lies on the parabola.
-    #    Exact value: (25, ., 2.5); the old smoothstep poles
-    #    (0,0,10,10) gave z=5.0 and would fail this. Tolerance 5e-4
-    #    covers the 3-decimal pole rounding (3.333 ~ 10/3 -> 1.25e-4).
+    #    Exact value: (25, ., 10.0); the old smoothstep poles
+    #    (0,0,40,40) gave z=20.0, the 4x-too-shallow rim-z-10 fixture
+    #    gives 2.5 and a flattened one 0.0 -- all fail this. Tolerance
+    #    5e-4 covers the 3-decimal pole rounding (13.333 ~ 40/3 ->
+    #    1.25e-4).
     for ei in (0, 2):
         ep = [edges[ei].Poles[i] for i in range(4)]
         pmid = (ep[0] + 3 * ep[1] + 3 * ep[2] + ep[3]) * 0.125
         r2 = pmid.x ** 2 + pmid.y ** 2
-        if abs(pmid.z - 0.004 * r2) > 5e-4:
+        if abs(pmid.z - 0.016 * r2) > 5e-4:
             errors.append("edge%d midpoint off the parabola: "
-                          "(%.4f, %.4f, %.6f) vs z=0.004*r^2=%.6f"
-                          % (ei, pmid.x, pmid.y, pmid.z, 0.004 * r2))
-    checks.append("profile midpoints on z=0.004*r^2 (tol 5e-4)")
+                          "(%.4f, %.4f, %.6f) vs z=0.016*r^2=%.6f"
+                          % (ei, pmid.x, pmid.y, pmid.z, 0.016 * r2))
+    checks.append("profile midpoints on z=0.016*r^2 (tol 5e-4)")
 
     # 4. the rim arc bulges off its chord
     e1 = [edges[1].Poles[i] for i in range(4)]
