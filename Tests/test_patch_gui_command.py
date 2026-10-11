@@ -12,6 +12,22 @@ import Part
 from FreeCAD import Gui, Vector
 
 
+class _CaptureConsole:
+    """Collect the console errors a command emits (AGENTS.md's
+    console-error capture), so a refusal can be asserted on its
+    message, not just on the absence of a created object."""
+
+    def __enter__(self):
+        self.errors = []
+        self._orig = FreeCAD.Console.PrintError
+        FreeCAD.Console.PrintError = (
+            lambda m: (self.errors.append(str(m)), self._orig(m)))
+        return self
+
+    def __exit__(self, *args):
+        FreeCAD.Console.PrintError = self._orig
+
+
 def check(cond, msg, errors):
     if not cond:
         errors.append(msg)
@@ -197,6 +213,82 @@ def test_create_patch_gui_rejects_wrong_counts(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_create_patch_gui_refuses_non_edge_in_selection(doc):
+    """#58: 3 Edges + 1 Sketch must NOT silently degrade to the pointed
+    fill with the sketch dropped. The command refuses, names the
+    offending object, and creates nothing."""
+    errors, checks = [], []
+    from SilkPatch import CreatePatch
+
+    tri = _make_triangle_edges(doc)
+    sketch = tri[0].Sketches[0]        # a plain Sketcher::SketchObject
+    check(getattr(sketch, "object_type", None) != "Edge",
+          "fixture sketch is not a non-Edge object", errors)
+
+    Gui.Selection.clearSelection()
+    for e in tri:
+        Gui.Selection.addSelection(e)
+    Gui.Selection.addSelection(sketch)
+
+    with _CaptureConsole() as cap:
+        CreatePatch().Activated()
+    doc.recompute()
+
+    check(not _patches(doc),
+          "3 edges + 1 sketch: no Patch expected", errors)
+    msgs = "".join(cap.errors)
+    check(bool(msgs), "3 edges + 1 sketch: expected a refusal message",
+          errors)
+    check(msgs.startswith("Silk:"),
+          "refusal message must start with 'Silk:', got %r" % msgs,
+          errors)
+    check("non-Edge" in msgs,
+          "refusal message must say the selection held non-Edge "
+          "objects, got %r" % msgs, errors)
+    check(sketch.Label in msgs,
+          "refusal message must name the offending object %r, got %r"
+          % (sketch.Label, msgs), errors)
+    checks.append("3 edges + 1 sketch -> refused, no Patch (%r)"
+                  % msgs.strip())
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_create_patch_gui_refuses_patch_and_arbitrary_objects(doc):
+    """#58: a non-Edge that IS a Silk object (Patch, Blend) or an
+    arbitrary one (Part::Box, no object_type at all) gets the same
+    clear refusal -- never a silent drop."""
+    errors, checks = [], []
+    from SilkPatch import CreatePatch
+    from SilkWorkflowOps import create_patch
+
+    loop = _make_loop_edges(doc)
+    existing = create_patch(loop, name="PatchAlready")
+    box = doc.addObject("Part::Box", "RefuseBox")
+    doc.recompute()
+
+    for offender in (existing, box):
+        before = len(_patches(doc))
+        Gui.Selection.clearSelection()
+        for e in loop:
+            Gui.Selection.addSelection(e)
+        Gui.Selection.addSelection(offender)
+        with _CaptureConsole() as cap:
+            CreatePatch().Activated()
+        doc.recompute()
+
+        check(len(_patches(doc)) == before,
+              "%s in selection: no new Patch expected" % offender.Label,
+              errors)
+        msgs = "".join(cap.errors)
+        check(msgs.startswith("Silk:") and "non-Edge" in msgs
+              and offender.Label in msgs,
+              "%s in selection: expected a 'Silk:' refusal naming it, "
+              "got %r" % (offender.Label, msgs), errors)
+        checks.append("4 edges + %s -> refused, no Patch"
+                      % offender.Label)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 def test_patch_get_subgrid_api(doc):
     """getSubgrid(u0, u1, v0, v1) returns the segmented patch's
     (poles, weights) as 4x4 grids (ported from the retired
@@ -226,5 +318,7 @@ ALL_TESTS = [
     test_create_patch_gui_4_edges,
     test_create_patch_gui_3_edges,
     test_create_patch_gui_rejects_wrong_counts,
+    test_create_patch_gui_refuses_non_edge_in_selection,
+    test_create_patch_gui_refuses_patch_and_arbitrary_objects,
     test_patch_get_subgrid_api,
 ]

@@ -424,6 +424,25 @@ class CreatePatch:
 
         edges = [o for o in sel
                  if getattr(o, "object_type", None) == "Edge"]
+        # #58: never silently drop a non-Edge from the selection. The
+        # edge COUNT picks the fill, so a stray object quietly changes
+        # the geometry: 4 edges + a Sketch used to be refused only as a
+        # count error, but 3 edges + a Sketch passed the count check and
+        # became a POINTED fill with the sketch discarded -- and if the
+        # loop did not close the user got "curves do not share
+        # endpoints" instead of the real mistake. Refuse, and name the
+        # offenders so the fix is obvious.
+        others = [o for o in sel
+                  if getattr(o, "object_type", None) != "Edge"]
+        if others:
+            names = ", ".join(getattr(o, "Label", None) or o.Name
+                              for o in others)
+            FreeCAD.Console.PrintError(
+                "Silk: Patch selection contains %d non-Edge object(s) "
+                "(%s). Select 3 or 4 Edge objects only.\n"
+                % (len(others), names))
+            return
+
         if len(edges) not in (3, 4):
             FreeCAD.Console.PrintError(
                 "Silk: Patch requires exactly 3 or 4 selected Edge "
