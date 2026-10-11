@@ -58,7 +58,7 @@ class Patch:
         obj.addProperty("App::PropertyBool", "ShowGrid", "S2 - Display",
                         "show the control grid").ShowGrid = True
         obj.addProperty("App::PropertyBool", "ShowSubgrids", "S2 - Display",
-                        "show subdivided subgrids instead of base surface").ShowSubgrids = False
+                        "show subdivided subgrids instead of base surface").ShowSubgrids = True
         obj.addProperty("App::PropertyBool", "AutoHideBlend", "S2 - Display",
                         "hide subgrids covered by a blend").AutoHideBlend = True
         obj.addProperty("App::PropertyVectorList", "Poles", "C2 - Outputs", "Poles").Poles
@@ -77,6 +77,7 @@ class Patch:
         obj.Proxy = self
         self._subgrids = []
         self._subsurfaces = []
+        self._sub_legs = []
         self._base_surface = None
 
     def onDocumentRestored(self, obj):
@@ -89,6 +90,45 @@ class Patch:
             if 'Restore' not in fp.State and hasattr(fp, "Edges") and fp.Edges:
                 fp.touch()
                 fp.recompute()
+        elif prop == "_HiddenSubgridIdxs":
+            # A Blend writes this (run_blend's auto-hide bookkeeping)
+            # AFTER it last recomputed this patch, so the display has to
+            # be refreshed here or the patch keeps drawing the band cell
+            # the blend just claimed -- the overlay #59 part 2 removes.
+            #
+            # It is a DISPLAY-ONLY property, so two things keep it from
+            # re-arming the patch (#59 part 1):
+            #   1. mark it Output, so FreeCAD does not flag the object
+            #      Touched when the blend assigns to it (the flag is set
+            #      AFTER onChanged returns, so a purge in here cannot
+            #      beat it -- Output is the only thing that works);
+            #   2. rebuild the display shape in place instead of going
+            #      through touch + recompute. The blend's execute is
+            #      running right now and is holding this patch's
+            #      sub-surfaces; a full recompute here would touch the
+            #      blend (this execute touches it back) and close a
+            #      Patch <-> Blend cycle a settled doc.recompute() cannot
+            #      close -- the patches stayed Touched forever.
+            try:
+                fp.setPropertyStatus("_HiddenSubgridIdxs", "Output")
+            except Exception:
+                pass
+            self._rebuild_display(fp)
+            fp.purgeTouched()
+
+    def _rebuild_display(self, fp):
+        """Recompose the display Shape from the cached base surface,
+        sub-surfaces and grid legs (build_display), leaving Poles /
+        Weights / Legs / the subgrid arrays alone. Used when only the
+        display inputs changed (#59: a Blend writing the hidden-cell
+        set)."""
+        if self._base_surface is None:
+            return
+        has_subgrids = bool(fp.USplits or fp.VSplits)
+        base_legs = AN.drawGrid(list(fp.Poles), 4) if fp.Poles else []
+        sub_legs = self._sub_legs if has_subgrids else []
+        build_display(fp, self._base_surface.toShape(), self._subsurfaces,
+                      base_legs, sub_legs, has_subgrids)
 
     def getSubgrid(self, u0, u1, v0, v1):
         if self._base_surface is None:
@@ -232,18 +272,63 @@ class Patch:
     # ---- execute ---------------------------------------------------------
 
     def execute(self, fp):
+        # #59, part 1 -- the Patch half of the Blend <-> Patch recompute
+        # cycle. A settled document.recompute() used to leave the two
+        # covered Patches of a freshly blended pair ['Touched'] forever
+        # while the Blend read Up-to-date.
+        #
+        # The cycle, measured by tracing the execute/onChanged sequence:
+        #   run_blend writes the band split -> Patch.onChanged touch +
+        #   recompute -> run_blend writes _HiddenSubgridIdxs (blend's
+        #   auto-hide bookkeeping) -> the patch is dirty, and its own
+        #   execute then touches the blend -> the blend recomputes ->
+        #   run_blend writes the hidden set AGAIN -> dirty again ...
+        # A compute cycle FreeCAD cannot settle, so it stops and hands
+        # back a permanently dirty patch.
+        #
+        # Two halves break it, both here in the Patch (no Blend change):
+        #   (a) purgeTouched() on the way out -- this patch's geometry IS
+        #       current when execute returns, so the flag means nothing;
+        #   (b) the `_HiddenSubgridIdxs` branch in onChanged rebuilds the
+        #       display in place instead of going through touch +
+        #       recompute, so the blend's bookkeeping write no longer
+        #       re-arms the patch.
+        # (b) is also what makes the auto-hide actually VISIBLE: without
+        # it the patch kept drawing the band cell the blend had just
+        # claimed (the #59 part-2 overlay), because the blend writes the
+        # hidden set after it last recomputed the patch.
+        #
+        # The #41 live-update chain is untouched: a user's USplits/
+        # VSplits edit still runs onChanged's touch + recompute (that IS
+        # this execute), and a blend that is not mid-execute is still
+        # touched below so it refreshes on the next doc.recompute().
+        try:
+            self._execute(fp)
+        finally:
+            fp.purgeTouched()
+
+    def _execute(self, fp):
         # Auto-update chain (#39 decision F): touch every blend that reads
         # this patch, so it recomputes against the updated subgrids --
         # the mirror of Patch44.execute's legacy strip touch (both blend
         # types scan; a document may mix unified Blends and legacy
         # BlendStrips during migration). Touch first, so the dependent
         # blend is covered even when this execute leaves early.
+        #
+        # #59: skip a blend that is mid-execute. It is reading this
+        # patch's subgrids right now and will pick up what just
+        # changed, so touching it only re-arms a blend that is already
+        # running and re-opens the cycle above. A blend at rest (the user
+        # -edit case) is touched as before, so #41 still holds.
         doc = fp.Document
         if doc:
             for obj in doc.Objects:
                 if getattr(obj, "object_type", "") in ("Blend", "BlendStrip"):
                     if (getattr(obj, "PatchA", None) == fp
                             or getattr(obj, "PatchB", None) == fp):
+                        if getattr(getattr(obj, "Proxy", None),
+                                   "_in_execute", False):
+                            continue
                         obj.touch()
 
         inputs = [e for e in getattr(fp, "Edges", []) or [] if e is not None]
@@ -252,6 +337,7 @@ class Patch:
             # pointed); other counts leave the object empty/valid.
             fp.Poles = []; fp.Weights = []; fp.Legs = []
             self._subgrids = []; self._subsurfaces = []; self._base_surface = None
+            self._sub_legs = []
             build_display(fp, Part.Shape(), [], [], [], False)
             return
 
@@ -260,6 +346,7 @@ class Patch:
             # degenerate / non-connecting loop: leave the object empty/valid
             fp.Poles = []; fp.Weights = []; fp.Legs = []
             self._subgrids = []; self._subsurfaces = []; self._base_surface = None
+            self._sub_legs = []
             fp.Shape = Part.Shape()
             return
         poles, weights = filled
@@ -286,6 +373,7 @@ class Patch:
         # Subdivision (shared machinery core)
         self._subgrids, self._subsurfaces, sub_legs = build_subgrids(
             surf, fp.USplits, fp.VSplits)
+        self._sub_legs = sub_legs   # cached for _rebuild_display (#59)
         if fp.USplits or fp.VSplits:
             fp.Legs = sub_legs
 
