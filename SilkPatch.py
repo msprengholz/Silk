@@ -68,6 +68,20 @@ class Patch:
         obj.addProperty("App::PropertyString", "object_type", "C3 - Identifiers",
                         "workbench class").object_type = "Patch"
         obj.setEditorMode("object_type", 1)
+        # #46: last-known boundary edge identities. The edge COUNT alone
+        # cannot detect a deleted edge (4 -> 3 is a legal pointed fill),
+        # so the Patch remembers the NAMES it was last successfully built
+        # from and identity-diffs them on every execute. Internal + Output
+        # (the #59 _HiddenSubgridIdxs technique): the bookkeeping write in
+        # _record_last_edge_names must not re-touch the object, or it
+        # would break the Blend <-> Patch settle invariant #59 established.
+        obj.addProperty("App::PropertyStringList", "_LastEdgeNames", "Internal",
+                        "last-known boundary edge identities")._LastEdgeNames = []
+        obj.setEditorMode("_LastEdgeNames", 1)
+        try:
+            obj.setPropertyStatus("_LastEdgeNames", "Output")
+        except Exception:
+            pass
         obj.addProperty("App::PropertyString", "object_version", "C3 - Identifiers",
                         "class version").object_version = "0.01"
         obj.setEditorMode("object_version", 1)
@@ -129,6 +143,87 @@ class Patch:
         sub_legs = self._sub_legs if has_subgrids else []
         build_display(fp, self._base_surface.toShape(), self._subsurfaces,
                       base_legs, sub_legs, has_subgrids)
+
+    # ---- #46: deleted-edge identity diff --------------------------------
+    #
+    # Deleting a boundary Edge behind the Patch's back is otherwise
+    # SILENT. Std_Delete already warns for us -- it walks the InList and
+    # pops "Object Dependencies - might break", because our view
+    # providers keep the default canDelete=False (invariant: never
+    # override canDelete to True) -- and then it cleanly removes the
+    # dead link from `Edges`: no None left in the list, no exception, no
+    # event. A 4-edge quad quietly shrinking to 3 is not an error at the
+    # COUNT level either, because 3 edges is a legal POINTED fill (#38);
+    # the loop only fails later with the cryptic "curves do not share
+    # endpoints", which names a symptom and not the cause.
+    #
+    # So the Patch remembers the edge identities it was last built from
+    # and identity-diffs them on every execute. The GUI warning covers
+    # the interactive delete; this covers the script path
+    # (doc.removeObject / Scripts / the future wizard), where nothing
+    # else speaks up.
+
+    def _ensure_last_edge_names(self, fp):
+        """Lazy-create the hidden _LastEdgeNames property.
+
+        __init__ does not run when an old document is restored, so a
+        Patch saved before #46 arrives without the property; ensure it
+        here too. Same shape as
+        SilkMachinery.ensure_hidden_idxs_property (#59)."""
+        if hasattr(fp, "_LastEdgeNames"):
+            return
+        fp.addProperty("App::PropertyStringList", "_LastEdgeNames",
+                       "Internal", "last-known boundary edge identities")
+        fp.setEditorMode("_LastEdgeNames", 1)
+        try:
+            fp.setPropertyStatus("_LastEdgeNames", "Output")
+        except Exception:
+            pass
+
+    def _record_last_edge_names(self, fp, names):
+        """Remember the boundary edge identities this patch is currently
+        built from.
+
+        Written on every execute that is NOT broken. The property is
+        marked Output (the #59 _HiddenSubgridIdxs technique), so this
+        bookkeeping write does not flag the object Touched -- the
+        touched bit is set after onChanged returns, so a purge in there
+        cannot beat it. execute()'s finally-purgeTouched is the backstop;
+        between the two, the #59 settle invariant still holds."""
+        self._ensure_last_edge_names(fp)
+        fp._LastEdgeNames = list(names)
+
+    def _check_deleted_edges(self, fp):
+        """Name the boundary edge that was deleted out from under this
+        patch (#46). Returns nothing; pure bookkeeping + reporting.
+
+        Stateless by construction: while an edge is missing the baseline
+        is deliberately NOT advanced, so the next execute diffs against
+        the same last-known-good identities and reports again. There is
+        no once-flag to leak or to go stale, and the message re-fires on
+        every execute for as long as the patch stays broken.
+
+        Only a pure SHRINK is reported (a known identity gone AND nothing
+        new in its place). Deliberately re-wiring the link list through
+        the property editor -- drop one edge, add another -- also removes
+        a name, but that is a user edit, not a deletion, and crying
+        "was deleted" at it on every recompute would be worse than
+        silence."""
+        edges = [e for e in (getattr(fp, "Edges", None) or []) if e is not None]
+        current = [e.Name for e in edges]
+        last = list(getattr(fp, "_LastEdgeNames", None) or [])
+
+        missing = [n for n in last if n not in current]
+        added = [n for n in current if n not in last]
+        if last and missing and not added:
+            for name in missing:
+                FreeCAD.Console.PrintError(
+                    "Silk: Patch '%s': boundary edge '%s' was deleted \u2014 "
+                    "patch is incomplete (needs 3 or 4 edges).\n"
+                    % (fp.Name, name))
+            return          # baseline frozen -> re-fires next execute
+
+        self._record_last_edge_names(fp, current)
 
     def getSubgrid(self, u0, u1, v0, v1):
         if self._base_surface is None:
@@ -330,6 +425,14 @@ class Patch:
                                    "_in_execute", False):
                             continue
                         obj.touch()
+
+        # #46: identity-diff the boundary edges BEFORE anything reads
+        # them, so the precise "boundary edge was deleted" message fires
+        # independently of whatever the fill then does with the
+        # surviving (now non-closing) loop -- and whatever it does, the
+        # patch keeps its last-known-good baseline and re-reports on the
+        # next execute.
+        self._check_deleted_edges(fp)
 
         inputs = [e for e in getattr(fp, "Edges", []) or [] if e is not None]
         if len(inputs) not in (3, 4):
