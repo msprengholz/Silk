@@ -32,6 +32,11 @@ Blends (B1-B4):
       2x tangent scale (1e-6)
   B3  blend surface valid + no self-intersection + normal field coherent
   B4  full 24-pole match against a provided reference (optional)
+check_blend takes an optional `edge=` seam pin (#49): with it, B1/B2
+derive their reference rows from that Edge's endpoint poles (the seam
+the blend used) instead of auto-detecting the first matching corner
+pair -- which is what makes a SECOND seam on a pair sharing two edges
+(closed-ring builds) checkable. Without it, behaviour is unchanged.
 Corner blends (CB1-CB4, #28):
   CB1 C0 boundary: the 6x6 grid's 4 boundary sides match the 4 ring
       strips' corner-end rows, orientation-independent (1e-6)
@@ -504,6 +509,21 @@ BLEND_STRIP_WIDTH = 0.1
 BLEND_TANGENT_SCALE = 2.0
 
 
+# Boundary-edge label per adjacent corner pair (corner i of a patch is
+# Poles[0], Poles[3], Poles[15], Poles[12] in cyclic order, so boundary
+# edge k runs corner k -> corner k+1). The label fixes the band-split
+# direction (perpendicular to the seam) and side. Kept local to the
+# oracle (#39: the oracle re-derives the object code's tables instead of
+# importing them, so a bug in the object code cannot hide itself).
+_EDGE_LABELS = {(0, 1): "U0", (1, 2): "V1", (2, 3): "U1", (3, 0): "V0",
+                (1, 0): "U0", (2, 1): "V1", (3, 2): "U1", (0, 3): "V0"}
+
+
+def _adjacent(i, j):
+    """Corner indices i, j adjacent on the 4-corner cycle."""
+    return (j - i) % 4 == 1 or (i - j) % 4 == 1
+
+
 def _detect_seam(a_c, b_c, tol):
     """Mirror of SilkMachinery.shared_seam (#39): the oracle re-derives
     the seam detection itself instead of trusting the object code.
@@ -515,13 +535,12 @@ def _detect_seam(a_c, b_c, tol):
     A whose matches form an adjacent cyclic pair on B, both pairs
     non-degenerate (endpoints distinct). Returns (ea, eb, pairs) or
     None.
+
+    NOTE (#49): with two seams between the SAME patch pair (closed-ring
+    builds) this returns the FIRST match -- possibly a phantom
+    coincident-corner pair -- not the seam the blend actually used. Pass
+    an `edge` pin where that matters; see _pinned_seam.
     """
-    edges = {(0, 1): "U0", (1, 2): "V1", (2, 3): "U1", (3, 0): "V0",
-             (1, 0): "U0", (2, 1): "V1", (3, 2): "U1", (0, 3): "V0"}
-
-    def adjacent(i, j):
-        return (j - i) % 4 == 1 or (i - j) % 4 == 1
-
     matches = {i: [j for j in range(4)
                    if (a_c[i] - b_c[j]).Length < tol]
                for i in range(4)}
@@ -531,18 +550,54 @@ def _detect_seam(a_c, b_c, tol):
             continue  # degenerate pair on the same patch
         for j in matches[i]:
             for j2 in matches[i2]:
-                if not adjacent(j, j2):
+                if not _adjacent(j, j2):
                     continue
                 if (b_c[j] - b_c[j2]).Length < tol:
                     continue  # degenerate pair on the other patch
-                ea = edges.get((i, i2))
-                eb = edges.get((j, j2))
+                ea = _EDGE_LABELS.get((i, i2))
+                eb = _EDGE_LABELS.get((j, j2))
                 if ea and eb:
                     return ea, eb, [(i, j), (i2, j2)]
     return None
 
 
-def _blend_reference_rows(pa, pb, tol=0.01):
+def _pinned_seam(a_c, b_c, ep0, ep1, tol):
+    """Mirror of SilkBlend._seam_from_edge (#49), re-derived here for the
+    same reason _detect_seam is: the oracle checks the blend against its
+    OWN seam derivation, not the object code's.
+
+    Pin the seam from an explicit Edge's endpoint poles -- both must sit
+    (within tol) on a distinct, cyclically adjacent corner pair of BOTH
+    patches. Purely geometric: the Edge object identity is irrelevant
+    (patches may share geometry without sharing the same Edge object).
+    This is what makes the oracle able to validate a SECOND seam on a
+    pair that shares two edges, where _detect_seam cannot know which of
+    the two the blend used. Returns (ea, eb, pairs) or None.
+    """
+    a0 = [i for i in range(4) if (a_c[i] - ep0).Length < tol]
+    a1 = [i for i in range(4) if (a_c[i] - ep1).Length < tol]
+    b0 = [i for i in range(4) if (b_c[i] - ep0).Length < tol]
+    b1 = [i for i in range(4) if (b_c[i] - ep1).Length < tol]
+    for i0 in a0:
+        for i1 in a1:
+            if not _adjacent(i0, i1):
+                continue
+            if (a_c[i0] - a_c[i1]).Length < tol:
+                continue  # degenerate pair on A (pointed apex)
+            for j0 in b0:
+                for j1 in b1:
+                    if not _adjacent(j0, j1):
+                        continue
+                    if (b_c[j0] - b_c[j1]).Length < tol:
+                        continue  # degenerate pair on B
+                    ea = _EDGE_LABELS.get((i0, i1))
+                    eb = _EDGE_LABELS.get((j0, j1))
+                    if ea and eb:
+                        return ea, eb, [(i0, j0), (i1, j1)]
+    return None
+
+
+def _blend_reference_rows(pa, pb, tol=0.01, edge=None):
     """Independently re-derive the 4 (l_rev, rc) strip-row pairs that drive
     a blend between two patches.
 
@@ -551,10 +606,23 @@ def _blend_reference_rows(pa, pb, tol=0.01):
     stored blend poles against geometry it derived itself. Returns
     [(l_rev, rc), ...] (4 rows, each a list of 4 Vectors) or None when
     the patches do not share an edge.
+
+    edge (#49): optional seam PIN, an Edge object, mirroring
+    create_blend's edge= contract -- the seam is then derived from that
+    Edge's endpoint poles (_pinned_seam) instead of auto-detected
+    (_detect_seam). Required to check a blend on a pair that shares TWO
+    edges, where the auto-detect would re-derive the first (or a phantom
+    coincident-corner) seam and flag a correct second-seam blend. With
+    edge=None the behaviour is exactly as before.
     """
     a_c = [pa.Poles[0], pa.Poles[3], pa.Poles[15], pa.Poles[12]]
     b_c = [pb.Poles[0], pb.Poles[3], pb.Poles[15], pb.Poles[12]]
-    seam = _detect_seam(a_c, b_c, tol)
+    if edge is not None:
+        ep = list(getattr(edge, "Poles", []) or [])
+        seam = (_pinned_seam(a_c, b_c, ep[0], ep[3], tol)
+                if len(ep) >= 4 else None)
+    else:
+        seam = _detect_seam(a_c, b_c, tol)
     if seam is None:
         return None
     ea, eb, pairs = seam
@@ -642,7 +710,7 @@ def _blend_reference_rows(pa, pb, tol=0.01):
     return rows
 
 
-def _check_blend(blend, pa, pb, reference_poles):
+def _check_blend(blend, pa, pb, reference_poles, edge=None):
     results = []
 
     # structural (both blend types accepted: the unified "Blend" #39 and
@@ -660,12 +728,15 @@ def _check_blend(blend, pa, pb, reference_poles):
                         st, len(poles), len(weights),
                         "ok" if ok else "bad")))
 
-    rows = _blend_reference_rows(pa, pb, tol=getattr(blend, "tolerance", 0.01))
+    rows = _blend_reference_rows(pa, pb,
+                                 tol=getattr(blend, "tolerance", 0.01),
+                                 edge=edge)
     if rows is None:
-        results.append(("B1_c0_seams", False,
-                        "no shared edge found between the patches"))
-        results.append(("B2_c1_tangents", False,
-                        "no shared edge found between the patches"))
+        no_seam = ("the pinned edge is not a shared boundary of both patches"
+                   if edge is not None
+                   else "no shared edge found between the patches")
+        results.append(("B1_c0_seams", False, no_seam))
+        results.append(("B2_c1_tangents", False, no_seam))
         return results
 
     # B1: C0 -- each blend row's outer poles sit on the strip-curve
@@ -932,16 +1003,24 @@ def check_corner_blend(cb, strip0=None, strip1=None, strip2=None,
     return _check_corner_blend(cb, strips, reference_poles)
 
 
-def check_blend(blend, patch_a, patch_b, reference_poles=None):
+def check_blend(blend, patch_a, patch_b, reference_poles=None, edge=None):
     """Check a Blend / legacy BlendStrip against its two patches
     (explicit arguments).
 
     reference_poles: optional 24-pole reference (e.g. the stored
     ground-truth blend) for the B4 full-pole match.
 
+    edge (#49): optional seam PIN, an Edge object, mirroring
+    create_blend's edge= contract. The B1/B2 reference rows are then
+    derived from that Edge's endpoint poles rather than auto-detected,
+    so a blend on a pair sharing TWO edges (closed-ring builds) is
+    checked against the seam it actually used. Omit it (default) and
+    the reference is auto-detected, exactly as before -- pass
+    blend.Edge for a blend that carries one.
+
     Returns [(name, ok, detail), ...]; never raises.
     """
     try:
-        return _check_blend(blend, patch_a, patch_b, reference_poles)
+        return _check_blend(blend, patch_a, patch_b, reference_poles, edge)
     except Exception as e:
         return [("structural", False, "oracle error: %r" % e)]

@@ -24,13 +24,13 @@ Covered here:
     pinned Edge's ENDPOINT POLES (_seam_from_edge), not from the
     first-matching shared_seam auto-detect, so the pin picks the pinned
     seam. Verified: blending the second seam writes only that seam's
-    band split and its 24 poles match an independently derived,
-    seam-pinned reference at 1e-6. NOTE: check_blend itself cannot
-    validate a second-seam blend -- its reference derivation
-    auto-detects the seam and has no pin -- so this test asserts the
-    pinned reference directly and only requires check_blend's
-    structural + B3 checks green (B1/B2 are expected to flag; that is
-    an oracle limitation on same-pair-two-seams, not a blend defect).
+    band split, its 24 poles match an independently derived,
+    seam-pinned reference at 1e-6, and -- since #49 gave check_blend an
+    optional `edge=` seam pin mirroring create_blend's edge= contract --
+    it passes the FULL oracle (structural + B1/B2/B3 + a B4 24-pole
+    match) when invoked with that pin. Without the pin the oracle
+    auto-detects the seam, so B1/B2 still flag the second-seam blend;
+    that unpinned behaviour is unchanged and reported, not asserted on.
 """
 
 import FreeCAD
@@ -162,8 +162,8 @@ def _pinned_reference_rows(pa, pb, ea, eb, pairs):
     """Independently derive the 4 (l_rev, rc) blend-row pairs for a
     SEAM-PINNED (ea, eb, pairs) seam -- the same derivation shape as
     SilkChecks._blend_reference_rows, but with the seam fixed instead of
-    auto-detected (check_blend cannot pin a seam, which matters for the
-    two-shared-edges case)."""
+    auto-detected (the auto-detect re-derives the FIRST matching corner
+    pair, which matters for the two-shared-edges case)."""
     from SilkMachinery import band_cells
     ss_a = 0 if ea[1] == "0" else 1
     ss_b = 0 if eb[1] == "0" else 1
@@ -198,6 +198,18 @@ def _pinned_reference_rows(pa, pb, ea, eb, pairs):
             rc = [sgb[v * 4 + ri] for v in vb]
         rows.append((l_rev, rc))
     return rows
+
+
+def _pinned_reference_poles(rows):
+    """The 24-pole blend grid implied by _pinned_reference_rows -- the
+    reference handed to check_blend's B4, derived here independently of
+    the oracle."""
+    import ArachNURBS as AN
+    poles = []
+    for l_rev, rc in rows:
+        poles.extend(AN.blend_poly_2x4_1x6(
+            l_rev, [1.0] * 4, rc, [1.0] * 4, 2.0, 2.0, 2.0, 2.0)[0])
+    return poles
 
 
 def _matches_pinned_reference(blend, rows):
@@ -588,19 +600,32 @@ def test_two_shared_edges_pin_picks_the_pinned_seam(doc):
     checks.append("24 poles match the seam-pinned reference (max dev "
                   "%.2e)" % dev)
 
-    res = {n: (ok, d) for n, ok, d in check_blend(b_right, pa, pb)}
-    for n in ("structural", "B3_surface_valid"):
+    # The pinned seam is also the FULL ORACLE's seam: since #49,
+    # check_blend takes an optional `edge=` pin mirroring
+    # create_blend's edge= contract, so the whole oracle (structural,
+    # B1, B2, B3, B4) goes green on the second-seam blend instead of
+    # flagging a correct blend because it re-derived the first seam.
+    res = {n: (ok, d) for n, ok, d in check_blend(
+        b_right, pa, pb, reference_poles=_pinned_reference_poles(rows),
+        edge=s_right)}
+    for n in ("structural", "B1_c0_seams", "B2_c1_tangents",
+              "B3_surface_valid", "B4_pole_match"):
         if not res.get(n, (False,))[0]:
-            errors.append("check_blend %s not green: %s"
+            errors.append("pinned check_blend %s not green: %s"
                           % (n, res.get(n, (False, "missing"))))
-    checks.append("check_blend structural + B3 green")
-    if res.get("B1_c0_seams", (True,))[0] or res.get("B2_c1_tangents",
-                                                     (True,))[0]:
-        errors.append("expected the unpinnable oracle to flag B1/B2 on a "
-                      "second-seam blend; got %r" % res)
-    checks.append("check_blend B1/B2 flag the second-seam blend as "
-                  "expected (oracle auto-detect has no pin -- limitation "
-                  "documented, not a blend defect)")
+    checks.append("pinned check_blend green on all of %s"
+                  % ", ".join("%s (%s)" % (n, res[n][1]) for n in
+                              ("structural", "B1_c0_seams",
+                               "B2_c1_tangents", "B3_surface_valid",
+                               "B4_pole_match") if n in res))
+
+    # Unpinned the oracle still auto-detects the seam (unchanged #49
+    # behaviour) and therefore still flags the second-seam blend. That
+    # is the pin's raison d'etre; reported, not asserted.
+    unpinned = {n: ok for n, ok, _ in check_blend(b_right, pa, pb)}
+    checks.append("unpinned check_blend (no pin, auto-detect): %s"
+                  % ", ".join("%s=%s" % (n, "ok" if ok else "flag")
+                              for n, ok in unpinned.items()))
 
     # Both seams individually blendable: a first-seam blend coexists.
     with _Capture() as cap:
@@ -627,6 +652,19 @@ def test_two_shared_edges_pin_picks_the_pinned_seam(doc):
                       "seam-1 reference (want <= 1e-6)" % dev)
     checks.append("first-seam poles match the seam-pinned reference "
                   "(max dev %.2e)" % dev)
+
+    # The first seam is fully oracle-checkable too, pinned (this is the
+    # seam the unpinned auto-detect happens to pick, so pin and
+    # auto-detect must agree).
+    res_l = {n: (ok, d) for n, ok, d in check_blend(
+        b_left, pa, pb, reference_poles=_pinned_reference_poles(rows),
+        edge=s_left)}
+    for n in ("structural", "B1_c0_seams", "B2_c1_tangents",
+              "B3_surface_valid", "B4_pole_match"):
+        if not res_l.get(n, (False,))[0]:
+            errors.append("pinned check_blend (first seam) %s not green: %s"
+                          % (n, res_l.get(n, (False, "missing"))))
+    checks.append("pinned check_blend green on the first-seam blend too")
 
     # The two blends sit on different bands: their poles must differ.
     dmax = max((p - q).Length for p, q in zip(b_left.Poles, b_right.Poles))
