@@ -25,7 +25,8 @@ from FreeCAD import Gui
 import ArachNURBS as AN
 from popup import tipsDialog
 
-from SilkMachinery import build_subgrids, build_display
+from SilkMachinery import build_subgrids, build_display, \
+    normalize_splits_report
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -98,6 +99,32 @@ class Patch:
         obj.recompute()
 
     def onChanged(self, fp, prop):
+        # #61: normalize the split lists ON SET, so the stored value is
+        # always the one the geometry actually used. Before this, a
+        # rejected entry (0.0, 1.0, a negative, >1, a repeat) stayed
+        # visible in the property editor while build_subgrids silently
+        # dropped it — property and geometry disagreed, and nothing in
+        # the UI said so (#53 display residue).
+        #
+        # Both halves, deliberately:
+        #   - rewrite the property with what is actually used, so the
+        #     stored list can never show a value that would be
+        #     discarded;
+        #   - say what was dropped, so a mistyped width is not silently
+        #     swallowed. Normalizing alone would hide the mistake;
+        #     messaging alone would leave the residue the ticket is
+        #     about.
+        #
+        # The rule is unchanged (SilkMachinery.normalize_splits):
+        # strictly inside (0, 1), strictly increasing, no repeats. It is
+        # idempotent, and the write is guarded, so onChanged cannot
+        # re-enter: the second pass sees an already-normalized list and
+        # writes nothing.
+        if prop in ("USplits", "VSplits"):
+            try:
+                self._normalize_splits_on_set(fp, prop)
+            except Exception:
+                pass   # never let housekeeping break the object
         # Guard: only recompute if object is fully initialized (has inputs)
         if prop in ("USplits", "VSplits", "ShowSurface", "ShowGrid",
                     "ShowSubgrids", "reverse"):
@@ -129,6 +156,43 @@ class Patch:
                 pass
             self._rebuild_display(fp)
             fp.purgeTouched()
+
+    def _normalize_splits_on_set(self, fp, prop):
+        """Rewrite `fp.<prop>` as its normalized form (see onChanged).
+
+        Writes only when the incoming value is not already normalized, so
+        the common path (a blend's 0.1 / 0.9 band split, a user's 0.3)
+        costs nothing and the guard makes the re-entrant onChanged that
+        the write triggers a no-op. Nothing writes a split during a
+        recompute, so this corrective write cannot open the Patch <-> Blend
+        cycle #59 closed -- it only ever accompanies a user/ops write that
+        already recomputes the patch.
+
+        On a document restore the residue is fixed silently: an old file
+        carrying a 0.0 split should not greet the user with a complaint
+        every time it opens. The next real edit reports again.
+        """
+        current = list(getattr(fp, prop, None) or [])
+        kept, out_of_range, repeated = normalize_splits_report(current)
+        if list(kept) == [float(v) for v in current]:
+            return
+        setattr(fp, prop, list(kept))
+        if 'Restore' in fp.State:
+            return
+        why = []
+        if out_of_range:
+            why.append("outside (0, 1): %s"
+                       % ", ".join("%g" % v for v in out_of_range))
+        if repeated:
+            why.append("repeated: %s"
+                       % ", ".join("%g" % v for v in repeated))
+        FreeCAD.Console.PrintError(
+            "Silk: Patch '%s': %s = %s is not strictly inside (0, 1) and "
+            "strictly increasing (%s) -> using %s. The stored list now "
+            "matches the geometry.\n"
+            % (fp.Name, prop, ", ".join("%g" % v for v in current),
+               "; ".join(why) or "reordered",
+               ", ".join("%g" % v for v in kept) or "[]"))
 
     def _rebuild_display(self, fp):
         """Recompose the display Shape from the cached base surface,

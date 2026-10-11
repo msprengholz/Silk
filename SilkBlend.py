@@ -33,7 +33,8 @@ import ArachNURBS as AN
 from popup import tipsDialog
 
 from SilkMachinery import patch_side as _patch_side, band_cells, \
-    ensure_hidden_idxs_property, shared_seam, _EDGE_OF, _cyclic_adjacent
+    band_diagnosis, ensure_hidden_idxs_property, shared_seam, _EDGE_OF, \
+    _cyclic_adjacent
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -173,19 +174,34 @@ def run_blend(fp):
     # Step 5: the blend band comes from the patch's own subgrid cells —
     # the UV splits already subdivide the surface, so pick the seam-
     # adjacent cell(s) instead of re-segmenting the base surface (see
-    # module-level band_cells; #33). The 0.1x0.1 corner cell at a
-    # 4-patch junction is not part of the band (reserved for the corner
-    # blend op, #28).
+    # module-level band_cells; #33). The corner cell at a 4-patch
+    # junction is not part of the band (reserved for the corner blend
+    # op, #28).
     def get_strip(p, ea, ss):
         """Extract the band cell's flat 16-pole array poles[U][V] = flat[U*4+V]
         from the patch's pre-computed subgrids.
+
+        #61: the refusal stays, but it now says WHAT is wrong and what
+        would fix it — the patch, the seam, both axis split lists, how
+        many cells each makes, which are corner cells, and the single
+        split value that would leave a one-cell band. The old text named
+        the cell count and nothing else, so the only way to act on it was
+        to go and re-derive the whole split layout by hand.
         """
         idxs = band_cells(p, ea, ss)
-        if len(idxs) != 1 or not p.Proxy._subgrids:
+        if len(idxs) != 1:
             FreeCAD.Console.PrintError(
-                f"Silk: blend band on {p.Name} covers {len(idxs)} subgrid "
-                "cells; exactly 1 is required (multi-cell bands not "
-                "supported yet).\n")
+                "Silk: blend band on %s covers %d subgrid cells; exactly 1 "
+                "is required (multi-cell bands not supported yet).\n"
+                "      %s\n" % (p.Name, len(idxs),
+                              band_diagnosis(p, ea, ss)))
+            return None
+        if not p.Proxy._subgrids:
+            FreeCAD.Console.PrintError(
+                "Silk: blend band on %s: the patch has no subgrid cells at "
+                "all (USplits=%s, VSplits=%s) — the seam %s band needs at "
+                "least the split that isolates it.\n"
+                % (p.Name, list(p.USplits or []), list(p.VSplits or []), ea))
             return None
         return list(p.Proxy._subgrids[idxs[0]])
 

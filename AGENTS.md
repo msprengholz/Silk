@@ -98,11 +98,22 @@ The strip band is taken from the patch's pre-computed subgrid cells
 (`p.Proxy._subgrids`, produced by USplits/VSplits) — never by re-segmenting
 `_base_surface` with an ad-hoc trim. `band_cells(p, ea, ss)` selects the band
 cell(s): band interval 0 or last per ss, excluding corner cells at seam ends
-with a seam-axis split (0.1/0.9) — those are reserved for the 4-subgrid corner
-blend object. `get_strip` returns the selected cell's flat poles (single-cell
-bands only; console error + None otherwise). Auto-hide re-derives the FULL
-`_HiddenSubgridIdxs` set for each patch from ALL linked strips with the
-current splits (cell indices shift when a later strip adds a split).
+with a seam-axis split — those are reserved for the 4-subgrid corner
+blend object. The exclusion is NOT keyed to the literal 0.1 / 0.9
+(ticket #61): `SilkMachinery.corner_cells` classifies each split by the
+end of the axis it is nearest to (`< 0.5` -> the parametric-0 end,
+`> 0.5` -> the parametric-1 end, `== 0.5` -> neither) and drops that
+end's interval, so a user width of 0.2 / 0.85 excludes its corner cell
+exactly like the default does. `get_strip` returns the selected cell's
+flat poles (single-cell bands only; console error + None otherwise —
+`SilkMachinery.band_diagnosis` builds the actionable message). Auto-hide
+re-derives the FULL `_HiddenSubgridIdxs` set for each patch from ALL
+linked strips with the current splits (cell indices shift when a later
+strip adds a split).
+
+The width itself is still not the user's to move while a blend exists:
+each seam's band split is written by the blend itself at the fixed
+default width (`ensure_band_split`, 0.1 / 0.9), additively.
 
 ### Step 4: Extract rows/columns from strips
 Subgrid flat: `poles[U][V]` = `flat[U*4 + V]` (U is first dimension in FreeCAD)

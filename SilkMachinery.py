@@ -32,6 +32,29 @@ def build_intervals(values):
     return list(zip([0.0] + splits, splits + [1.0]))
 
 
+def normalize_splits_report(values):
+    """(kept, out_of_range, repeated) for one axis.
+
+    The stored list is normalized ON SET by the Patch (#61), so this is
+    the same rule the Patch applies at write time — the values kept
+    (sorted, deduped, strictly inside (0, 1)) plus, for the console
+    message, what was rejected and WHY: a value outside (0, 1), and a
+    value the input repeated. Both lists are empty for an already-
+    normalized input."""
+    raw = list(values)
+    kept = normalize_splits(raw)
+    kept_set = set(kept)
+    out_of_range = []
+    repeated = []
+    for v in raw:
+        if not 0.0 < v < 1.0:
+            if v not in out_of_range:
+                out_of_range.append(v)
+        elif v in kept_set and raw.count(v) > 1 and v not in repeated:
+            repeated.append(v)
+    return kept, out_of_range, repeated
+
+
 def build_subgrids(base_surface, u_splits, v_splits):
     """Subdivide base_surface by the U/V splits.
 
@@ -133,33 +156,107 @@ def patch_side(pa, pb, tol=0.01):
     return ea, (0 if ea[1] == "0" else 1)
 
 
+def corner_cells(splits, n_intervals):
+    """Interval indices along one axis that are CORNER cells — reserved
+    for the four-cell corner blend op (#28) and excluded from a band.
+
+    #61: this is the generalized form of the old hard-coded test
+    ("is there a 0.1? drop the first cell / a 0.9? drop the last").
+    A split is not a width marker at a magic number, it is the far edge
+    of a band at one END of its axis: s < 0.5 isolates the band [0, s] at
+    the parametric-0 end, s > 0.5 the band [s, 1] at the parametric-1
+    end (SilkBlend.ensure_band_split writes 0.1 / 0.9 by default, but
+    the width is the user's). So:
+      - the split NEAREST the 0 end (the lowest) carved out the interval
+        [0, s]: that interval is the corner cell -> drop it;
+      - the split NEAREST the 1 end (the highest) carved out [s, 1]:
+        drop it;
+      - a split exactly at 0.5 marks neither end (a plain mid-surface
+        subdivision, no band attached to either end).
+
+    A single split marks the one end it is nearest to: [0.1] drops the
+    first cell only and [0.9] the last cell only — which is exactly what
+    the old literal rule did for the two values it knew, and what keeps
+    a 2-interval layout ([0, s], [s, 1]) from collapsing to no band at
+    all. For a split list drawn from {0.1, 0.5, 0.9} — every value the
+    fixtures use — this is provably identical to the old rule; only a
+    user width like 0.2 / 0.85 used to fall through it silently (#61).
+    """
+    s = normalize_splits(list(splits))
+    if not s:
+        return set()
+    out = set()
+    if s[0] < 0.5:
+        out.add(0)
+    if s[-1] > 0.5:
+        out.add(n_intervals - 1)
+    return out
+
+
 def band_cells(p, ea, ss):
     """Subgrid cell indices covered by a strip's band on patch p.
 
     The band runs along the seam in the band interval (0 or last, per
     ss). A cell at a seam end with a seam-axis split is a corner cell —
     excluded from the band (reserved for the four-cell corner blend op,
-    #28).
+    #28). Which cells those are follows the axis splits, not a magic
+    0.1/0.9 (see corner_cells, #61).
     """
-    ivs_u = build_intervals(list(p.USplits or []))
-    ivs_v = build_intervals(list(p.VSplits or []))
-    nu, nv = len(ivs_u), len(ivs_v)
+    us, vs = list(p.USplits or []), list(p.VSplits or [])
+    nu = len(build_intervals(us))
+    nv = len(build_intervals(vs))
     if ea[0] == "U":  # seam along U: band fixes V interval, spans U cells
         b = (nv - 1) if ss else 0
-        keep_u = set(range(nu))
-        if any(abs(s - 0.1) < 1e-9 for s in (p.USplits or [])):
-            keep_u.discard(0)
-        if any(abs(s - 0.9) < 1e-9 for s in (p.USplits or [])):
-            keep_u.discard(nu - 1)
+        keep_u = set(range(nu)) - corner_cells(us, nu)
         return [a * nv + b for a in sorted(keep_u)]
     # seam along V: band fixes U interval, spans V cells
     a = (nu - 1) if ss else 0
-    keep_v = set(range(nv))
-    if any(abs(s - 0.1) < 1e-9 for s in (p.VSplits or [])):
-        keep_v.discard(0)
-    if any(abs(s - 0.9) < 1e-9 for s in (p.VSplits or [])):
-        keep_v.discard(nv - 1)
+    keep_v = set(range(nv)) - corner_cells(vs, nv)
     return [a * nv + b for b in sorted(keep_v)]
+
+
+def _splits_str(values):
+    """`[0.1, 0.9]` — the split list the way a user reads it in the
+    property editor (never Python float noise like [0.100000001490116])."""
+    return "[" + ", ".join("%g" % float(v) for v in values) + "]"
+
+
+def band_diagnosis(p, ea, ss):
+    """Actionable, fact-by-fact diagnosis of patch p's band at seam
+    ea/ss — the axis roles, the split values in play, how many intervals
+    they make, which cells the corner exclusion drops, and what single
+    split value WOULD leave a one-cell band. Pure data -> string, no
+    console output; SilkBlend owns the message that carries it (#61).
+    """
+    name = getattr(p, "Name", "?")
+    us, vs = list(p.USplits or []), list(p.VSplits or [])
+    nu, nv = len(build_intervals(us)), len(build_intervals(vs))
+    if ea[0] == "U":  # seam along U: band fixes a V interval, spans U
+        band_prop, along_prop, along, n_along = "VSplits", "USplits", us, nu
+        band_ivs = build_intervals(vs)
+    else:             # seam along V: band fixes a U interval, spans V
+        band_prop, along_prop, n_along = "USplits", "VSplits", nv
+        along, band_ivs = vs, build_intervals(us)
+    # the band is the first (side 0) or the last (side 1) interval
+    band_iv = band_ivs[0] if ss == 0 else band_ivs[-1]
+    width = band_iv[1] - band_iv[0]
+    excluded = sorted(corner_cells(along, n_along))
+    along_set = normalize_splits(along)
+    pick = (along_set[0] if ss == 0 else along_set[-1]) if along_set else None
+    return (
+        "seam %s (band at parametric %d): band axis %s = %s -> %d "
+        "interval(s), width %g.\n"
+        "      seam-parallel axis %s = %s -> %d interval(s); corner "
+        "cell(s) %s excluded, %d left in the band.\n"
+        "      A one-cell band needs at most one split below 0.5 and one "
+        "above 0.5 on the seam-parallel axis: %s.%s = %s gives a single "
+        "band cell of width %g."
+        % (ea, ss, band_prop, _splits_str(getattr(p, band_prop) or []),
+           len(band_ivs), width,
+           along_prop, _splits_str(along), n_along, excluded,
+           n_along - len(excluded),
+           name, along_prop,
+           "[]" if pick is None else "[%g]" % pick, width))
 
 
 # ---- hidden-cell bookkeeping ------------------------------------------
