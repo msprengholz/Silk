@@ -46,6 +46,12 @@ Corner blends (CB1-CB4, #28):
   CB4 full 36-pole match against a provided reference (optional)
 
 Tolerances (spec #16): poles 1e-6, weights exact (1.0).
+
+MIRROR, DO NOT IMPORT: several helpers here deliberately re-derive the
+object code's tables (_detect_seam, _pinned_seam, _oracle_band_cells,
+_corner_cells) instead of importing them. An oracle that calls the
+function under test proves nothing — a bug in that function would
+satisfy the check. Every mirror says so where it is defined.
 """
 
 import Part
@@ -597,6 +603,68 @@ def _pinned_seam(a_c, b_c, ep0, ep1, tol):
     return None
 
 
+def _oracle_corner_cells(splits, n_intervals):
+    """Interval indices along one axis that are CORNER cells — reserved
+    for the four-cell corner blend op (#28) and excluded from a band.
+
+    Mirror of SilkMachinery.corner_cells (#61), written out again HERE on
+    purpose: this oracle re-derives the object code's tables instead of
+    importing them, so a bug in the object code cannot satisfy the oracle
+    (the reason the whole copy exists, since #39). Importing
+    corner_cells would make that guarantee void — the function under test
+    would be the oracle. It is equally deliberately NOT reached through
+    SilkBlend, which does `from FreeCAD import Gui` and would drag GUI
+    dependencies into headless oracle runs.
+
+    The rule: a split is not a width marker at a magic number, it is the
+    far edge of a band at one END of its axis. The split nearest the 0
+    end (the lowest) carved out [0, s] — that interval is the corner cell,
+    drop it; the split nearest the 1 end (the highest) carved out [s, 1] —
+    drop it; a split exactly at 0.5 marks neither (a plain mid-surface
+    subdivision, no band attached to either end). ensure_band_split writes
+    0.1 / 0.9 by default, but the width is the user's, so the literals
+    the pre-#63 oracle hard-coded matched neither 0.2 nor 0.85 and let a
+    corner cell into the band (#61).
+
+    For a split list drawn from {0.1, 0.5, 0.9} — every value the current
+    fixtures use — this is provably identical to the old literal rule (see
+    Tests/test_oracle_band_cells.py); only a user width used to fall
+    through it silently."""
+    s = sorted(set(float(v) for v in (splits or []) if 0.0 < v < 1.0))
+    if not s:
+        return set()
+    out = set()
+    if s[0] < 0.5:
+        out.add(0)
+    if s[-1] > 0.5:
+        out.add(n_intervals - 1)
+    return out
+
+
+def _oracle_band_cells(p, etype, ss):
+    """The oracle's own re-derivation of the subgrid cells a blend's band
+    covers on patch p — the #33 "band = pre-computed subgrid cells" rule,
+    with the #61 corner-cell exclusion (see _oracle_corner_cells).
+
+    The band runs along the seam in the band interval (0 or last, per ss),
+    spanning the seam-PARALLEL axis' cells; cells at a seam end that carry
+    a seam-axis split are the corner cells and stay out.
+    """
+    from SilkMachinery import build_intervals as _build_intervals
+
+    us, vs = list(p.USplits or []), list(p.VSplits or [])
+    nu = len(_build_intervals(us))
+    nv = len(_build_intervals(vs))
+    if etype[0] == "U":  # seam along U: band fixes V interval, spans U cells
+        b = (nv - 1) if ss else 0
+        keep_u = set(range(nu)) - _oracle_corner_cells(us, nu)
+        return [a * nv + b for a in sorted(keep_u)]
+    # seam along V: band fixes U interval, spans V cells
+    a = (nu - 1) if ss else 0
+    keep_v = set(range(nv)) - _oracle_corner_cells(vs, nv)
+    return [a * nv + b for b in sorted(keep_v)]
+
+
 def _blend_reference_rows(pa, pb, tol=0.01, edge=None):
     """Independently re-derive the 4 (l_rev, rc) strip-row pairs that drive
     a blend between two patches.
@@ -630,28 +698,10 @@ def _blend_reference_rows(pa, pb, tol=0.01, edge=None):
     ss_b = 0 if eb[1] == "0" else 1
 
     # #33: the blend band comes from the patch's own subgrid cells
-    # (mirrors SilkBlend.run_blend band_cells/get_strip).
+    # (mirrors SilkBlend.run_blend band_cells/get_strip; the selection
+    # RULE is the oracle's own — see _oracle_band_cells, #63).
     def band_cells(p, etype, ss):
-        from SilkMachinery import build_intervals as _build_intervals
-        ivs_u = _build_intervals(list(p.USplits or []))
-        ivs_v = _build_intervals(list(p.VSplits or []))
-        nu, nv = len(ivs_u), len(ivs_v)
-        if etype[0] == "U":  # seam along U: band fixes V interval, spans U cells
-            b = (nv - 1) if ss else 0
-            keep_u = set(range(nu))
-            if any(abs(s - 0.1) < 1e-9 for s in (p.USplits or [])):
-                keep_u.discard(0)
-            if any(abs(s - 0.9) < 1e-9 for s in (p.USplits or [])):
-                keep_u.discard(nu - 1)
-            return [a * nv + b for a in sorted(keep_u)]
-        # seam along V: band fixes U interval, spans V cells
-        a = (nu - 1) if ss else 0
-        keep_v = set(range(nv))
-        if any(abs(s - 0.1) < 1e-9 for s in (p.VSplits or [])):
-            keep_v.discard(0)
-        if any(abs(s - 0.9) < 1e-9 for s in (p.VSplits or [])):
-            keep_v.discard(nv - 1)
-        return [a * nv + b for b in sorted(keep_v)]
+        return _oracle_band_cells(p, etype, ss)
 
     def get_strip(p, etype, ss):
         idxs = band_cells(p, etype, ss)
