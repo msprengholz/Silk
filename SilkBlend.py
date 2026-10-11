@@ -19,7 +19,9 @@ input type gate refuses Blend/BlendStrip/CornerBlend inputs with an
 empty valid object + console error, never a crash).
 
 Usage:
-  1. Select two patches (unified Patch, Patch44 or Patch33)
+  1. Select two patches (unified Patch, Patch44 or Patch33) --
+     or a single shared Edge (#45: the command resolves its
+     adjacent pair via SilkWorkflowOps.create_blend_by_edge)
   2. Run Silk_CreateBlend command (or SilkWorkflowOps.create_blend)
   3. Blend auto-updates when patches' USplits/VSplits change
 """
@@ -435,32 +437,71 @@ BlendViewProvider = BlendStripViewProvider
 
 
 class CreateBlend:
-    """GUI command — select 2 adjacent patches -> unified
-    Blend (ticket #42: the legacy BlendStrip construction
-    is retired; the command builds the unified Blend, the
-    same strip algorithm via the shared run_blend)."""
+    """GUI command — select either 1 shared Edge or 2 adjacent
+    patches -> unified Blend (ticket #42: the legacy BlendStrip
+    construction is retired; the command builds the unified Blend,
+    the same strip algorithm via the shared run_blend).
+
+    Ticket #45: 1 selected Edge delegates the whole contract to the
+    #44 resolver SilkWorkflowOps.create_blend_by_edge (identity-only
+    adjacent-pair resolution, per-seam idempotency, graceful refusals,
+    the edge as the geometric seam pin) — this class only reads the
+    selection and reports. 2 selected patches keep the direct pair
+    construction; every other selection shape refuses with a
+    "Silk: ..." console error, no side effects."""
 
     def GetResources(self):
         return {'Pixmap': iconPath, 'MenuText': 'Silk Blend',
-                'ToolTip': 'Create a blend between two adjacent patches.'}
+                'ToolTip': 'Create a blend from 1 selected Edge or 2 '
+                           'selected adjacent patches.'}
 
     def Activated(self):
         sel = Gui.Selection.getSelection()
-        if len(sel) != 2:
-            FreeCAD.Console.PrintError("Silk: Blend requires exactly 2 selected patches.\n")
+        edges = [o for o in sel
+                 if getattr(o, "object_type", None) == "Edge"]
+        patches = [o for o in sel
+                   if getattr(o, "object_type", None) in PATCH_TYPES]
+
+        if len(sel) == 1 and len(edges) == 1:
+            # 1 selected Edge (#45): immediate creation through the
+            # #44 resolver -- no confirmation dialog (undo is the
+            # safety net, a settled decision). The resolver owns every
+            # message: its refusals and the idempotent "already
+            # blended by X" no-op reach the user unmodified; we only
+            # announce a NEW blend on top of that.
+            from SilkWorkflowOps import create_blend_by_edge
+            doc = FreeCAD.ActiveDocument
+            known = {o.Name for o in doc.Objects}
+            blend = create_blend_by_edge(edges[0])
+            if blend is None:
+                return  # resolver already printed its refusal message
+            if blend.Name not in known:
+                FreeCAD.Console.PrintMessage(
+                    f"{blend.Name} created across {edges[0].Name}\n")
+            # else: the resolver returned the EXISTING blend (no-op) --
+            # its "already blended" message already reached the user;
+            # adding a message here would double-report a non-event.
             return
-        doc = FreeCAD.ActiveDocument
-        obj = doc.addObject("Part::FeaturePython", "Blend")
-        Blend(obj, sel[0], sel[1])
-        BlendStripViewProvider(obj.ViewObject)
-        obj.ViewObject.LineWidth = 2.00
-        obj.ViewObject.LineColor = (0.00, 1.00, 0.00)
-        obj.ViewObject.PointSize = 5.00
-        obj.ViewObject.DisplayMode = "Shaded"
-        obj.ViewObject.ShapeColor = (0.00, 1.00, 0.00)
-        obj.ViewObject.Transparency = 30
-        doc.recompute()
-        FreeCAD.Console.PrintMessage(f"Blend created: {obj.Name}\n")
+
+        if len(sel) == 2 and len(patches) == 2:
+            doc = FreeCAD.ActiveDocument
+            obj = doc.addObject("Part::FeaturePython", "Blend")
+            Blend(obj, sel[0], sel[1])
+            BlendStripViewProvider(obj.ViewObject)
+            obj.ViewObject.LineWidth = 2.00
+            obj.ViewObject.LineColor = (0.00, 1.00, 0.00)
+            obj.ViewObject.PointSize = 5.00
+            obj.ViewObject.DisplayMode = "Shaded"
+            obj.ViewObject.ShapeColor = (0.00, 1.00, 0.00)
+            obj.ViewObject.Transparency = 30
+            doc.recompute()
+            FreeCAD.Console.PrintMessage(f"Blend created: {obj.Name}\n")
+            return
+
+        FreeCAD.Console.PrintError(
+            "Silk: Blend requires either 1 selected Edge or 2 selected "
+            "patches (got %d selected: %d Edge, %d patch).\n"
+            % (len(sel), len(edges), len(patches)))
 
     def IsActive(self):
         return Gui is not None
