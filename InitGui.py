@@ -72,6 +72,7 @@ class Silk (Workbench):
 		import SilkBlend
 		import SilkWorkflow
 		import Reload_Silk
+		import SilkGuidePanel
 
 		# A list of command names created by the imports above
 		self.list = ["ControlPoly4",
@@ -107,7 +108,8 @@ class Silk (Workbench):
 					"Silk_CreateBoundarySpline",
 					"Silk_CreateControlGridPatch",
 					"Silk_CreatePatch",
-					"Silk_CreateBlend"] 
+					"Silk_CreateBlend",
+					"Silk_Guide"] 
 					
 		
 		self.appendToolbar("Silk Commands",self.list) # creates a new toolbar with your commands
