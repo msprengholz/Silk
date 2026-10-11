@@ -29,54 +29,64 @@ if test_path not in sys.path:
     sys.path.insert(0, test_path)
 
 
-# ----------------------------------------------------------------------
-# Visible commands (ticket #50)
-#
-# Everything below decides only what the user SEES. Every import in
-# Initialize() stays, because old documents keep their proxies in the
-# legacy modules and those modules must be importable when a document is
-# opened:
-#
-#   Silk_2Boundaries.FCStd               -> ArachNURBS
-#   Silk_2BoundariesAndControlGrids.FCStd-> ArachNURBS + SilkWorkflow
-#   Silk_Workflow.FCStd                  -> SilkPatch44 / SilkBlend / SilkEdge
-#   Silk_Corner2x2.FCStd                 -> SilkEdge / SilkPatch / SilkBlend / SilkCorner
-#
-# Dropping a name from the lists below neither unregisters its command
-# nor unloads its module, so documents keep restoring exactly as before.
-# Retiring the legacy modules themselves is a separate track.
-# ----------------------------------------------------------------------
-
-# The workflow triad -- one command per process step: Edge -> Patch -> Blend
-WORKFLOW_COMMANDS = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend"]
-
-# The task panel
-GUIDE_COMMANDS = ["Silk_Guide"]
-
-# Development helper (hot reload)
-DEV_COMMANDS = ["Reload_Silk"]
-
-# Every command the workbench offers the user, in workflow order
-VISIBLE_COMMANDS = WORKFLOW_COMMANDS + GUIDE_COMMANDS + DEV_COMMANDS
-
-# Silk -> Workflow / Guide / Dev. appendMenu takes a LIST as its first
-# argument, where every entry after the first one is a level of submenu.
-MENU_STRUCTURE = [
-	(["Silk", "Workflow"], WORKFLOW_COMMANDS),
-	(["Silk", "Guide"], GUIDE_COMMANDS),
-	(["Silk", "Dev"], DEV_COMMANDS),
-]
-
-# One flat toolbar. "Separator" is a valid entry in a toolbar list and
-# renders as a toolbar separator.
-TOOLBAR_NAME = "Silk Commands"
-TOOLBAR_STRUCTURE = (WORKFLOW_COMMANDS + ["Separator"]
-                     + GUIDE_COMMANDS + ["Separator"]
-                     + DEV_COMMANDS)
-
-
 class Silk (Workbench):
-	
+	"""
+	# Visible commands (ticket #50)
+
+	These live as CLASS ATTRIBUTES, not module-level globals, and must
+	stay that way. FreeCAD loads a workbench's InitGui.py by exec'ing
+	it into the __main__ namespace and then STRIPPING the names the
+	file defined back out of it -- the registered class's methods keep
+	__main__ as their globals, so a module-level constant referenced
+	from Initialize() raises NameError at startup (this file crashed
+	FreeCAD's workbench load that way). Class attributes travel with
+	the class object and survive the strip. Nothing else in this file
+	may reference a module-level name from a method.
+
+	Everything below decides only what the user SEES. Every import in
+	Initialize() stays, because old documents keep their proxies in the
+	legacy modules and those modules must be importable when a document
+	is opened:
+
+	  Silk_2Boundaries.FCStd                -> ArachNURBS
+	  Silk_2BoundariesAndControlGrids.FCStd -> ArachNURBS + SilkWorkflow
+	  Silk_Workflow.FCStd                   -> SilkPatch44 / SilkBlend / SilkEdge
+	  Silk_Corner2x2.FCStd                  -> SilkEdge / SilkPatch / SilkBlend / SilkCorner
+
+	Dropping a name from the lists below neither unregisters its
+	command nor unloads its module, so documents keep restoring
+	exactly as before. Retiring the legacy modules themselves is a
+	separate track.
+	"""
+
+	# The workflow triad -- one command per process step: Edge -> Patch -> Blend
+	WORKFLOW_COMMANDS = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend"]
+
+	# The task panel
+	GUIDE_COMMANDS = ["Silk_Guide"]
+
+	# Development helper (hot reload)
+	DEV_COMMANDS = ["Reload_Silk"]
+
+	# Every command the workbench offers the user, in workflow order
+	VISIBLE_COMMANDS = WORKFLOW_COMMANDS + GUIDE_COMMANDS + DEV_COMMANDS
+
+	# Silk -> Workflow / Guide / Dev. appendMenu takes a LIST as its
+	# first argument, where every entry after the first one is a level
+	# of submenu.
+	MENU_STRUCTURE = [
+		(["Silk", "Workflow"], WORKFLOW_COMMANDS),
+		(["Silk", "Guide"], GUIDE_COMMANDS),
+		(["Silk", "Dev"], DEV_COMMANDS),
+	]
+
+	# One flat toolbar. "Separator" is a valid entry in a toolbar list
+	# and renders as a toolbar separator.
+	TOOLBAR_NAME = "Silk Commands"
+	TOOLBAR_STRUCTURE = (WORKFLOW_COMMANDS + ["Separator"]
+	                     + GUIDE_COMMANDS + ["Separator"]
+	                     + DEV_COMMANDS)
+
 	def __init__(self):
 		self.__class__.Icon = FreeCAD.getUserAppDataDir()+"Mod" + "/Silk/Resources/Icons/Silk.svg"
 		self.__class__.MenuText = "Silk"
@@ -121,11 +131,13 @@ class Silk (Workbench):
 		import SilkGuidePanel
 
 		# Only the five visible commands, in their three groups. All of
-		# them are registered by the imports above.
-		self.list = list(VISIBLE_COMMANDS)
+		# them are registered by the imports above. Referenced through
+		# `self` (class attributes) -- never as module-level globals:
+		# see the class docstring for why.
+		self.list = list(self.VISIBLE_COMMANDS)
 
-		self.appendToolbar(TOOLBAR_NAME, list(TOOLBAR_STRUCTURE))
-		for menu_path, commands in MENU_STRUCTURE:
+		self.appendToolbar(self.TOOLBAR_NAME, list(self.TOOLBAR_STRUCTURE))
+		for menu_path, commands in self.MENU_STRUCTURE:
 			self.appendMenu(list(menu_path), list(commands))
 
 	def Activated(self):

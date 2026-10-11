@@ -161,11 +161,12 @@ def test_visible_commands_are_exactly_the_five(doc):
     the thirty legacy command names survives in ANY visible structure."""
     errors, checks = [], []
     mod, _tree = load_initgui()
+    silk = mod.Silk
 
-    workflow = list(mod.WORKFLOW_COMMANDS)
-    guide = list(mod.GUIDE_COMMANDS)
-    dev = list(mod.DEV_COMMANDS)
-    visible = list(mod.VISIBLE_COMMANDS)
+    workflow = list(silk.WORKFLOW_COMMANDS)
+    guide = list(silk.GUIDE_COMMANDS)
+    dev = list(silk.DEV_COMMANDS)
+    visible = list(silk.VISIBLE_COMMANDS)
 
     check(workflow == EXPECTED_WORKFLOW,
           "WORKFLOW_COMMANDS is %r, expected %r" % (workflow, EXPECTED_WORKFLOW),
@@ -192,8 +193,8 @@ def test_visible_commands_are_exactly_the_five(doc):
         "GUIDE_COMMANDS": guide,
         "DEV_COMMANDS": dev,
         "VISIBLE_COMMANDS": visible,
-        "TOOLBAR_STRUCTURE": list(mod.TOOLBAR_STRUCTURE),
-        "MENU_STRUCTURE": [c for _p, cmds in mod.MENU_STRUCTURE for c in cmds],
+        "TOOLBAR_STRUCTURE": list(silk.TOOLBAR_STRUCTURE),
+        "MENU_STRUCTURE": [c for _p, cmds in silk.MENU_STRUCTURE for c in cmds],
     }
     for label, names in structures.items():
         stale = [n for n in names if n in LEGACY_NAMES]
@@ -238,6 +239,7 @@ def test_grouped_structures_reference_only_visible_commands(doc):
             return "Gui::PythonWorkbench"
 
     mod, _tree = load_initgui(workbench_base=_SilentWorkbench)
+    silk = mod.Silk
     probe = mod.Silk()
     probe.menus = []
     probe.toolbars = []
@@ -252,7 +254,7 @@ def test_grouped_structures_reference_only_visible_commands(doc):
     check(groups == EXPECTED_GROUPS,
           "submenu names are %r, expected %r" % (groups, EXPECTED_GROUPS),
           errors)
-    check(probe.toolbars == [(mod.TOOLBAR_NAME,
+    check(probe.toolbars == [(silk.TOOLBAR_NAME,
                               EXPECTED_WORKFLOW + ["Separator",
                                                    "Silk_Guide",
                                                    "Separator",
@@ -260,7 +262,7 @@ def test_grouped_structures_reference_only_visible_commands(doc):
           "Initialize() appendToolbar calls are %r" % (probe.toolbars,), errors)
 
     # the toolbar structure is flat (no nesting) and separators are exact
-    tb = list(mod.TOOLBAR_STRUCTURE)
+    tb = list(silk.TOOLBAR_STRUCTURE)
     check(tb.count("Separator") == 2,
           "TOOLBAR_STRUCTURE has %d Separator entries, expected 2"
           % tb.count("Separator"), errors)
@@ -271,11 +273,11 @@ def test_grouped_structures_reference_only_visible_commands(doc):
           % ([n for n in tb if n != "Separator"], EXPECTED_VISIBLE), errors)
 
     # nothing is dropped between the flat list and the grouped menus
-    in_menus = [c for _p, cmds in mod.MENU_STRUCTURE for c in cmds]
-    check(sorted(in_menus) == sorted(mod.VISIBLE_COMMANDS),
+    in_menus = [c for _p, cmds in silk.MENU_STRUCTURE for c in cmds]
+    check(sorted(in_menus) == sorted(silk.VISIBLE_COMMANDS),
           "MENU_STRUCTURE covers %r but VISIBLE_COMMANDS is %r"
-          % (in_menus, mod.VISIBLE_COMMANDS), errors)
-    check(list(mod.VISIBLE_COMMANDS) == [n for n in tb if n != "Separator"],
+          % (in_menus, silk.VISIBLE_COMMANDS), errors)
+    check(list(silk.VISIBLE_COMMANDS) == [n for n in tb if n != "Separator"],
           "the toolbar and VISIBLE_COMMANDS disagree about what is visible",
           errors)
 
@@ -302,6 +304,7 @@ def test_every_visible_command_is_registered(doc):
         return {"pass": False, "errors": errors, "checks": checks}
 
     mod, _tree = load_initgui()
+    silk = mod.Silk
     # run the real import block so registration happens even in a session
     # where the Silk workbench has not been activated
     init = initialize_node(_tree)
@@ -309,7 +312,7 @@ def test_every_visible_command_is_registered(doc):
         importlib.import_module(name)
 
     registered = set(Gui.listCommands())
-    missing = [n for n in mod.VISIBLE_COMMANDS if n not in registered]
+    missing = [n for n in silk.VISIBLE_COMMANDS if n not in registered]
     check(not missing,
           "listed but NOT registered with FreeCAD: %r" % missing, errors)
 
@@ -322,7 +325,7 @@ def test_every_visible_command_is_registered(doc):
         QAction = QtGui.QAction
     mw = Gui.getMainWindow()
     acted, labelled = [], []
-    for name in mod.VISIBLE_COMMANDS:
+    for name in silk.VISIBLE_COMMANDS:
         action = mw.findChild(QAction, name)
         if action is None:
             errors.append("no QAction named %s -- the command exists but "
@@ -347,6 +350,7 @@ def test_initialize_keeps_the_legacy_import_block(doc):
     visible-list cleanup."""
     errors, checks = [], []
     mod, tree = load_initgui()
+    silk = mod.Silk
     init = initialize_node(tree)
     imports = imported_modules(init)
 
@@ -390,9 +394,120 @@ def test_initialize_keeps_the_legacy_import_block(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_initialize_survives_freecad_namespace_strip(doc):
+    """Regression (#50 follow-up, found in the real GUI): FreeCAD loads a
+    workbench's InitGui.py by exec'ing it into __main__ and then STRIPPING
+    the names the file defined back out of that namespace -- the registered
+    class's methods keep __main__ as their globals, so a module-level
+    constant referenced from Initialize() raises NameError and the
+    workbench fails to load ("name 'VISIBLE_COMMANDS' is not defined").
+
+    Executing the file in a plain namespace hides this, because nothing is
+    stripped there. So this test reproduces the real path: exec the file,
+    then delete every name the file itself defined (keeping the injected
+    builtins FreeCAD provides), then run the real Initialize(). The visible
+    commands must still be there -- which they only are because they are
+    CLASS ATTRIBUTES, not module globals.
+    """
+    errors, checks = [], []
+
+    class _SilentWorkbench(object):
+        menus = []
+        toolbars = []
+
+        def appendMenu(self, menu, items):
+            self.menus.append((list(menu), list(items)))
+
+        def appendToolbar(self, bar, items):
+            self.toolbars.append((bar, list(items)))
+
+        def appendContextMenu(self, menu, items):
+            pass
+
+        def GetClassName(self):
+            return "Gui::PythonWorkbench"
+
+    path = os.path.abspath(INITGUI)
+    with open(path) as fh:
+        src = fh.read()
+    tree = ast.parse(src, path)
+    body = [n for n in tree.body if not _is_addworkbench_call(n)]
+    mod = types.ModuleType("SilkInitGuiStripped")
+    mod.__dict__["__file__"] = path
+    mod.__dict__["Workbench"] = _SilentWorkbench
+    exec(compile(ast.Module(body=body, type_ignores=[]), path, "exec"),
+         mod.__dict__)
+
+    # Reproduce FreeCAD: keep only what FreeCAD itself injected, drop
+    # every name the file defined at module level. (FreeCAD strips the
+    # class name too; the registered workbench instance holds the class
+    # alive regardless, so we keep our own reference first.)
+    silk_cls = mod.Silk
+    file_defined = set()
+    for node in body:
+        if isinstance(node, ast.Assign):
+            file_defined.update(t.id for t in node.targets
+                                if isinstance(t, ast.Name))
+        elif isinstance(node, ast.ClassDef):
+            file_defined.add(node.name)
+        elif isinstance(node, (ast.FunctionDef, ast.Import, ast.ImportFrom)):
+            name = getattr(node, "name", None) or getattr(node, "module", None)
+            if name:
+                file_defined.add(name.split(".")[0])
+    for name in file_defined:
+        mod.__dict__.pop(name, None)
+    checks.append("stripped %d module-level names the way FreeCAD does"
+                  % len(file_defined))
+
+    probe = silk_cls()
+    probe.menus = []
+    probe.toolbars = []
+    try:
+        probe.Initialize()          # the real Initialize(), stripped ns
+    except NameError as e:
+        errors.append("Initialize() raised NameError after FreeCAD's "
+                      "namespace strip: %s -- the visible-command lists "
+                      "must be class attributes, not module globals" % e)
+        return {"pass": False, "errors": errors, "checks": checks}
+    except Exception as e:
+        errors.append("Initialize() raised %s after the namespace strip: %s"
+                      % (type(e).__name__, e))
+        return {"pass": False, "errors": errors, "checks": checks}
+
+    check(probe.list == list(silk_cls.VISIBLE_COMMANDS),
+          "after the strip, self.list is %r, expected %r"
+          % (probe.list, list(silk_cls.VISIBLE_COMMANDS)), errors)
+    check([c for _p, cmds in probe.menus for c in cmds]
+          == list(silk_cls.VISIBLE_COMMANDS),
+          "after the strip, the menus name %r, expected %r"
+          % ([c for _p, cmds in probe.menus for c in cmds],
+             list(silk_cls.VISIBLE_COMMANDS)), errors)
+    checks.append("Initialize() survived the strip: self.list = %r, %d "
+                  "menus, %d toolbar"
+                  % (probe.list, len(probe.menus), len(probe.toolbars)))
+
+    # And the guard itself: Initialize() must not reach for the old bare
+    # module globals -- assert from its AST that every load of the list
+    # names is an attribute access (self.X), not a bare Name.
+    cls_node = [n for n in body if isinstance(n, ast.ClassDef)][0]
+    init_node = [n for n in cls_node.body
+                 if isinstance(n, ast.FunctionDef) and n.name == "Initialize"][0]
+    bare = sorted({n.id for n in ast.walk(init_node)
+                   if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                   and n.id in ("VISIBLE_COMMANDS", "TOOLBAR_STRUCTURE",
+                                 "MENU_STRUCTURE", "TOOLBAR_NAME")})
+    check(not bare,
+          "Initialize() still reads the bare module global(s) %r; they must "
+          "be read through self.<name> (class attributes)" % (bare,), errors)
+    checks.append("Initialize() reads the lists through self.*, not bare "
+                  "module globals")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_visible_commands_are_exactly_the_five,
     test_grouped_structures_reference_only_visible_commands,
     test_every_visible_command_is_registered,
     test_initialize_keeps_the_legacy_import_block,
+    test_initialize_survives_freecad_namespace_strip,
 ]
