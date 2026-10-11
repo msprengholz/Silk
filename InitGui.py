@@ -29,6 +29,52 @@ if test_path not in sys.path:
     sys.path.insert(0, test_path)
 
 
+# ----------------------------------------------------------------------
+# Visible commands (ticket #50)
+#
+# Everything below decides only what the user SEES. Every import in
+# Initialize() stays, because old documents keep their proxies in the
+# legacy modules and those modules must be importable when a document is
+# opened:
+#
+#   Silk_2Boundaries.FCStd               -> ArachNURBS
+#   Silk_2BoundariesAndControlGrids.FCStd-> ArachNURBS + SilkWorkflow
+#   Silk_Workflow.FCStd                  -> SilkPatch44 / SilkBlend / SilkEdge
+#   Silk_Corner2x2.FCStd                 -> SilkEdge / SilkPatch / SilkBlend / SilkCorner
+#
+# Dropping a name from the lists below neither unregisters its command
+# nor unloads its module, so documents keep restoring exactly as before.
+# Retiring the legacy modules themselves is a separate track.
+# ----------------------------------------------------------------------
+
+# The workflow triad -- one command per process step: Edge -> Patch -> Blend
+WORKFLOW_COMMANDS = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend"]
+
+# The task panel
+GUIDE_COMMANDS = ["Silk_Guide"]
+
+# Development helper (hot reload)
+DEV_COMMANDS = ["Reload_Silk"]
+
+# Every command the workbench offers the user, in workflow order
+VISIBLE_COMMANDS = WORKFLOW_COMMANDS + GUIDE_COMMANDS + DEV_COMMANDS
+
+# Silk -> Workflow / Guide / Dev. appendMenu takes a LIST as its first
+# argument, where every entry after the first one is a level of submenu.
+MENU_STRUCTURE = [
+	(["Silk", "Workflow"], WORKFLOW_COMMANDS),
+	(["Silk", "Guide"], GUIDE_COMMANDS),
+	(["Silk", "Dev"], DEV_COMMANDS),
+]
+
+# One flat toolbar. "Separator" is a valid entry in a toolbar list and
+# renders as a toolbar separator.
+TOOLBAR_NAME = "Silk Commands"
+TOOLBAR_STRUCTURE = (WORKFLOW_COMMANDS + ["Separator"]
+                     + GUIDE_COMMANDS + ["Separator"]
+                     + DEV_COMMANDS)
+
+
 class Silk (Workbench):
 	
 	def __init__(self):
@@ -74,47 +120,13 @@ class Silk (Workbench):
 		import Reload_Silk
 		import SilkGuidePanel
 
-		# A list of command names created by the imports above
-		self.list = ["ControlPoly4",
-					"CubicCurve_4", 
-					"Point_onCurve", 
-					"BoundarySpline", 
-					"Silk_CreateEdge", 
-					"ControlPoly4_segment",
-					"ControlGrid44",
-					"ControlGrid44_Rotate",
-					"ControlGrid44_flow",
-					"CubicSurface_44",
-					"ControlGrid44_EdgeSegment",
-					"ControlGrid44_2EdgeSegments",
-					"ControlPoly6",
-					"CubicCurve_6",
-					"ControlGrid66",
-					"CubicSurface_66",
-					"ControlGrid64",
-					"CubicSurface_64",
-					"ControlGrid64_2Grid44",
-					"ControlGrid64_3_1Grid44",
-					"ControlGrid64_normal",
-					"ControlGrid64_Surf44",
-					"SubGrid33_2Grid64",
-					"ControlGrid66_4Sub",
-					"SubGrid63_2Surf64",
-					"ControlGridNStar66",
-					"CubicNStarSurface_NStar66",
-					"StarTrim_CubicNStar",
-					"SilkPose",
-					"Reload_Silk",
-					"Silk_CreateBoundarySpline",
-					"Silk_CreateControlGridPatch",
-					"Silk_CreatePatch",
-					"Silk_CreateBlend",
-					"Silk_Guide"] 
-					
-		
-		self.appendToolbar("Silk Commands",self.list) # creates a new toolbar with your commands
-		self.appendMenu("Silk",self.list) # creates a new menu
-		#self.appendMenu(["An existing Menu","My submenu"],self.list) # appends a submenu to an existing menu
+		# Only the five visible commands, in their three groups. All of
+		# them are registered by the imports above.
+		self.list = list(VISIBLE_COMMANDS)
+
+		self.appendToolbar(TOOLBAR_NAME, list(TOOLBAR_STRUCTURE))
+		for menu_path, commands in MENU_STRUCTURE:
+			self.appendMenu(list(menu_path), list(commands))
 
 	def Activated(self):
 		"This function is executed when the workbench is activated"
