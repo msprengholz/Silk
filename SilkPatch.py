@@ -27,6 +27,21 @@
 #    path that can produce a patch is fixed at once; an already-cyclic
 #    list comes back untouched, which is what preserves the legacy
 #    Patch44/Patch33 pole parity.
+#
+#    #67: ...and then it KEEPS the answer. #66 resolved the cycle for the
+#    fill but left the stored list in the order it arrived, so for a
+#    clicked-around selection the object contradicted itself: `Edges[k]`
+#    was not boundary side k, and both the data tab and the oracle said so
+#    (P1_corner_order / P2_boundary_match fail on a non-cyclic list).
+#    execute() now writes the resolved cycle back onto `Edges` — only when
+#    it differs, so a cyclic list takes the byte-identical path it always
+#    did (the legacy pole parity and the chain ground truth ride on that).
+#    `Edges[k]` IS boundary side k by construction, for any input order,
+#    and one recompute later the list is cyclic, so the write is a fixed
+#    point rather than a ping-pong. The 3-edge pointed fill is NOT touched
+#    -- its Patch33 parity rides on the list it is handed. (Not because it
+#    is already order-independent: see the note at the normalization
+#    site and #68.)
 
 import FreeCAD
 import Part
@@ -54,8 +69,21 @@ class Patch:
     """Unified Patch proxy (object_type='Patch')."""
 
     def __init__(self, obj, edges):
+        # #67: the Edges list is a CYCLE and is stored AS the cycle. You
+        # may hand it any order (click order from the panel, hand-order in
+        # the data tab, whatever an old file restored) and execute() writes
+        # back the resolved boundary cycle whenever it differs, so entry k
+        # is boundary side k: row U0 / col V3 / row U3 / col V0 for the
+        # quad fill, and the 3 pointed edges for the pointed fill. An
+        # already-cyclic list is left exactly as it is, byte for byte.
+        # This is visible in the data tab -- the Edges row shows the
+        # normalized cycle, not the click order -- and that is the point:
+        # the stored value describes the geometry it produced.
         obj.addProperty("App::PropertyLinkList", "Edges", "C1 - Inputs",
-                        "boundary edges (3 for the pointed fill, 4 for the quad fill)").Edges = list(edges)
+                        "boundary edges as the closed loop (3 for the "
+                        "pointed fill, 4 for the quad fill); entry k is "
+                        "boundary side k -- execute() normalizes any input "
+                        "order into this cycle").Edges = list(edges)
         obj.addProperty("App::PropertyFloat", "tolerance", "C1 - Inputs",
                         "endpoint matching tolerance").tolerance = AN.default_tol
         obj.addProperty("App::PropertyBool", "reverse", "C1 - Inputs",
@@ -104,6 +132,9 @@ class Patch:
         self._subsurfaces = []
         self._sub_legs = []
         self._base_surface = None
+        # #67: re-entrancy guard for the Edges-cycle write. See
+        # _store_boundary_cycle.
+        self._normalizing_edges = False
 
     def onDocumentRestored(self, obj):
         obj.recompute()
@@ -334,17 +365,23 @@ class Patch:
         identical 4 edges in the same order (pole parity at 1e-6 is what
         later lets the unified pipeline reproduce the chain — #40).
 
-        #66: the cycle is DERIVED from the edges' own endpoints before
-        the fill runs, so the list's own order no longer decides whether
-        the patch builds. The `Edges` property is whatever the user
-        produced — the panel collects in click order, the data tab can be
-        hand-reordered, an old document restores whatever it saved — and
-        walking it blind meant 16 of the 24 permutations of one valid
-        4-edge loop produced a valid, up-to-date, INVISIBLE ghost.
-        `loop_order` returns the input list unchanged when it is already
-        cyclic, so an in-order list takes the byte-identical path it
-        always did (that is the pole parity), and a clicked-around list
-        builds the same surface with the pole indices turned around.
+        #66: the cycle is DERIVED from the edges' own endpoints, so the
+        # list's own order no longer decides whether the patch builds.
+        # The `Edges` property arrives in whatever order the user
+        # produced — the panel collects in click order, the data tab can
+        # be hand-reordered, an old document restores whatever it saved —
+        # and walking it blind meant 16 of the 24 permutations of one
+        # valid 4-edge loop produced a valid, up-to-date, INVISIBLE
+        # ghost.
+        #
+        # #67: execute() has ALREADY normalized the stored list and
+        # hands the cycle in through `inputs`, so the call below is the
+        # structural no-op -- it returns that very list -- and this fill
+        # reads the list the property shows. It stays (and keeps its
+        # refusal path) because the fill must be callable standalone, and
+        # because an in-order list must take the byte-identical path it
+        # always did: that is the legacy pole parity, and the chain
+        # ground truth rides on it.
         """
         inputs = list(inputs if inputs is not None else fp.Edges)
         tol = fp.tolerance
@@ -478,6 +515,56 @@ class Patch:
 
         return poles, weights
 
+    # ---- boundary cycle normalization (#67) ------------------------------
+
+    def _store_boundary_cycle(self, fp, was, cycle):
+        """Persist the resolved boundary cycle onto `fp.Edges` (#67).
+
+        `was` is the list the fill was handed, `cycle` the loop
+        `SilkMachinery.loop_order` derived from it. Returns True when the
+        property was written.
+
+        Three rules, and each one is load-bearing:
+
+        1. WRITE ONLY WHEN IT DIFFERS. An already-cyclic list takes the
+           path it has always taken -- that is the legacy Patch44/Patch33
+           pole parity (0.00e+00) and the chain ground truth, so no write,
+           no reserialization, no document churn. "Differs" is compared
+           ELEMENT BY ELEMENT BY IDENTITY, not by list identity: the
+           question we actually care about is "are the same edge objects
+           in the same slots", and comparing that way does not lean on
+           loop_order's internal trick of handing the caller's own list
+           object back. A helper that helpfully rebuilt an equal list
+           would still be recognized as unchanged.
+
+        2. GUARDED AGAINST RE-ENTRANCY. The assignment fires onChanged,
+           and execute() is already running. `Edges` is not in the
+           recompute-trigger list (it is a link list, not a geometry
+           knob), and the assignment's Touched flag is cleared by the
+           purgeTouched() in execute()'s finally -- but a flag makes the
+           invariant explicit rather than incidental: at most one write
+           per execute, whatever FreeCAD decides to call in between.
+
+        3. IDEMPOTENT, therefore CONVERGENT. After the write the stored
+           list IS the cycle, so the next execute()'s loop_order returns
+           it unchanged (rule 1) and writes nothing. Fixed point, no
+           ping-pong -- asserted by the tests, not hoped for.
+        """
+        if len(was) != len(cycle):
+            return False
+        if all(a is b for a, b in zip(was, cycle)):
+            return False                      # already the cycle
+        if self._normalizing_edges:
+            return False                      # rule 2
+        self._normalizing_edges = True
+        try:
+            fp.Edges = list(cycle)
+        except Exception:
+            return False
+        finally:
+            self._normalizing_edges = False
+        return True
+
     # ---- execute ---------------------------------------------------------
 
     def execute(self, fp):
@@ -558,8 +645,34 @@ class Patch:
             build_display(fp, Part.Shape(), [], [], [], False)
             return
 
+        # #67: normalize the STORED boundary list before the fill reads
+        # it, so the fill consumes exactly what the property says.
+        # `Edges` is a cycle; it may arrive in any order (panel click
+        # order, hand-order in the data tab, an old file's saved order).
+        # `loop_order` derives the cycle from the edges' own endpoints,
+        # the write below persists it, and the fill then runs on the
+        # stored cycle -- which is what makes `Edges[k]` boundary side k
+        # for ANY input order, not just for a canonical fixture.
+        #
+        # Only the quad (4-edge) fill is normalized. The 3-edge pointed
+        # fill is left alone: its parity with Patch33 rides on the list it
+        # is given. Do NOT read that as "the pointed fill is fine" -- it
+        # builds poles for every ordering (6/6) but its OUTPUT is
+        # order-dependent, and it does not satisfy the Edges[k]-is-side-k
+        # invariant this method exists to establish: on a curved corner
+        # triple it is oracle-red on 6/6. Pre-existing, tracked in #68.
+        # A list that does not close is NOT written -- _quad_fill refuses
+        # it with the per-edge message, and a refusal leaves the stored
+        # list exactly as the user had it, which is what they can fix.
+        fill_inputs = inputs
+        if len(inputs) == 4:
+            cycle, _problem = loop_order(inputs, fp.tolerance)
+            if cycle is not None:
+                self._store_boundary_cycle(fp, inputs, cycle)
+                fill_inputs = cycle
+
         filled = (self._pointed_fill(fp) if len(inputs) == 3
-                  else self._quad_fill(fp, inputs))
+                  else self._quad_fill(fp, fill_inputs))
         if filled is None:
             # degenerate / non-connecting loop: leave the object empty/valid
             fp.Poles = []; fp.Weights = []; fp.Legs = []

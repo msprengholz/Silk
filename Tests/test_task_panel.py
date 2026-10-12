@@ -591,6 +591,120 @@ def test_patch_section_reports_success_only_for_a_patch_that_built(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_every_patch_the_panel_hands_back_is_oracle_green(doc):
+    """#67 GUARD: whatever the user clicks, the patch the panel RETURNS is
+    oracle-green on its OWN Edges list.
+
+    This is the guard the #67 bug made necessary. The defect was invisible
+    because every existing assertion either fed a canonical fixture or fed
+    the oracle a hand-computed cycle instead of the object's own property:
+    `check_patch(p, list(p.Edges))` -- the honest call, and the one a user
+    makes when they open the data tab -- was never written down. So this
+    test does not test a behaviour, it closes a class of gap: it walks a
+    spread of click orders through the REAL panel (not create_patch) and
+    asserts the oracle, fed `list(p.Edges)`, is green every time.
+
+    The spread is deliberate rather than exhaustive: the full 24 orderings
+    are enumerated in test_patch_stage
+    (test_patch_stored_cycle_is_self_consistent_for_all_24_orderings), and
+    what needs covering HERE is the panel path -- click order -> collect ->
+    confirm -> object -- which is a different set of code from the ops
+    call. Six orders: canonical, both rotations, both reversals, and two
+    awkward ones, plus the 3-edge pointed fill."""
+    errors, checks = [], []
+    import itertools
+    from Tests.test_patch_gui_command import _make_loop_edges
+    from Tests.test_seam_resolver import _Capture
+    from SilkChecks import check_patch
+
+    edges = _make_loop_edges(doc)
+    orders = [
+        ("canonical", [0, 1, 2, 3]),
+        ("rotation", [1, 2, 3, 0]),
+        ("rotation2", [2, 3, 0, 1]),
+        ("rotation3", [3, 0, 1, 2]),
+        ("reversed", [3, 2, 1, 0]),
+        ("reversed-rot", [1, 0, 3, 2]),
+        ("awkward", [2, 0, 3, 1]),
+        ("awkward2", [1, 3, 0, 2]),
+    ]
+    # and one genuinely non-cyclic order that is NOT a rotation or a
+    # reversal, as the sharpest single case
+    orders.append(("shuffled", [0, 2, 1, 3]))
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.toolbox.setCurrentIndex(1)          # the Patch section
+        for label, perm in orders:
+            sel = [edges[i] for i in perm]
+            for e in sel:
+                _click(e)
+            if not check(len(panel.collected()) == 4,
+                         "%s: four clicks collected %d"
+                         % (label, len(panel.collected())), errors):
+                continue
+            with _Capture() as cap:
+                ok = panel.panel_confirm()
+            doc.recompute()
+            patches = _objects(doc, "Patch")
+            check(ok, "%s: confirm reported failure (%r)"
+                  % (label, panel.status_text()), errors)
+            check(len(patches) >= 1, "%s: no patch created" % label, errors)
+            if not patches:
+                continue
+            p = patches[-1]
+            stored = list(p.Edges)
+            fails = [(n, d) for (n, good, d) in check_patch(p, stored)
+                     if not good]
+            check(not fails,
+                  "%s: the panel handed back a patch whose OWN Edges list "
+                  "fails the oracle: %s" % (label, fails), errors)
+            check(len(stored) == 4 and len(list(p.Poles)) == 16,
+                  "%s: %d edges / %d poles" % (label, len(stored),
+                                               len(list(p.Poles))), errors)
+            check(not (p.Shape is None or p.Shape.isNull()) and
+                  bool(p.Shape.Faces),
+                  "%s: the panel handed back an invisible patch" % label,
+                  errors)
+            errors += ["%s: console error: %s" % (label, e)
+                       for e in cap.errors]
+        # And the 3-edge pointed fill, through the panel too -- #67 does
+        # NOT normalize that list (its Patch33 parity rides on the list
+        # it is handed), so this is pinned from the same fixture the
+        # pointed oracle test uses. Note this pins the FLAT-triangle
+        # fixture, where the pointed fill is oracle-green; on a curved
+        # corner triple it is not (#68).
+        from Tests.test_patch_stage import _make_triangle_edges
+        tri = _make_triangle_edges(doc)
+        for e in tri:
+            _click(e)
+        with _Capture() as cap3:
+            ok3 = panel.panel_confirm()
+        doc.recompute()
+        pointed = _objects(doc, "Patch")
+        check(ok3 and pointed, "the 3-edge pointed fill was refused", errors)
+        if pointed:
+            pp = pointed[-1]
+            pfails = [(n, d)
+                      for (n, good, d) in check_patch(pp, list(pp.Edges))
+                      if not good]
+            check(not pfails,
+                  "the pointed patch fails the oracle on its own Edges: %s"
+                  % pfails, errors)
+            checks.append("3-edge pointed fill -> %s, oracle green on "
+                          "list(p.Edges)" % pp.Name)
+        errors += ["pointed: console error: %s" % e for e in cap3.errors]
+        checks.append("%d click orders through the real panel -> every "
+                      "returned patch oracle-green on list(p.Edges)"
+                      % len(orders))
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 # ---- uniform interaction rules ---------------------------------------------
 
 def test_wrong_type_clicks_are_silently_ignored(doc):
@@ -2050,6 +2164,8 @@ ALL_TESTS = [
     test_patch_stage_collect_four_edges_then_confirm,
     test_patch_stage_three_edges_give_the_pointed_fill,
     test_patch_section_reports_success_only_for_a_patch_that_built,
+    # #67 guard: nothing the panel hands back may fail the oracle on its own
+    test_every_patch_the_panel_hands_back_is_oracle_green,
     test_wrong_type_clicks_are_silently_ignored,
     test_ok_disabled_until_the_open_section_is_valid,
     test_one_confirm_is_one_undo_step,

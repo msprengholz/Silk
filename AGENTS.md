@@ -35,6 +35,8 @@ creates them anymore.
 ### Patch (`SilkPatch.py`)
 - `Part::FeaturePython` (not group); object_type="Patch"
 - One variable-length `Edges` link list (PropertyLinkList) is the single boundary input; `execute()` picks the fill from the count (4 edges → quad, 3 edges → pointed — same 16 poles as the legacy fills at 1e-6)
+- **The stored `Edges` list IS the boundary cycle** (#67). You may supply it in any order — panel click order, hand-order in the data tab, an old file's saved order — and `execute()` writes the resolved cycle back with `loop_order` when, and only when, it differs. So `Edges[k]` is boundary side `k` **by construction**: `check_patch(p, list(p.Edges))` is the honest oracle call for any input order. A non-cyclic list is *not* stored (a non-closing one is refused, list untouched). Visible consequence: the data tab shows the normalized cycle, not the raw click order. An already-cyclic list takes the byte-identical no-op path (legacy pole parity `0.00e+00`, chain ground truth), and the write is a one-shot fixed point: one write per execute, then nothing.
+- The 3-edge pointed fill is **not** normalized — its Patch33 parity rides on the list it is handed. Careful with the claim here: it is order-independent only in the sense that **every** ordering builds poles (6/6). Its *output* is not order-independent, and it does **not** satisfy the `Edges[k]`-is-side-`k` invariant above — on a curved corner triple (`Seam_X`/`Seam_Y`/`Seam_Z`) it builds 6/6 but is oracle-red on 6/6 (`C1_corner_order`, `C2_boundary_match`). Pre-existing, untouched by #66/#67, tracked in #68. Do not cite it as a verified invariant.
 - 16 poles + 16 weights (4×4 grid)
 - Subgrids stored internally in `_subgrids` and `_subsurfaces` (not in FreeCAD tree)
 - Display toggles: ShowSurface, ShowGrid, ShowSubgrids, AutoHideBlend
@@ -234,6 +236,7 @@ class CaptureConsole:
 - Stage tests: `test_edge_stage.py` (E1–E4 oracle), `test_patch_stage.py` (P1–P4), `test_blend_stage.py` (B1–B4), `test_chain.py` (full 9→7→2→1 rebuild, the acceptance gate — always runs)
 - Ops layer: `SilkWorkflowOps.py` (`create_edge`, `create_patch`, `create_blend`) — the only construction path; oracle: `SilkChecks.py` (`check_edge`, `check_patch`, `check_blend`)
 - The harness monkey-patches `popup.tipsDialog` to a console stub so unattended runs never block on modal popups
+- **Self-consistency guard (#67)**: every patch the ops layer or the panel hands back is asserted oracle-green on its OWN `list(p.Edges)` — in `test_patch_stage.test_patch_stored_cycle_is_self_consistent_for_all_24_orderings` (all 24 orderings, square + curved ground truth) and `test_task_panel.test_every_patch_the_panel_hands_back_is_oracle_green` (9 click orders + the pointed fill through the real panel). Feeding the oracle a hand-computed cycle instead of `p.Edges` is the trap: it hides a stored list that disagrees with its own geometry, which is exactly how the #67 defect shipped green.
 - RPC runs must `del` all `sys.modules` entries starting with `Silk`/`Tests`/`ArachNURBS` before importing (done in `run_all.py`'s remote code) — otherwise the long-lived RPC process runs stale cached modules
 
 ## Reference Files

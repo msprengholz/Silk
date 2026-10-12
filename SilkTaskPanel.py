@@ -1112,6 +1112,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         names the offending edges, and the collection survives so the user
         can fix it -- the #62 stale-entry idiom, one transaction, nothing
         left behind.
+
+        #67: the created Patch also KEEPS the resolved cycle in its
+        `Edges` property, so entry k is boundary side k whatever the
+        click order was. The panel hands back a patch that is
+        self-consistent -- its stored edge list is the cycle its geometry
+        was built from -- rather than one whose data tab contradicts its
+        own surface. Nothing to do here: the normalization lives in the
+        Patch, so the data-tab and old-document paths get it too.
         """
         edges = self.collected(SECTION_PATCH)
         stale = self.stale_items()

@@ -584,6 +584,457 @@ def test_pointed_fill_all_orderings_unchanged(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+# ---- #67: the STORED list is the cycle ---------------------------------
+#
+# #66 made the fill order-independent but never wrote the answer back, so a
+# clicked-around patch contradicted itself: `Edges[k]` was not boundary
+# side k, and both the data tab and the oracle said so (P1_corner_order /
+# P2_boundary_match red on 16 of 24 orderings). The suite stayed green
+# because every #66 fixture passes edges in canonical order, where
+# `loop_order` is a no-op -- no test ever asked whether the OBJECT agreed
+# with itself. These tests ask exactly that, for all 24 orderings.
+
+
+def test_patch_stored_cycle_is_self_consistent_for_all_24_orderings(doc):
+    """#67 HEADLINE: for EVERY ordering, `check_patch(p, list(p.Edges))` is
+    green AND `p.Edges` is exactly the resolved cycle.
+
+    This is the assertion whose absence let #67's bug ship: #66's own
+    tests compared SURFACES (which a reordering preserves) and never read
+    the stored property back. The oracle here is fed `list(p.Edges)` --
+    what the object claims -- not the selection that was passed in, so a
+    patch that normalised its geometry but not its property would still
+    fail. P1_corner_order and P2_boundary_match are named explicitly
+    because those two are the ones that go red on a non-cyclic list.
+
+    Curved ground-truth edges are used as well as the synthetic square:
+    a flat square is the easy case, and #66 already learned that lesson.
+    """
+    errors, checks = [], []
+    from SilkWorkflowOps import create_patch
+    from SilkChecks import check_patch
+
+    fixtures = [("square", _make_loop_edges(doc))]
+    fx, tmp = _open_fixture_copy()
+    FreeCAD.setActiveDocument(doc.Name)
+    try:
+        fixtures.append(
+            ("curved", _build_gt_edges(doc, fx, GT_PATCH44_EDGES)))
+
+        for label, edges in fixtures:
+            bad_oracle, bad_cycle, bad_props = [], [], []
+            for perm in itertools.permutations(range(4)):
+                sel = [edges[i] for i in perm]
+                plabel = "".join(str(i) for i in perm)
+                patch = create_patch(sel, name="SC")
+                if patch is None:
+                    bad_oracle.append("%s (no object)" % plabel)
+                    continue
+
+                # (1) SELF-CONSISTENCY: the oracle, fed the STORED list.
+                stored = list(patch.Edges)
+                fails = {n: d for (n, ok, d) in check_patch(patch, stored)
+                         if not ok}
+                for key in ("P1_corner_order", "P2_boundary_match"):
+                    if key in fails:
+                        bad_oracle.append("%s %s: %s"
+                                          % (plabel, key, fails[key]))
+                if fails:
+                    bad_oracle.append("%s other: %s" % (plabel, fails))
+
+                # (2) the stored list IS a closed cycle, derived
+                # independently from the edges' own endpoints -- and it
+                # starts with the first edge that was passed in (the
+                # #66 rotation rule), so the normalization is the
+                # documented one, not an arbitrary reshuffle.
+                adj_ok, detail = _is_closed_cycle(stored)
+                if not adj_ok:
+                    bad_cycle.append("%s: %s" % (plabel, detail))
+                elif stored[0] is not sel[0]:
+                    bad_cycle.append("%s: cycle does not lead with the "
+                                     "first collected edge" % plabel)
+
+                # (3) the property itself is intact: 4 links, 16 poles,
+                #     a real shape.
+                if len(stored) != 4 or len(list(patch.Poles)) != 16:
+                    bad_props.append("%s (%d edges, %d poles)"
+                                     % (plabel, len(stored),
+                                        len(list(patch.Poles))))
+                elif patch.Shape is None or patch.Shape.isNull():
+                    bad_props.append("%s: null shape" % plabel)
+                elif not patch.Shape.Faces:
+                    bad_props.append("%s: shape has no face (invisible "
+                                     "ghost)" % plabel)
+
+            if bad_oracle:
+                errors.append("%s: the oracle is not green when fed the "
+                              "patch's OWN Edges list: %s"
+                              % (label, bad_oracle[:12]))
+            else:
+                checks.append("%s: all 24 orderings oracle-green on "
+                              "list(p.Edges) (structural, P1_corner_order, "
+                              "P2_boundary_match, P3, P4)" % label)
+            if bad_cycle:
+                errors.append("%s: p.Edges is not the resolved cycle for: %s"
+                              % (label, bad_cycle[:12]))
+            else:
+                checks.append("%s: all 24 orderings stored a closed cycle "
+                              "leading with the first collected edge" % label)
+            if bad_props:
+                errors.append("%s: object damaged for: %s"
+                              % (label, bad_props[:12]))
+            else:
+                checks.append("%s: all 24 orderings kept 4 links, 16 poles "
+                              "and a real face" % label)
+    finally:
+        FreeCAD.closeDocument(fx.Name)
+        FreeCAD.setActiveDocument(doc.Name)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def _is_closed_cycle(edges, tol=1e-6):
+    """(ok, detail) -- do consecutive entries of `edges` meet, and last to
+    first? Written from the POLE ENDPOINTS alone (distance, no production
+    helper), so it is the same independent restatement of "cycle" the
+    oracle's P1/P2 checks are, not a call back into loop_order."""
+    n = len(edges)
+    if n < 3:
+        return False, "only %d entries" % n
+    for i in range(n):
+        a = list(edges[i].Poles)
+        b = list(edges[(i + 1) % n].Poles)
+        near = min((p - q).Length for p in a for q in b)
+        if near > tol:
+            return False, ("entry %d (%s) does not meet entry %d (%s): "
+                           "closest endpoints %.3e apart"
+                           % (i, edges[i].Name, (i + 1) % n,
+                              edges[(i + 1) % n].Name, near))
+    return True, "closed"
+
+
+class _WriteSpy(object):
+    """Count the cycle writes on one Patch proxy, by wrapping the proxy's
+    own store method. Restores itself on exit -- a test must not leave a
+    monkey-patch on a production class."""
+
+    def __init__(self):
+        self.writes = []
+
+    def __enter__(self):
+        import SilkPatch
+        self._cls = SilkPatch.Patch
+        self._orig = self._cls._store_boundary_cycle
+        spy = self
+
+        def wrapped(self_, fp, was, cycle):
+            did = self._orig(self_, fp, was, cycle)
+            if did:
+                spy.writes.append([e.Name for e in was])
+            return did
+
+        self._cls._store_boundary_cycle = wrapped
+        return self
+
+    def __exit__(self, *a):
+        self._cls._store_boundary_cycle = self._orig
+
+
+def test_patch_cycle_write_is_a_one_shot_fixed_point(doc):
+    """#67: the write HAPPENS ONCE and the recompute CONVERGES -- and a
+    cyclic input never writes at all.
+
+    `execute()` both reads `fp.Edges` and writes `fp.Edges`, which is
+    exactly the shape that ping-pongs if you get it wrong. Three claims,
+    each measured rather than argued:
+
+      1. an awkwardly ordered input is rewritten exactly ONCE, during the
+         creation recompute;
+      2. every later recompute -- forced by touch(), so nothing is
+         skipped -- leaves the stored order alone and leaves the object
+         Up-to-date (no Touched residue from the write, no recompute
+         cycle with a Blend, no churn);
+      3. an ALREADY-CYCLIC input writes NOTHING, ever: not at creation,
+         not on any later recompute, not for any of the 8 cyclic
+         rotations / reversals. That is what keeps the legacy
+         Patch44/Patch33 pole parity at 0.00e+00 -- an unnecessary
+         rewrite would reserialize a good list and drift every restored
+         legacy surface.
+    """
+    errors, checks = [], []
+    from SilkWorkflowOps import create_patch
+
+    edges = _make_loop_edges(doc)
+
+    # (1)+(2) an awkward order: one write, then a fixed point.
+    awkward = [edges[2], edges[0], edges[3], edges[1]]
+    with _WriteSpy() as spy:
+        patch = create_patch(awkward, name="Conv")
+        n_after_create = len(spy.writes)
+        seq = []
+        for _ in range(6):
+            patch.touch()
+            doc.recompute()
+            seq.append((tuple(e.Name for e in patch.Edges),
+                        tuple(patch.State)))
+    if n_after_create != 1:
+        errors.append("an awkwardly ordered input caused %d writes during "
+                      "creation, expected exactly 1"
+                      % n_after_create)
+    else:
+        checks.append("awkward order -> exactly 1 cycle write during "
+                      "creation: %s -> %s" % (spy.writes[0],
+                                               [e.Name for e in patch.Edges]))
+    if len(spy.writes) != 1:
+        errors.append("the cycle was rewritten %d times in total "
+                      "(expected 1, then never again): %s"
+                      % (len(spy.writes), spy.writes))
+    else:
+        checks.append("6 further forced recomputes wrote nothing "
+                      "(fixed point, no ping-pong)")
+    settled = set(seq)
+    if len(settled) != 1:
+        errors.append("the stored order or State changed across recomputes: "
+                      "%s" % sorted(settled))
+    elif list(next(iter(settled))[1]) != ["Up-to-date"]:
+        errors.append("the patch is left %s after the write -- the property "
+                      "assignment's Touched flag was not cleared"
+                      % (next(iter(settled))[1],))
+    else:
+        checks.append("stable across 6 recomputes at %s, State %s"
+                      % (list(next(iter(settled))[0]),
+                         list(next(iter(settled))[1])))
+
+    # (3) a cyclic input: never a write, for any cyclic order.
+    cyclic_edges = _make_loop_edges(doc)
+    rotations = [[cyclic_edges[(i + k) % 4] for i in range(4)]
+                 for k in range(4)]
+    rotations += [[cyclic_edges[(k - i) % 4] for i in range(4)]
+                  for k in range(4)]
+    total = 0
+    for rot in rotations:
+        with _WriteSpy() as spy2:
+            p = create_patch(rot, name="NoOp")
+            total += len(spy2.writes)
+            for _ in range(2):
+                p.touch()
+                doc.recompute()
+            total += len(spy2.writes)
+            if [e.Name for e in p.Edges] != [e.Name for e in rot]:
+                errors.append("a cyclic input was reordered on storage: %s "
+                              "-> %s" % ([e.Name for e in rot],
+                                         [e.Name for e in p.Edges]))
+    if total:
+        errors.append("an already-cyclic input caused %d cycle writes; it "
+                      "must take the byte-identical no-op path" % total)
+    else:
+        checks.append("all %d cyclic rotations/directions: 0 writes across "
+                      "creation + 2 forced recomputes each (byte-identical "
+                      "no-op path preserved)" % len(rotations))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_patch_cycle_converges_when_the_user_reorders_the_data_tab(doc):
+    """#67: a HAND reordering of `Edges` in the data tab is normalized on
+    the next recompute, and the object stops there.
+
+    The data tab is the third producer of a non-cyclic list (after the
+    panel's click order and an old file's saved order), so it needs the
+    same one-shot guarantee -- and it is the one a user can repeat at will.
+    Reordering again is not an error: the patch simply normalizes once
+    more, and the geometry follows the new stored order rather than the
+    old one."""
+    errors, checks = [], []
+    from SilkWorkflowOps import create_patch
+    from SilkChecks import check_patch
+
+    edges = _make_loop_edges(doc)
+    patch = create_patch(list(edges), name="Tab")
+    before = [e.Name for e in patch.Edges]
+
+    # Two data-tab edits, because the two cases differ and both matter.
+    #
+    # (a) A pure ROTATION is already a cycle, so there is nothing to
+    #     normalize and nothing must be written -- the #66 no-op, still
+    #     intact. Asserted separately so the real case below cannot pass
+    #     by accident.
+    cyclic_moved = [edges[1], edges[2], edges[3], edges[0]]
+    patch.Edges = cyclic_moved
+    patch.touch()
+    with _WriteSpy() as spy_rot:
+        doc.recompute()
+    if len(spy_rot.writes):
+        errors.append("a pure rotation of the boundary was rewritten (%d "
+                      "writes); a rotation is already a cycle"
+                      % len(spy_rot.writes))
+    elif [e.Name for e in patch.Edges] != [e.Name for e in cyclic_moved]:
+        errors.append("a cyclic rotation was not stored verbatim: %s"
+                      % [e.Name for e in patch.Edges])
+    else:
+        checks.append("data-tab rotation %s is already cyclic -> stored "
+                      "verbatim, 0 writes" % [e.Name for e in cyclic_moved])
+
+    # (b) A genuine shuffle: right next to top. This one DOES get
+    #     normalized -- back onto the cycle that leads with the first
+    #     entry, which for a rotation of the square is the original
+    #     canonical order. So the stored order after normalization is
+    #     `before`, and the honest assertion is that the RAW order the
+    #     user typed was replaced by a cycle -- not that it differs from
+    #     `before`, which for this fixture it does not.
+    moved = [edges[1], edges[2], edges[0], edges[3]]
+    raw = [e.Name for e in moved]
+    patch.Edges = moved
+    # `Edges` is a link list, not one of the recompute-trigger properties
+    # (onChanged watches the split lists and the display toggles only), so
+    # a data-tab edit needs the explicit touch any geometry edit does. The
+    # point of the test is the WRITE, not the trigger.
+    patch.touch()
+    with _WriteSpy() as spy:
+        doc.recompute()
+        first = [e.Name for e in patch.Edges]
+        for _ in range(4):
+            patch.touch()
+            doc.recompute()
+        again = [e.Name for e in patch.Edges]
+
+    if first == raw:
+        errors.append("the data-tab shuffle %s was stored raw -- it is not a "
+                      "cycle" % raw)
+    else:
+        checks.append("data-tab shuffle %s -> %s, normalized in one "
+                      "recompute" % (raw, first))
+    if list(again) != list(first):
+        errors.append("the data-tab reorder did not settle: %s -> %s"
+                      % (first, again))
+    if len(spy.writes) != 1:
+        errors.append("the data-tab reorder caused %d writes, expected 1"
+                      % len(spy.writes))
+    else:
+        checks.append("exactly 1 write, then a fixed point over 4 further "
+                      "recomputes")
+
+    ok, detail = _is_closed_cycle(patch.Edges)
+    if not ok:
+        errors.append("after the data-tab reorder the stored list is not a "
+                      "cycle: %s" % detail)
+    fails = [(n, d) for (n, good, d) in check_patch(patch, list(patch.Edges))
+             if not good]
+    if fails:
+        errors.append("the oracle is not green after the data-tab reorder: "
+                      "%s" % fails)
+    else:
+        checks.append("oracle green on list(p.Edges) after the reorder")
+
+    if patch.Shape is None or patch.Shape.isNull():
+        errors.append("the patch lost its surface across the data-tab "
+                      "shuffle")
+    else:
+        checks.append("shape still has %d face(s), area %.4f"
+                      % (len(patch.Shape.Faces), patch.Shape.Area))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_blend_across_two_awkwardly_ordered_patches_resolves(doc):
+    """#67: a Blend across two patches whose edges were each supplied in a
+    non-cyclic order resolves the seam and builds its 24 poles.
+
+    The user's report was "i also cant blend two of these hidden
+    patches", and #66's answer was that the patch was a ghost. #67's
+    extra risk is the reverse one: if the stored list is now rewritten,
+    a seam resolver that reads edge IDENTITY must still see the same two
+    patches referencing the shared edge. `create_blend_by_edge` resolves
+    purely on identity, and the band is taken from the patches' subgrid
+    cells, so neither cares about the list's order -- this pins that,
+    because it is the kind of invariant that a normalizing write can
+    quietly break.
+    """
+    errors, checks = [], []
+    from SilkWorkflowOps import create_patch, create_blend_by_edge
+    from SilkChecks import check_patch, check_blend
+    from Tests.test_seam_resolver import _Capture
+
+    from Tests.test_seam_resolver import _line_sketch
+    from SilkWorkflowOps import create_edge
+
+    # Two genuinely ADJACENT squares sharing one Edge object: the left
+    # square is x in [0,50], the right one x in [50,100], and the seam is
+    # the vertical side at x=50. (Two COINCIDENT squares would share all
+    # four corners and degenerate the band cell, which is a fixture
+    # problem, not a normalization problem -- the seam resolver's own
+    # tests use coincidence only where no blend surface is built.)
+    # left square, cyclic: bottom -> seam -> top -> left
+    L = {
+        "bottom": [(0, 0, 0), (16.7, 0, 0), (33.3, 0, 0), (50, 0, 0)],
+        "top":    [(50, 50, 0), (33.3, 50, 0), (16.7, 50, 0), (0, 50, 0)],
+        "left":   [(0, 50, 0), (0, 33.3, 0), (0, 16.7, 0), (0, 0, 0)],
+    }
+    R = {
+        "bottom": [(50, 0, 0), (66.7, 0, 0), (83.3, 0, 0), (100, 0, 0)],
+        "top":    [(100, 50, 0), (83.3, 50, 0), (66.7, 50, 0), (50, 50, 0)],
+        "right":  [(100, 0, 0), (100, 16.7, 0), (100, 33.3, 0), (100, 50, 0)],
+    }
+    # the ONE shared edge object: the left square's right side, run in the
+    # opposite direction to the right square's left side (as real seams
+    # are), so the resolver cannot pass by accident.
+    seam_sk = _line_sketch(doc, "Seam_sk",
+                           [(50, 0, 0), (50, 16.7, 0), (50, 33.3, 0),
+                            (50, 50, 0)])
+    shared = create_edge(seam_sk, name="Seam")
+
+    def build(prefix, table, skip):
+        out = {}
+        for key, pts in table.items():
+            sk = _line_sketch(doc, "%s_sk_%s" % (prefix, key), pts)
+            out[key] = create_edge(sk, name="%s_%s" % (prefix, key))
+        out["seam"] = shared
+        return out
+
+    a = build("LA", L, None)
+    b = build("RB", R, None)
+
+    # Both fed in a deliberately WRONG order, and a DIFFERENT wrong order
+    # each -- so the two patches are not symmetric about the seam.
+    pa = create_patch([a["bottom"], a["seam"], a["left"], a["top"]],
+                      name="AwkA")
+    pb = create_patch([b["seam"], b["right"], b["top"], b["bottom"]],
+                      name="AwkB")
+    for nm, p in (("AwkA", pa), ("AwkB", pb)):
+        if p is None:
+            errors.append("%s did not build" % nm)
+            continue
+        fails = [(n, d) for (n, ok, d) in check_patch(p, list(p.Edges))
+                 if not ok]
+        if fails:
+            errors.append("oracle not green on %s's own Edges: %s"
+                          % (nm, fails))
+    if errors:
+        return {"pass": False, "errors": errors, "checks": checks}
+    checks.append("both awkwardly ordered patches oracle-green on "
+                  "list(p.Edges): %s" % [e.Name for e in pa.Edges])
+
+    with _Capture() as cap:
+        blend = create_blend_by_edge(shared, name="AwkBlend")
+    if blend is None:
+        errors.append("the seam was not resolved across two awkwardly "
+                      "ordered patches (console: %s)" % cap.errors)
+        return {"pass": False, "errors": errors, "checks": checks}
+    if len(list(blend.Poles)) != 24:
+        errors.append("the blend built %d poles, expected 24"
+                      % len(list(blend.Poles)))
+    elif blend.Shape is None or blend.Shape.isNull():
+        errors.append("the blend has a NULL shape -- the invisible-ghost "
+                      "symptom #66 was about, back through the seam")
+    fails = [(n, d) for (n, ok, d) in check_blend(blend, pa, pb) if not ok]
+    if fails:
+        errors.append("blend oracle flagged the awkward-order blend: %s"
+                      % fails)
+    else:
+        checks.append("blend: 24 poles, non-null shape, full oracle green")
+    errors += ["console error: %s" % e for e in cap.errors
+               if "cannot" not in e]
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 def _make_stray_edge(doc, name="Stray"):
     """One 4-pole edge far away from everything -- a loop with a hole in
     it rather than a loop."""
@@ -822,4 +1273,9 @@ ALL_TESTS = [
     test_patch_parity_canonical_order_matches_legacy,
     test_pointed_fill_all_orderings_unchanged,
     test_patch_non_closing_selection_creates_nothing,
+    # #67 -- the STORED list is the cycle, and the object agrees with itself
+    test_patch_stored_cycle_is_self_consistent_for_all_24_orderings,
+    test_patch_cycle_write_is_a_one_shot_fixed_point,
+    test_patch_cycle_converges_when_the_user_reorders_the_data_tab,
+    test_blend_across_two_awkwardly_ordered_patches_resolves,
 ]

@@ -67,6 +67,12 @@ def create_patch(edges, name="Patch"):
     "Patch created". The 3-edge pointed fill keeps its documented
     graceful degradation (empty valid object), so the count check below
     stays as it was.
+
+    #67: the returned Patch's `Edges` property is that normalized CYCLE,
+    not the order the caller passed -- entry k is boundary side k. So
+    `check_patch(p, list(p.Edges))` is the honest oracle call whatever
+    order the selection arrived in; there is no second hidden order to
+    know about.
     """
     edges = [e for e in list(edges or []) if e is not None]
     if len(edges) == 4:
