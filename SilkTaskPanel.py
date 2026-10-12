@@ -37,6 +37,16 @@
 #    collected entry is REFUSED LOUDLY, naming the item -- never
 #    silently dropped (that would turn a quad patch into a pointed one).
 #
+#    A Patch confirm succeeds for ANY order the edges were clicked in
+#    (#66): the fill derives the boundary cycle from the edges' own
+#    endpoints, so this panel never reorders anything itself. What it does
+#    police is the selection that genuinely cannot become a patch -- one
+#    that does not close a loop. That is refused LOUDLY, before anything
+#    is constructed, naming the offending edges; the collection survives
+#    so the user can fix it, and nothing is left behind. Success is
+#    reported only for a patch that actually built poles (#66: the old
+#    "Patch created" on an invisible ghost).
+#
 #    Every seam row, BLENDED ones included, carries its band's split
 #    editor: the seam's band is the blend's cross-section, so the width
 #    stays tunable once the blend exists (#62 follow-up). Collectability
@@ -65,7 +75,7 @@ except ImportError:  # pragma: no cover - console-only FreeCAD
 from SilkGuide import compute_guide_state
 from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge
 from SilkMachinery import patch_side, build_intervals, \
-    corner_cells, split_at_end
+    corner_cells, split_at_end, loop_order
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -1090,10 +1100,29 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         return True
 
     def confirm_patch(self):
+        """Confirm the collected edges into ONE patch, and report success
+        only for a patch that ACTUALLY built (#66).
+
+        The fill derives the boundary cycle from the edges' own
+        endpoints, so the order the user clicked them in no longer
+        decides whether the patch exists -- that landmine is defused in
+        SilkMachinery.loop_order, not here. What is left for the panel to
+        police is the one case no fill can save: a selection that does not
+        close a loop at all. Then no object is created, the console error
+        names the offending edges, and the collection survives so the user
+        can fix it -- the #62 stale-entry idiom, one transaction, nothing
+        left behind.
+        """
         edges = self.collected(SECTION_PATCH)
         stale = self.stale_items()
         if stale:
             return self._refuse_stale(stale)
+        _, problem = loop_order(edges)
+        if problem:
+            self._refuse("Silk: cannot apply -- the %d collected edges do "
+                         "not close a loop (%s). Nothing was created; the "
+                         "collection is unchanged." % (len(edges), problem))
+            return False
         doc = self.doc
         doc.openTransaction("Silk patch")
         try:
@@ -1104,6 +1133,20 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         if patch is None:
             self.status_lbl.setText(tap.errors[-1].strip() if tap.errors
                                     else "no patch created")
+            return False
+        if not list(getattr(patch, "Poles", None) or []):
+            # A patch with no poles is not a patch -- it is the invisible
+            # ghost #66 is about. Refuse loudly, and take the empty object
+            # back out so a refusal leaves NOTHING behind (#62's idiom).
+            name = patch.Name
+            doc.openTransaction("Silk patch")
+            try:
+                doc.removeObject(name)
+            finally:
+                doc.commitTransaction()
+            self._refuse("Silk: cannot apply -- the fill produced no poles, "
+                         "so %s would have rendered nothing. Nothing was "
+                         "kept; the collection is unchanged." % name)
             return False
         self._collected[SECTION_PATCH] = []
         self.refresh()

@@ -20,6 +20,7 @@ import FreeCAD
 from SilkEdge import Edge, EdgeViewProvider
 from SilkPatch import Patch, PatchViewProvider
 from SilkBlend import Blend, BlendStripViewProvider, BLEND_TYPES, PATCH_TYPES
+from SilkMachinery import loop_order
 
 
 def create_edge(sketches, name="Edge"):
@@ -55,10 +56,31 @@ def create_patch(edges, name="Patch"):
     create_patch (Patch44) / create_patch33 (Patch33) builders are
     gone -- direct construction of the legacy classes survives only
     for parity evidence and old-document restore.
+
+    #66: a 4-edge selection that does not close a loop is REFUSED here,
+    before anything is constructed: a console error naming the offending
+    edges, and None. The fill itself reorders a good list into cycle
+    order (SilkMachinery.loop_order), so the caller may pass the edges in
+    any order -- click order from the panel included. What is left is a
+    selection that genuinely cannot become a patch, and the old answer to
+    that was a valid, up-to-date, INVISIBLE object plus a cheerful
+    "Patch created". The 3-edge pointed fill keeps its documented
+    graceful degradation (empty valid object), so the count check below
+    stays as it was.
     """
+    edges = [e for e in list(edges or []) if e is not None]
+    if len(edges) == 4:
+        order, problem = loop_order(edges)
+        if order is None:
+            FreeCAD.Console.PrintError(
+                "Silk: cannot create a Patch from these 4 edges -- they do "
+                "not close a loop (%s). Nothing was created; a patch "
+                "boundary is ONE closed loop of 4 edges meeting corner to "
+                "corner.\n" % problem)
+            return None
     doc = FreeCAD.ActiveDocument
     obj = doc.addObject("Part::FeaturePython", name)
-    Patch(obj, list(edges))
+    Patch(obj, edges)
     PatchViewProvider(obj.ViewObject)
     obj.ViewObject.LineWidth = 1.50
     obj.ViewObject.LineColor = (0.67, 1.00, 1.00)

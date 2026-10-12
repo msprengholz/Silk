@@ -10,7 +10,49 @@ green (structural + P1-P4), no console errors.
 Negative: deliberately corrupted pole states / wrong edge arguments
 must be flagged by the corresponding checks -- the oracle returns
 failures, it never raises.
+
+Ticket #66 -- the edge ORDER is not the user's problem any more.
+The `Edges` link list arrives in whatever order it was produced: the
+task panel collects in CLICK order, the property editor can be
+hand-reordered, an old document restores whatever it saved. The quad
+fill used to walk that list blind, so a pair of consecutive entries
+that did not share an endpoint failed the whole fill -- 16 of the 24
+permutations of one valid 4-edge loop produced a valid, up-to-date,
+INVISIBLE ghost, and `create_patch` reported success on it. What is
+asserted here:
+
+  1. ALL 24 orderings of one valid 4-edge set build, and every one of
+     them is the SAME SURFACE -- compared as a surface (sampled through
+     the 8 symmetries of the parametric square, which is exactly the
+     freedom a cyclic rotation / reversal of the boundary is), not as a
+     pole vector. This is the headline test: stronger than "no longer
+     crashes", and it is the property the ticket actually asks for.
+  2. The 3-edge pointed fill is untouched: all 6 orderings still build,
+     and the canonical order still matches legacy Patch33 at 1e-6.
+  3. PARITY: the canonical order reproduces the legacy Patch44 poles at
+     1e-6 (weights exactly), and `loop_order` on an already-cyclic list
+     is a genuine NO-OP -- it hands back the very list it was given, in
+     the very order, for all 8 cyclic rotations/directions. Without
+     that, the chain gate would stop reproducing ground truth and
+     legacy restore would drift.
+  4. A selection that genuinely cannot close a loop creates NOTHING and
+     names the offending edges -- in create_patch AND in the
+     Silk_CreatePatch command.
+  5. The panel's Patch section reports success only for a patch that
+     actually built.
+
+Fixtures are built in memory; where a stored ground truth is needed the
+fixture file is COPIED to a scratch directory first and the copy is
+opened -- the human's live FreeCAD may already have the originals open,
+and FreeCAD.openDocument would hand back (and then close) their
+documents. Nothing under Resources/Test_files is ever opened, saved or
+closed by this module.
 """
+
+import itertools
+import os
+import shutil
+import tempfile
 
 import FreeCAD
 import os
@@ -66,6 +108,23 @@ def _make_loop_edges(doc):
     return edges
 
 
+# Closed, doubly-curved triangle for the 3-edge (pointed) fill, cyclic
+# order t0..t2. CURVED on purpose: the flat triangle the panel tests use
+# builds a pointed fill whose surface the oracle's mesh step reports as
+# self-intersecting (P4), and that is true of the legacy Patch33 on the
+# same edges too -- a property of the flat fixture, not of #66. On the
+# curved triangle every ordering is green, which is what makes the
+# orderings comparable at all.
+_TRI_PTS = {
+    "t0": [Vector(0, 0, 0), Vector(33.3, 0, 3),
+           Vector(66.7, 0, 6), Vector(100, 0, 10)],
+    "t1": [Vector(100, 0, 10), Vector(90, 33, 20),
+           Vector(70, 66, 35), Vector(50, 100, 40)],
+    "t2": [Vector(50, 100, 40), Vector(30, 66, 38),
+           Vector(10, 33, 20), Vector(0, 0, 0)],
+}
+
+
 class _CaptureConsole:
     def __enter__(self):
         self.errors = []
@@ -75,6 +134,17 @@ class _CaptureConsole:
 
     def __exit__(self, *args):
         FreeCAD.Console.PrintError = self._orig
+
+
+def _make_triangle_edges(doc):
+    """Three edges forming a closed triangle loop, cyclic order t0..t2 --
+    the pointed fill's input."""
+    from SilkWorkflowOps import create_edge
+    edges = []
+    for i in range(3):
+        sk = _make_3l_sketch(doc, "TriSketch%d" % i, _TRI_PTS["t%d" % i])
+        edges.append(create_edge(sk, name="TriEdge%d" % i))
+    return edges
 
 
 def _copy_fixture_edge(doc, fixture_doc, edge_name, sketch_names):
@@ -110,6 +180,499 @@ def _build_gt_patch(doc, fixture_doc):
     edges = _build_gt_edges(doc, fixture_doc, GT_PATCH44_EDGES)
     patch = create_patch(edges, name="Patch")
     return patch, edges
+
+
+# ---- #66: the edge ORDER is derived, not trusted ------------------------
+#
+# The oracle below is deliberately INDEPENDENT of the production helper:
+# it builds the bicubic surface itself from the patch's poles and compares
+# it as a SURFACE, sampled through the 8 symmetries of the parametric
+# square. That symmetry group is exactly the freedom a cyclic rotation /
+# reversal of the boundary order is -- the same four boundary curves, the
+# same patch, a different pole indexing -- so "the same surface" is the
+# honest statement, and "no longer crashes" is not.
+
+# The 8 symmetries of [0,1]^2 as (u, v) maps, named. `I` is the identity;
+# `R` is a quarter turn; `F` mirrors u.
+_SYMMETRIES = (
+    ("I", lambda u, v: (u, v)),
+    ("R", lambda u, v: (3 - v, u)),
+    ("R2", lambda u, v: (3 - u, 3 - v)),
+    ("R3", lambda u, v: (v, 3 - u)),
+    ("F", lambda u, v: (3 - u, v)),
+    ("FR", lambda u, v: (v, u)),
+    ("FR2", lambda u, v: (u, 3 - v)),
+    ("FR3", lambda u, v: (3 - v, 3 - u)),
+)
+
+# Sample the patch on a 7x7 interior grid -- coarse enough to be quick,
+# fine enough that a rotated-but-different surface cannot hide.
+_SAMPLE_N = 7
+
+
+def _sample_points(poles, weights, n=_SAMPLE_N):
+    """(u, v, point) over an n x n interior grid of the bicubic patch."""
+    surf = Part.BSplineSurface()
+    surf.increaseDegree(3, 3)
+    for knot in (0.0, 1.0):
+        surf.insertUKnot(knot, 4, 1e-7)
+        surf.insertVKnot(knot, 4, 1e-7)
+    for r in range(4):
+        for c in range(4):
+            surf.setPole(c + 1, r + 1, poles[r * 4 + c], weights[r * 4 + c])
+    out = []
+    for i in range(n):
+        for j in range(n):
+            u = (i + 0.5) / n
+            v = (j + 0.5) / n
+            out.append((u, v, surf.value(u, v)))
+    return out
+
+
+def _same_surface(ref, cand, tol=1e-6):
+    """(ok, worst, how) -- are two (poles, weights) pairs the same patch?
+
+    `same` means: there is one symmetry of the parametric square under
+    which every sampled point of `cand` matches the corresponding point
+    of `ref`. True surface equality up to the cyclic rotation / reversal
+    that a reordered edge list induces, checked as points rather than as
+    pole indices so no indexing convention can fake it.
+    """
+    ref_pts = _sample_points(ref[0], ref[1])
+    cand_pts = _sample_points(cand[0], cand[1])
+    if len(ref_pts) != len(cand_pts):
+        return False, float("inf"), "sample grids differ in size"
+    best = None
+    for name, sym in _SYMMETRIES:
+        worst = 0.0
+        for (u, v, p_ref), (u2, v2, p_cand) in zip(ref_pts, cand_pts):
+            # indices, not normalised coordinates -- the map is on the grid
+            i, j = int(u * _SAMPLE_N), int(v * _SAMPLE_N)
+            i2, j2 = sym(i, j)
+            target = ref_pts[i2 * _SAMPLE_N + j2][2]
+            worst = max(worst, (p_ref - target).Length)
+        if best is None or worst < best[0]:
+            best = (worst, name)
+        if worst <= tol:
+            return True, worst, name
+    return False, best[0], "worst symmetry %s" % best[1]
+
+
+def _patches(doc):
+    return [o for o in doc.Objects
+            if getattr(o, "object_type", None) == "Patch"]
+
+
+def _open_fixture_copy():
+    """Open a COPY of the ground-truth fixture in a scratch directory.
+
+    Never openDocument the file under Resources/Test_files/: the human's
+    FreeCAD may already have it open, in which case openDocument hands
+    back THAT document -- and the test's `closeDocument` in a finally
+    block then takes the human's work down with it (it has happened).
+    The copy is a byte-for-byte fixture; nothing under the repo is
+    touched. Returns (doc, scratch_dir); the caller closes the doc and
+    removes the scratch dir."""
+    tmp = tempfile.mkdtemp(prefix="silk_patch_stage_")
+    dst = os.path.join(tmp, os.path.basename(FIXTURE))
+    shutil.copy2(FIXTURE, dst)
+    return FreeCAD.openDocument(dst), tmp
+
+
+def test_patch_order_independence_all_24_permutations(doc):
+    """#66 HEADLINE: all 24 orderings of one valid 4-edge set build, and
+    every one of them is the SAME SURFACE as the canonical build.
+
+    Before #66 exactly 8 of the 24 built anything (the 4 rotations x 2
+    directions of the true cycle) and the other 16 produced a valid,
+    up-to-date, INVISIBLE object that `create_patch` happily returned --
+    the user's "patches are invisible, blends are impossible" bug.
+
+    The comparison is a surface comparison under the 8 symmetries of the
+    parametric square (see `_same_surface`), NOT a pole-vector
+    comparison: a reordered boundary is the same patch with the pole
+    indices turned around, so demanding identical indices would be
+    demanding the bug. The oracle is built here in the test, from
+    Part, with no production code in it.
+    """
+    errors, checks = [], []
+    from SilkWorkflowOps import create_patch
+
+    edges = _make_loop_edges(doc)
+    ref_patch = create_patch(edges, name="PatchRef")
+    if len(ref_patch.Poles) != 16:
+        errors.append("the canonical build has %d poles, expected 16"
+                      % len(ref_patch.Poles))
+        return {"pass": False, "errors": errors, "checks": checks}
+    ref = (list(ref_patch.Poles), list(ref_patch.Weights))
+
+    built, ghosts, mismatch = 0, [], []
+    for perm in itertools.permutations(range(4)):
+        sel = [edges[i] for i in perm]
+        with _CaptureConsole() as cap:
+            patch = create_patch(sel, name="PatchP")
+        label = "".join(str(i) for i in perm)
+        if patch is None:
+            ghosts.append("%s (no object)" % label)
+            continue
+        if len(patch.Poles) != 16:
+            ghosts.append("%s (%d poles)" % (label, len(patch.Poles)))
+            continue
+        if cap.errors:
+            errors.append("ordering %s printed errors: %s"
+                          % (label, cap.errors))
+        built += 1
+        ok, worst, how = _same_surface(ref, (list(patch.Poles),
+                                            list(patch.Weights)))
+        if not ok:
+            mismatch.append("%s (worst %.3e via %s)"
+                            % (label, worst, how))
+
+    if ghosts:
+        errors.append("%d/24 orderings produced no surface (ghosts): %s"
+                      % (len(ghosts), ghosts))
+    else:
+        checks.append("all 24 orderings built 16 poles + a surface "
+                      "(0 invisible ghosts)")
+    if mismatch:
+        errors.append("%d/24 orderings are a DIFFERENT surface from the "
+                      "canonical build: %s" % (len(mismatch), mismatch))
+    else:
+        checks.append("all 24 orderings are the same surface as the "
+                      "canonical build (sampled on a 7x7 interior grid, "
+                      "matched through the 8 symmetries of the square)")
+    checks.append("orderings compared: 24, built: %d" % built)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_patch_order_independence_curved_ground_truth(doc):
+    """The 24-ordering guarantee on the REAL curved ground-truth edges,
+    not only on the synthetic square -- a flat square is the easy case.
+
+    The 7 fixture edges are rebuilt in the test doc from the copied
+    fixture's sketches, so the loop is the same asymmetric, curved,
+    non-trivial boundary the chain gate uses."""
+    errors, checks = [], []
+    from SilkWorkflowOps import create_patch
+
+    fixture, tmp = _open_fixture_copy()
+    FreeCAD.setActiveDocument(doc.Name)
+    try:
+        edges = _build_gt_edges(doc, fixture, GT_PATCH44_EDGES)
+        ref_patch = create_patch(edges, name="GTRef")
+        if len(ref_patch.Poles) != 16:
+            errors.append("canonical curved build has %d poles, expected 16"
+                          % len(ref_patch.Poles))
+            return {"pass": False, "errors": errors, "checks": checks}
+        ref = (list(ref_patch.Poles), list(ref_patch.Weights))
+        ref_area = ref_patch.Shape.Area
+
+        ghosts, mismatch = [], []
+        for perm in itertools.permutations(range(4)):
+            sel = [edges[i] for i in perm]
+            patch = create_patch(sel, name="GTP")
+            label = "".join(str(i) for i in perm)
+            if patch is None or len(patch.Poles) != 16:
+                ghosts.append("%s (%s)"
+                              % (label, "none" if patch is None
+                                 else "%d poles" % len(patch.Poles)))
+                continue
+            ok, worst, how = _same_surface(ref, (list(patch.Poles),
+                                                list(patch.Weights)))
+            if not ok:
+                mismatch.append("%s (worst %.3e via %s)"
+                                % (label, worst, how))
+            elif abs(patch.Shape.Area - ref_area) > 1e-6 * max(1.0, ref_area):
+                mismatch.append("%s (area %.6f vs %.6f)"
+                                % (label, patch.Shape.Area, ref_area))
+        if ghosts:
+            errors.append("%d/24 curved orderings produced no surface: %s"
+                          % (len(ghosts), ghosts))
+        else:
+            checks.append("all 24 curved orderings built 16 poles + a "
+                          "surface (0 ghosts)")
+        if mismatch:
+            errors.append("%d/24 curved orderings differ from the "
+                          "canonical surface: %s"
+                          % (len(mismatch), mismatch))
+        else:
+            checks.append("all 24 curved orderings match the canonical "
+                          "surface AND its area (%.4f)" % ref_area)
+    finally:
+        FreeCAD.closeDocument(fixture.Name)
+        FreeCAD.setActiveDocument(doc.Name)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_patch_loop_order_is_a_noop_for_a_cyclic_list(doc):
+    """PARITY, half one: `loop_order` hands an already-cyclic list back
+    UNCHANGED -- the same list, the same order -- for all 8 cyclic
+    rotations/directions of a good edge set.
+
+    This is load-bearing, not a nicety. The fill feeds its result
+    straight into the legacy ControlGrid44_4 arithmetic, so "unchanged"
+    is what makes the chain gate reproduce ground truth at 1e-6 and
+    keeps an old document restoring to the poles it was saved with. A
+    helper that helpfully re-serialized a good list would silently
+    resample every legacy surface in the workbench."""
+    errors, checks = [], []
+    from SilkMachinery import loop_order
+
+    edges = _make_loop_edges(doc)
+
+    # the identity first: the canonical list comes back as the SAME object
+    same_obj, problem = loop_order(edges)
+    if same_obj is not edges:
+        errors.append("loop_order rebuilt the canonical list instead of "
+                      "returning it unchanged")
+    else:
+        checks.append("canonical list returned as the identical object "
+                      "(no reserialization)")
+
+    # then every cyclic rotation and both directions
+    rotations = []
+    for k in range(4):
+        rotations.append([edges[(i + k) % 4] for i in range(4)])
+        rotations.append([edges[(k - i) % 4] for i in range(4)])
+    for rot in rotations:
+        out, prob = loop_order(rot)
+        if prob is not None:
+            errors.append("loop_order refused a CYCLIC list %s: %s"
+                          % ([e.Name for e in rot], prob))
+        elif [e.Name for e in out] != [e.Name for e in rot]:
+            errors.append("loop_order reordered a cyclic list: %s -> %s"
+                          % ([e.Name for e in rot], [e.Name for e in out]))
+    if not errors:
+        checks.append("all %d cyclic rotations/directions returned "
+                      "verbatim, in the given order" % len(rotations))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_patch_parity_canonical_order_matches_legacy(doc):
+    """PARITY, half two: the canonical order still reproduces the legacy
+    Patch44 / Patch33 poles at 1e-6 and their weights exactly.
+
+    #66 must not have moved a single legacy number: the chain gate
+    (test_chain) pole-matches both patches and the blend against stored
+    ground truth at 1e-6, and legacy restore depends on the same
+    numbers. Compared against the legacy classes constructed directly
+    (the restore shims), not against a copy of the old code."""
+    errors, checks = [], []
+    from Tests.test_patch_unified import (_make_legacy_patch44,
+                                          _make_legacy_patch33)
+    from SilkWorkflowOps import create_patch
+
+    edges = _make_loop_edges(doc)
+    p44 = _make_legacy_patch44(doc, edges, name="P44")
+    pun = create_patch(edges, name="PUn")
+    dmax = max((a - b).Length for a, b in zip(pun.Poles, p44.Poles))
+    if dmax > 1e-6:
+        errors.append("quad pole parity deviates by %.3e (tol 1e-6)" % dmax)
+    wmax = max(abs(a - b) for a, b in zip(pun.Weights, p44.Weights))
+    if wmax > 1e-12:
+        errors.append("quad weight parity deviates by %.3e" % wmax)
+    checks.append("canonical quad order -> Patch44: max pole dev %.2e, "
+                  "weight dev %.2e (tol 1e-6)" % (dmax, wmax))
+
+    tri = _make_triangle_edges(doc)
+    p33 = _make_legacy_patch33(doc, tri, name="P33")
+    pun3 = create_patch(tri, name="PUn3")
+    d3 = max((a - b).Length for a, b in zip(pun3.Poles, p33.Poles))
+    if d3 > 1e-6:
+        errors.append("pointed pole parity deviates by %.3e (tol 1e-6)" % d3)
+    w3 = max(abs(a - b) for a, b in zip(pun3.Weights, p33.Weights))
+    if w3 > 1e-12:
+        errors.append("pointed weight parity deviates by %.3e" % w3)
+    checks.append("canonical pointed order -> Patch33: max pole dev %.2e, "
+                  "weight dev %.2e (tol 1e-6)" % (d3, w3))
+
+    # and the chain's own ground truth, through the copied fixture
+    fixture, tmp = _open_fixture_copy()
+    FreeCAD.setActiveDocument(doc.Name)
+    try:
+        gt_patch, _gt_edges = _build_gt_patch(doc, fixture)
+        stored = fixture.getObject("Patch44")
+        dg = max((a - b).Length for a, b in zip(gt_patch.Poles, stored.Poles))
+        wg = max(abs(a - b) for a, b in zip(gt_patch.Weights, stored.Weights))
+        if dg > 1e-6:
+            errors.append("ground-truth quad deviates from stored Patch44 "
+                          "by %.3e" % dg)
+        if wg > 1e-12:
+            errors.append("ground-truth quad weights deviate by %.3e" % wg)
+        checks.append("chain ground truth -> stored Patch44: max pole dev "
+                      "%.2e, weight dev %.2e" % (dg, wg))
+    finally:
+        FreeCAD.closeDocument(fixture.Name)
+        FreeCAD.setActiveDocument(doc.Name)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_pointed_fill_all_orderings_unchanged(doc):
+    """The 3-edge pointed fill is NOT touched by #66: all 6 orderings
+    build, the oracle is green on each, and the canonical order is
+    byte-for-byte what it always was.
+
+    The pointed fill was already order-independent (it collapses the
+    U=0 column onto the corner shared by edges 0+2, so any ordering of
+    the three curves still closes). #66 must leave that alone: the
+    reorder helper is consulted by the QUAD fill only, and this test
+    would notice if it were not -- a permuted pointed build that
+    differed from the canonical one in poles (not just in index order)
+    would mean the pointed path had started consuming a reordered
+    list.
+
+    Also pins the OTHER half of "leave its result alone": a permuted
+    pointed build must be the SAME SURFACE as the canonical one, exactly
+    as for the quad -- if the helper ever leaked into the 3-edge path,
+    the surfaces would differ and this would catch it."""
+    errors, checks = [], []
+    from SilkWorkflowOps import create_patch
+    from SilkChecks import check_patch
+
+    tri = _make_triangle_edges(doc)
+    base = create_patch(tri, name="PTBase")
+    if len(base.Poles) != 16:
+        errors.append("canonical pointed build has %d poles" % len(base.Poles))
+        return {"pass": False, "errors": errors, "checks": checks}
+    canon = (list(base.Poles), list(base.Weights))
+
+    empties, bad_oracle, bad_surface = [], [], []
+    for perm in itertools.permutations(range(3)):
+        sel = [tri[i] for i in perm]
+        label = "".join(str(i) for i in perm)
+        patch = create_patch(sel, name="PT")
+        if patch is None or len(patch.Poles) != 16:
+            empties.append(label)
+            continue
+        bad = [(n, d) for (n, ok, d) in check_patch(patch, sel) if not ok]
+        if bad:
+            bad_oracle.append("%s: %s" % (label, bad))
+        ok, worst, how = _same_surface(canon, (list(patch.Poles),
+                                               list(patch.Weights)))
+        if not ok:
+            bad_surface.append("%s (worst %.3e via %s)" % (label, worst, how))
+    if empties:
+        errors.append("pointed orderings with no poles: %s" % empties)
+    else:
+        checks.append("all 6 pointed orderings built 16 poles")
+    if bad_oracle:
+        errors.append("oracle flagged a pointed build: %s" % bad_oracle)
+    else:
+        checks.append("oracle green on all 6 pointed orderings (C1-C3, "
+                      "P3-P4)")
+    if bad_surface:
+        errors.append("permuted pointed builds are not the canonical "
+                      "surface: %s" % bad_surface)
+    else:
+        checks.append("all 6 pointed orderings are the same surface as the "
+                      "canonical build")
+
+    # the canonical order is the legacy baseline, untouched
+    again = create_patch(tri, name="PTAgain")
+    exact = max((a - b).Length for a, b in zip(again.Poles, canon[0]))
+    wexact = max(abs(a - b) for a, b in zip(again.Weights, canon[1]))
+    if exact != 0.0 or wexact != 0.0:
+        errors.append("canonical pointed build is not reproducible "
+                      "exactly (pole dev %.3e, weight dev %.3e)"
+                      % (exact, wexact))
+    else:
+        checks.append("canonical pointed poles AND weights reproduce "
+                      "EXACTLY (dev 0.0) -- the fill is byte-for-byte "
+                      "what it was before #66")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def _make_stray_edge(doc, name="Stray"):
+    """One 4-pole edge far away from everything -- a loop with a hole in
+    it rather than a loop."""
+    from SilkWorkflowOps import create_edge
+    pts = [Vector(200, 200, 0), Vector(210, 200, 0),
+           Vector(220, 200, 0), Vector(230, 200, 0)]
+    sk = _make_3l_sketch(doc, name + "_sk", pts)
+    return create_edge(sk, name=name)
+
+
+def test_patch_non_closing_selection_creates_nothing(doc):
+    """#66, refusal half: a selection that cannot close a loop creates NO
+    object and NAMES the offending edges -- in `create_patch` AND in the
+    Silk_CreatePatch command.
+
+    #62's idiom: a wrong-type click is silently ignored, but a refused
+    CREATION reports which item is the problem. This is the case that has
+    no correct outcome at all (3 of 4 sides of a square plus a stray), so
+    there is nothing to salvage -- the refusal must name the offenders
+    rather than say "curves do not share endpoints" (a symptom) or, worse,
+    return a ghost."""
+    errors, checks = [], []
+    from SilkWorkflowOps import create_patch
+    from SilkMachinery import loop_order
+    from Tests.test_patch_gui_command import _CaptureConsole
+    from FreeCAD import Gui
+
+    edges = _make_loop_edges(doc)
+    stray = _make_stray_edge(doc)
+    broken = [edges[0], edges[1], edges[2], stray]
+
+    # the helper names the offenders, per edge
+    order, problem = loop_order(broken)
+    if order is not None:
+        errors.append("loop_order accepted a selection that does not "
+                      "close a loop")
+    if not problem:
+        errors.append("loop_order gave no problem text for a broken "
+                      "selection")
+    for name in (stray.Name,):
+        if not problem or name not in problem:
+            errors.append("the problem text does not name the stray edge "
+                          "%s: %r" % (name, problem))
+    checks.append("loop_order refused and named: %s" % (problem or "?"))
+
+    # create_patch: no object, one loud message, nothing left behind
+    before = len(_patches(doc))
+    with _CaptureConsole() as cap:
+        result = create_patch(broken, name="PatchRefused")
+    if result is not None:
+        errors.append("create_patch returned %r for a non-closing "
+                      "selection" % (result,))
+    after = [o.Name for o in _patches(doc)]
+    if len(after) != before:
+        errors.append("a refused creation left %s behind"
+                      % [n for n in after if n not in
+                         [o.Name for o in _patches(doc)][:before]])
+    msgs = "".join(cap.errors)
+    if not msgs:
+        errors.append("create_patch refused silently (no console error)")
+    if not msgs.startswith("Silk:"):
+        errors.append("refusal must start with 'Silk:', got %r" % msgs)
+    if stray.Name not in msgs:
+        errors.append("the refusal does not name the offending edge %s: %r"
+                      % (stray.Name, msgs))
+    checks.append("create_patch: refused, no object, message %r"
+                  % msgs.strip()[:110])
+
+    # and the GUI command refuses the same way
+    before = len(_patches(doc))
+    Gui.Selection.clearSelection()
+    for e in broken:
+        Gui.Selection.addSelection(e)
+    with _CaptureConsole() as cap2:
+        from SilkPatch import CreatePatch
+        CreatePatch().Activated()
+    doc.recompute()
+    if len(_patches(doc)) != before:
+        errors.append("Silk_CreatePatch created %d object(s) for a "
+                      "non-closing selection"
+                      % (len(_patches(doc)) - before))
+    msgs2 = "".join(cap2.errors)
+    if not msgs2.startswith("Silk:") or stray.Name not in msgs2:
+        errors.append("the command's refusal does not name the offending "
+                      "edge: %r" % msgs2)
+    Gui.Selection.clearSelection()
+    checks.append("Silk_CreatePatch: refused, no object, message %r"
+                  % msgs2.strip()[:110])
+    return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 def test_create_patch_ground_truth(doc):
@@ -252,4 +815,11 @@ ALL_TESTS = [
     test_oracle_flags_flipped_row,
     test_oracle_flags_seam_offset,
     test_oracle_flags_misassigned_edge,
+    # #66 -- the edge order is derived, not trusted
+    test_patch_order_independence_all_24_permutations,
+    test_patch_order_independence_curved_ground_truth,
+    test_patch_loop_order_is_a_noop_for_a_cyclic_list,
+    test_patch_parity_canonical_order_matches_legacy,
+    test_pointed_fill_all_orderings_unchanged,
+    test_patch_non_closing_selection_creates_nothing,
 ]

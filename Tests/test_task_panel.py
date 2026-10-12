@@ -485,6 +485,112 @@ def test_patch_stage_three_edges_give_the_pointed_fill(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_patch_section_reports_success_only_for_a_patch_that_built(doc):
+    """#66: the Patch section reports success ONLY for a patch that
+    actually built.
+
+    Two halves, and the second is the point. (1) Four edges clicked in a
+    deliberately AWKWARD order -- the human's real workflow, and the one
+    that used to produce a valid, invisible ghost the panel cheerfully
+    called "Patch created" -- now yields a real, visible, oracle-green
+    patch. (2) A selection that genuinely cannot close a loop is refused
+    LOUDLY, naming the offending edge, and leaves nothing behind: no
+    object, and the collection survives so the user can fix it (#62's
+    idiom)."""
+    errors, checks = [], []
+    from Tests.test_patch_gui_command import _make_loop_edges
+    from Tests.test_seam_resolver import _Capture, _stray_edge
+    from SilkChecks import check_patch
+
+    edges = _make_loop_edges(doc)
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.toolbox.setCurrentIndex(1)          # the Patch section
+
+        # (1) an awkward CLICK order: e2, e0, e3, e1 -- three of the four
+        # rotations of the cycle are wrong, so pre-#66 this produced an
+        # empty ghost and the panel said "Patch created".
+        awkward = [edges[2], edges[0], edges[3], edges[1]]
+        for e in awkward:
+            _click(e)
+        check(len(panel.collected()) == 4,
+              "four clicks collected %d edge(s)" % len(panel.collected()),
+              errors)
+        with _Capture() as cap:
+            ok = panel.panel_confirm()
+        doc.recompute()
+        patches = _objects(doc, "Patch")
+        check(ok, "confirm on a valid but awkwardly-clicked selection "
+                  "reported failure: %r" % panel.status_text(), errors)
+        check(len(patches) == 1,
+              "expected exactly 1 patch, got %d" % len(patches), errors)
+        if patches:
+            p = patches[0]
+            check(len(list(p.Poles)) == 16,
+                  "the awkwardly-clicked patch has %d poles"
+                  % len(list(p.Poles)), errors)
+            check(not (p.Shape is None or p.Shape.isNull()),
+                  "the awkwardly-clicked patch has a NULL shape -- this is "
+                  "the invisible ghost #66 is about", errors)
+            check(bool(p.Shape.Faces),
+                  "the awkwardly-clicked patch renders no face", errors)
+            # the oracle, fed the CYCLIC order the fill actually consumed
+            from SilkMachinery import loop_order
+            cyclic, problem = loop_order(awkward)
+            check(problem is None,
+                  "loop_order refused a valid loop: %s" % problem, errors)
+            bad = [(n, d) for (n, ok2, d) in check_patch(p, cyclic) if not ok2]
+            check(not bad, "oracle flagged the awkward-order patch: %s"
+                  % bad, errors)
+            check(p.Name in panel.status_text(),
+                  "status line %r does not name the created patch %s"
+                  % (panel.status_text(), p.Name), errors)
+            checks.append("4 edges clicked in an awkward order -> %s: "
+                          "16 poles, %d face(s), oracle green, status "
+                          "names it" % (p.Name, len(p.Shape.Faces)))
+        check(not cap.errors, "console errors: %s" % cap.errors, errors)
+
+        # (2) a selection that cannot close a loop: refused, named,
+        # nothing left behind, collection survives.
+        stray = _stray_edge(doc, "PanelStray")
+        broken = [edges[0], edges[1], edges[2], stray]
+        for e in broken:
+            _click(e)
+        check(len(panel.collected()) == 4,
+              "the broken selection collected %d edge(s)"
+              % len(panel.collected()), errors)
+        before = len(_objects(doc, "Patch"))
+        with _Capture() as cap2:
+            ok2 = panel.panel_confirm()
+        doc.recompute()
+        check(not ok2, "a non-closing selection reported SUCCESS", errors)
+        check(len(_objects(doc, "Patch")) == before,
+              "a refused creation left %d object(s) behind"
+              % (len(_objects(doc, "Patch")) - before), errors)
+        status = panel.status_text()
+        check("cannot apply" in status,
+              "the refusal status does not read as a refusal: %r" % status,
+              errors)
+        check(stray.Name in status or "PanelStray" in status,
+              "the refusal does not name the offending edge: %r" % status,
+              errors)
+        check(len(panel.collected()) == 4,
+              "the collection did not survive the refusal (%d left) -- the "
+              "user cannot fix the selection" % len(panel.collected()),
+              errors)
+        checks.append("3 sides + a stray -> refused loudly naming %s, no "
+                      "object created, collection intact" % stray.Name)
+        errors += ["console error: %s" % e for e in cap2.errors
+                   if "cannot apply" not in e]
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 # ---- uniform interaction rules ---------------------------------------------
 
 def test_wrong_type_clicks_are_silently_ignored(doc):
@@ -1943,6 +2049,7 @@ ALL_TESTS = [
     test_edge_stage_two_sketches_reach_the_2n_mode,
     test_patch_stage_collect_four_edges_then_confirm,
     test_patch_stage_three_edges_give_the_pointed_fill,
+    test_patch_section_reports_success_only_for_a_patch_that_built,
     test_wrong_type_clicks_are_silently_ignored,
     test_ok_disabled_until_the_open_section_is_valid,
     test_one_confirm_is_one_undo_step,

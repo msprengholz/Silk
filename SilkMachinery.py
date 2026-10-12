@@ -19,6 +19,176 @@ import Part
 import ArachNURBS as AN
 
 
+# ---- closed-loop ordering of boundary edges (#66) ------------------------
+#
+# A Patch's `Edges` link list is a CYCLE, but the list itself arrives in
+# whatever order the user produced it -- the task panel collects edges in
+# CLICK order, the property editor lets a hand rewire them, and an old
+# document restores whatever it saved. The fills walk the list as a cycle
+# (edge k meets edge k+1 at a corner) and AN.orient_a_to_b can reverse an
+# EDGE, but it cannot reorder the LIST. So a list whose consecutive pairs
+# do not meet simply failed the fill, and the result was a valid,
+# up-to-date, INVISIBLE object -- 16 of the 24 permutations of one valid
+# 4-edge loop built exactly that ghost.
+#
+# So the cycle is DERIVED from the edges' own endpoints, here, in the
+# shared core -- the one place every construction path already goes
+# through (the fill), so the panel, the ops layer, the data tab and an
+# old-document restore are all fixed at once.
+#
+# Pure geometry: no document, no objects, no console. `tol` defaults to
+# the endpoint-matching tolerance a fresh Patch carries, and the caller
+# decides what a None means (the fill leaves the object empty/valid and
+# says why; the ops layer refuses the creation and leaves nothing
+# behind).
+
+def _edge_label(edge):
+    """How a refusal names one edge: its Label, with the internal Name in
+    parentheses when they differ (the #58 convention)."""
+    name = getattr(edge, "Name", None) or repr(edge)
+    label = getattr(edge, "Label", None)
+    if label and label != name:
+        return "%s (%s)" % (label, name)
+    return name
+
+
+def _edge_ends(edge):
+    """(start, end) poles of one boundary edge, or (None, None) when it
+    carries no usable poles."""
+    poles = list(getattr(edge, "Poles", None) or [])
+    if len(poles) < 2:
+        return None, None
+    return poles[0], poles[-1]
+
+
+def _meets(p, q, tol):
+    """Endpoint coincidence at `tol` -- AN.equalVectors' rule verbatim
+    (<= tol), so this agrees with orient_a_to_b about what 'shares an
+    endpoint' means."""
+    return p is not None and q is not None and (q - p).Length <= tol
+
+
+def _endpoint_adjacency(edges, tol):
+    """adjacency[i] = the indices of the edges sharing an endpoint with
+    edge i. Pure coincidence -- no document, no identity assumption."""
+    ends = [_edge_ends(e) for e in edges]
+    adj = [set() for _ in edges]
+    for i in range(len(edges)):
+        for j in range(i + 1, len(edges)):
+            (a0, a1), (b0, b1) = ends[i], ends[j]
+            if (_meets(a0, b0, tol) or _meets(a0, b1, tol)
+                    or _meets(a1, b0, tol) or _meets(a1, b1, tol)):
+                adj[i].add(j)
+                adj[j].add(i)
+    return adj
+
+
+def _walk_cycle(adj, start):
+    """The edge indices of one closed cycle through `start`, or None.
+
+    Depth-first over the adjacency, candidates tried in INPUT ORDER, so
+    the result is the lexicographically smallest cycle through `start` --
+    deterministic, and identical to the input whenever the input is
+    itself cyclic (the walk's first two indices are then forced by the
+    input, so a rotation or a reversal of a good list comes back
+    untouched). Backtracking rather than a plain greedy walk so a
+    degenerate extra coincidence cannot make a fillable loop look
+    unclosable.
+    """
+    n = len(adj)
+    path = [start]
+    used = {start}
+
+    def extend():
+        if len(path) == n:
+            return start in adj[path[-1]]
+        for j in sorted(adj[path[-1]]):
+            if j in used:
+                continue
+            path.append(j)
+            used.add(j)
+            if extend():
+                return True
+            used.discard(j)
+            path.pop()
+        return False
+
+    return list(path) if extend() else None
+
+
+def loop_order(edges, tol=None):
+    """(order, problem) for a boundary edge list (#66).
+
+    `order` is the list of edges in closed-loop order with the FIRST
+    collected edge leading -- or None when the edges do not close a loop,
+    in which case `problem` is a ready-to-print clause naming the
+    offending edges.
+
+    The rotation rule: the walk starts at the first collected edge and
+    takes the neighbours in the order they were collected. Two
+    consequences fall out of that one rule, both required:
+      * an ALREADY-CYCLIC list is returned as it stands, so feeding a
+        good list is a genuine no-op (that is what keeps the legacy
+        Patch44/Patch33 pole parity, and it is not a reserialization);
+      * a clicked-around list still starts from what the user picked
+        first, and otherwise follows their click order as closely as the
+        geometry allows. Which way round the loop is walked is the only
+        other freedom, and it does not matter: AN.orient_a_to_b reverses
+        each edge, so both directions build the same surface with the
+        pole indices turned around.
+    """
+    # Keep the caller's list object: when the input turns out to be
+    # already cyclic, THAT list is what comes back, not a copy of it.
+    # The no-op is structural, not a promise.
+    original = edges
+    edges = list(edges or [])
+    if tol is None:
+        tol = AN.default_tol        # what a fresh Patch starts with
+    n = len(edges)
+    if n < 3:
+        return None, ("a closed loop needs at least 3 boundary edges, "
+                      "got %d" % n)
+
+    adj = _endpoint_adjacency(edges, tol)
+
+    # A corner of a closed loop meets exactly two of the other edges.
+    # Anything else is the actual problem, and it is per-edge, so it can
+    # be named -- which is the whole point of refusing loudly.
+    problems = []
+    for i, edge in enumerate(edges):
+        k = len(adj[i])
+        if k < 2:
+            problems.append(
+                "%s meets only %d of the other %d edges (%s) -- the loop "
+                "does not close here"
+                % (_edge_label(edge), k, n - 1,
+                   ", ".join(_edge_label(edges[j]) for j in sorted(adj[i]))
+                   or "none"))
+        elif k > 2:
+            problems.append(
+                "%s meets %d of the other %d edges (%s) -- a loop corner "
+                "meets exactly 2, so these edges branch instead of "
+                "closing"
+                % (_edge_label(edge), k, n - 1,
+                   ", ".join(_edge_label(edges[j]) for j in sorted(adj[i]))))
+    if problems:
+        return None, "; ".join(problems)
+
+    order = _walk_cycle(adj, 0)
+    if order is None or len(order) != n:
+        # every edge meets exactly two, yet there is no single cycle
+        # through them: two separate closed loops handed over at once.
+        left = [i for i in range(n) if not order or i not in order]
+        return None, ("%s close a loop of their own and do not join the "
+                      "loop through %s -- a patch boundary is ONE loop"
+                      % (", ".join(_edge_label(edges[i]) for i in left),
+                         _edge_label(edges[0])))
+
+    if order == list(range(n)):
+        return original, None    # already in this exact cyclic order
+    return [edges[i] for i in order], None
+
+
 # ---- subdivision -------------------------------------------------------
 
 def normalize_splits(values):

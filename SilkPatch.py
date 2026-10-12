@@ -17,6 +17,16 @@
 #    delegate to the shared machinery core (SilkMachinery) — nothing is
 #    reimplemented here. That is the whole point of the unification: the
 #    pointed fill gets the subgrid machinery the legacy Patch33 lacked.
+#
+#    #66: the quad fill does not trust the ORDER of the `Edges` list. The
+#    list arrives in click order (the panel), or hand-reordered (the data
+#    tab), or restored from an old file, and a cycle walked blind failed
+#    for 16 of the 24 permutations of one valid loop — silently, leaving
+#    an invisible ghost. `SilkMachinery.loop_order` derives the cycle from
+#    the edges' own endpoints (at `tolerance`) inside the fill, so every
+#    path that can produce a patch is fixed at once; an already-cyclic
+#    list comes back untouched, which is what preserves the legacy
+#    Patch44/Patch33 pole parity.
 
 import FreeCAD
 import Part
@@ -26,7 +36,7 @@ import ArachNURBS as AN
 from popup import tipsDialog
 
 from SilkMachinery import build_subgrids, build_display, \
-    normalize_splits_report
+    normalize_splits_report, loop_order
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -317,22 +327,43 @@ class Patch:
 
     # ---- fill selection --------------------------------------------------
 
-    def _quad_fill(self, fp):
+    def _quad_fill(self, fp, inputs=None):
         """Replicate Patch44's ControlGrid44_4 fill from Edges[0..3].
 
         Produces the SAME 16 poles/weights/layout as Patch44 for the
         identical 4 edges in the same order (pole parity at 1e-6 is what
         later lets the unified pipeline reproduce the chain — #40).
+
+        #66: the cycle is DERIVED from the edges' own endpoints before
+        the fill runs, so the list's own order no longer decides whether
+        the patch builds. The `Edges` property is whatever the user
+        produced — the panel collects in click order, the data tab can be
+        hand-reordered, an old document restores whatever it saved — and
+        walking it blind meant 16 of the 24 permutations of one valid
+        4-edge loop produced a valid, up-to-date, INVISIBLE ghost.
+        `loop_order` returns the input list unchanged when it is already
+        cyclic, so an in-order list takes the byte-identical path it
+        always did (that is the pole parity), and a clicked-around list
+        builds the same surface with the pole indices turned around.
         """
-        p0 = list(fp.Edges[0].Poles)
-        p1 = list(fp.Edges[1].Poles)
-        p2 = list(fp.Edges[2].Poles)
-        p3 = list(fp.Edges[3].Poles)
-        w0 = list(fp.Edges[0].Weights)
-        w1 = list(fp.Edges[1].Weights)
-        w2 = list(fp.Edges[2].Weights)
-        w3 = list(fp.Edges[3].Weights)
+        inputs = list(inputs if inputs is not None else fp.Edges)
         tol = fp.tolerance
+        edges, problem = loop_order(inputs, tol)
+        if edges is None:
+            FreeCAD.Console.PrintError(
+                "Silk: Patch '%s': its %d boundary edges do not close a "
+                "loop -- %s. No surface was built.\n"
+                % (fp.Name, len(inputs), problem))
+            return None
+
+        p0 = list(edges[0].Poles)
+        p1 = list(edges[1].Poles)
+        p2 = list(edges[2].Poles)
+        p3 = list(edges[3].Poles)
+        w0 = list(edges[0].Weights)
+        w1 = list(edges[1].Weights)
+        w2 = list(edges[2].Weights)
+        w3 = list(edges[3].Weights)
 
         quad12 = AN.orient_a_to_b(p0, p1, tol)
         if quad12 == 0:
@@ -527,7 +558,8 @@ class Patch:
             build_display(fp, Part.Shape(), [], [], [], False)
             return
 
-        filled = self._pointed_fill(fp) if len(inputs) == 3 else self._quad_fill(fp)
+        filled = (self._pointed_fill(fp) if len(inputs) == 3
+                  else self._quad_fill(fp, inputs))
         if filled is None:
             # degenerate / non-connecting loop: leave the object empty/valid
             fp.Poles = []; fp.Weights = []; fp.Legs = []
@@ -634,6 +666,20 @@ class CreatePatch:
                 "Silk: Patch requires exactly 3 or 4 selected Edge "
                 "objects (got %d Edge objects among %d selected).\n"
                 % (len(edges), len(sel)))
+            return
+
+        # #66: the selection arrives in CLICK order, which is not the
+        # order the fill walks. Refuse BEFORE constructing anything when
+        # the edges do not close a loop, naming the offenders -- never
+        # leave a valid, up-to-date, invisible object behind (#58's
+        # idiom).
+        order, problem = loop_order(edges, AN.default_tol)
+        if order is None:
+            FreeCAD.Console.PrintError(
+                "Silk: the %d selected edges do not close a loop -- %s. "
+                "A patch boundary is ONE closed loop of 3 or 4 edges "
+                "meeting corner to corner. Nothing was created.\n"
+                % (len(edges), problem))
             return
 
         doc = FreeCAD.ActiveDocument

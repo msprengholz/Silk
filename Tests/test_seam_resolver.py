@@ -92,14 +92,40 @@ def _square_patch(doc, name):
     return create_patch(_square_edges(doc, name), name=name)
 
 
+def _square_key_of(edge):
+    """Which of _SQUARE's four sides `edge` traces, by its endpoints, or
+    None. The shared-edge fixtures need this: a patch whose boundary is
+    one real side plus fresh copies of the other three only closes when
+    the copies are the OTHER three (#66 -- a set that does not close is
+    now refused rather than becoming a silent 0-pole ghost, so a fixture
+    that quietly assumed 'the shared edge is always the bottom' started
+    failing here)."""
+    p0, p3 = edge.Poles[0], edge.Poles[3]
+    for key, pts in _SQUARE.items():
+        if all(abs(a[i] - b[i]) < 1e-9
+               for a, b in ((p0, FreeCAD.Vector(*pts[0])),
+                            (p3, FreeCAD.Vector(*pts[-1])))
+               for i in range(3)):
+            return key
+    return None
+
+
 def _patch_sharing(doc, shared_edge, name):
-    """A fresh patch using `shared_edge` as its bottom side plus fresh
-    coincident copies of the other three sides. Geometric overlap with
-    the original patch is intentional -- adjacency is identity-only."""
+    """A fresh patch using `shared_edge` plus fresh copies of the OTHER
+    THREE sides of the square -- so the boundary always closes, whichever
+    side `shared_edge` happens to be. Geometric overlap with the original
+    patch is intentional -- adjacency is identity-only."""
     from SilkWorkflowOps import create_edge, create_patch
+    shared_key = _square_key_of(shared_edge)
+    if shared_key is None:
+        raise AssertionError(
+            "%s is not one of the square's sides; _patch_sharing needs a "
+            "square edge to share" % shared_edge.Name)
     rest = []
-    for i, key in enumerate(("right", "top", "left")):
-        sk = _line_sketch(doc, "%s_sk%d" % (name, i), _SQUARE[key])
+    for key in ("bottom", "right", "top", "left"):
+        if key == shared_key:
+            continue
+        sk = _line_sketch(doc, "%s_sk_%s" % (name, key), _SQUARE[key])
         rest.append(create_edge(sk, name="%s_%s" % (name, key)))
     return create_patch([shared_edge] + rest, name=name)
 
