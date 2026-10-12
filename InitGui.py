@@ -128,7 +128,7 @@ class Silk (Workbench):
 		import SilkBlend
 		import SilkWorkflow
 		import Reload_Silk
-		import SilkGuidePanel
+		import SilkTaskPanel
 
 		# Only the five visible commands, in their three groups. All of
 		# them are registered by the imports above. Referenced through

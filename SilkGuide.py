@@ -5,41 +5,29 @@
 #
 #    Guide -- the headless core of the workflow guide (ticket #47).
 #
-#    TWO parts, both GUI-free (the `Silk_Guide` command + task panel are
-#    ticket #48 and consume exactly what lives here):
+#    ONE part, GUI-free: compute_guide_state(doc), a STATELESS pure
+#    query. "What is the next action?" is derived from the document on
+#    every call; there is deliberately NO Stage enum / no stored stage
+#    counter (the retired SilkGuide_prototype.py's `Stage` property is
+#    not revived). The user may jump around freely, and the query is a
+#    handful of link-list scans (seam_inventory + object_type counts),
+#    so it costs the same for 4 patches as for 40.
 #
-#      1. compute_guide_state(doc) -- a STATELESS pure query. "What is the
-#         next action?" is derived from the document on every call; there
-#         is deliberately NO Stage enum / no stored stage counter (the
-#         retired SilkGuide_prototype.py's `Stage` property is not revived).
-#         The user may jump around freely, and the query is a handful of
-#         link-list scans (seam_inventory + object_type counts), so it
-#         costs the same for 4 patches as for 40.
+#    #62 REMOVED the second half: the WorkflowGuide container that held
+#    the last computed state. The panel computes live and publishes
+#    nothing to the property editor, so the container could only ever
+#    store a snapshot the panel never read back -- a second place to go
+#    stale. compute_guide_state and its tests stay; the task panel
+#    (SilkTaskPanel.py) re-queries on every refresh.
 #
-#      2. WorkflowGuide -- a non-geometric Part::FeaturePython container
-#         that HOLDS the last computed state so tests and the saved
-#         document can inspect it. It is a state SINK, never an owner:
-#         nothing in SilkEdge / SilkPatch / SilkBlend / SilkWorkflowOps
-#         knows it exists and nothing notifies it (settled #16 Q16b --
-#         panel-side refresh, zero wizard coupling in the production
-#         modules). Re-deriving on every execute() IS the design.
-#
-#    The seam list is deliberately NOT stored as object links on the
-#    container: seam_inventory (#44) is a cheap pure query, so a stored
-#    link list could only ever go stale. The panel re-queries.
+#    The seam list is passed through UNCHANGED from seam_inventory (#44),
+#    a cheap pure query, so nothing here could go stale even if a caller
+#    did hold on to it.
 
 import FreeCAD
-import Part
 
 from SilkWorkflowOps import seam_inventory
 from SilkBlend import PATCH_TYPES, BLEND_TYPES
-
-import os, Silk_dummy
-path_Silk = os.path.dirname(Silk_dummy.__file__)
-path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
-iconPath = path_Silk_icons + "/Silk.svg"
-
-ICON = "Resources/Icons/Silk.svg"
 
 # ---- the pinned hints (the panel's copy comes from here, never re-worded) --
 HINT_CREATE_EDGE = "select sketches and create edges (Silk_CreateEdge)"
@@ -136,119 +124,3 @@ def compute_guide_state(doc=None):
         "seam_counts": dict(total=len(seams), **by_status),
         "complete": complete,
     }
-
-
-class WorkflowGuide:
-    """Non-geometric container holding the last computed guide state.
-
-    A state SINK for `compute_guide_state`: `execute()` re-derives the
-    state from the document and writes it into plain (serializable)
-    properties. Nothing notifies it and nothing reads it back as truth --
-    the panel re-queries `compute_guide_state` directly; these properties
-    exist so tests, the property editor and a reloaded document can read
-    the last derived state without re-running anything.
-
-    Because it holds no links of its own, it is NOT a second source of
-    truth and never can go stale in a harmful way.
-    """
-
-    def __init__(self, obj):
-        obj.addProperty("App::PropertyString", "NextStepHint", "C1 - Workflow",
-                        "the derived next action").NextStepHint = ""
-        obj.addProperty("App::PropertyBool", "Complete", "C1 - Workflow",
-                        "no blendable seam left and at least one blend "
-                        "exists").Complete = False
-        obj.addProperty("App::PropertyInteger", "EdgeCount", "C2 - Counts",
-                        "edges in the document").EdgeCount = 0
-        obj.addProperty("App::PropertyInteger", "PatchCount", "C2 - Counts",
-                        "patches in the document").PatchCount = 0
-        obj.addProperty("App::PropertyInteger", "BlendCount", "C2 - Counts",
-                        "blends in the document").BlendCount = 0
-        obj.addProperty("App::PropertyInteger", "SeamCount", "C2 - Counts",
-                        "seams in the document").SeamCount = 0
-        obj.addProperty("App::PropertyInteger", "BlendableSeams",
-                        "C2 - Counts", "seams still waiting for a blend"
-                        ).BlendableSeams = 0
-        obj.addProperty("App::PropertyInteger", "BlendedSeams", "C2 - Counts",
-                        "seams covered by a blend").BlendedSeams = 0
-        obj.addProperty("App::PropertyInteger", "BlockedSeams", "C2 - Counts",
-                        "non-manifold seams (3+ patches, corner fill "
-                        "deferred)").BlockedSeams = 0
-        obj.addProperty("App::PropertyString", "object_type", "C3 - Identifiers",
-                        "workbench class").object_type = "WorkflowGuide"
-        obj.setEditorMode("object_type", 1)
-        obj.addProperty("App::PropertyString", "object_version",
-                        "C3 - Identifiers", "class version").object_version = "0.01"
-        obj.setEditorMode("object_version", 1)
-        obj.addProperty("App::PropertyString", "internalName",
-                        "C3 - Identifiers",
-                        "permanent internal FreeCAD name").internalName = obj.Name
-        obj.setEditorMode("internalName", 1)
-        obj.Proxy = self
-        self.execute(obj)
-
-    def onDocumentRestored(self, obj):
-        # Deliberately NO re-derivation on restore: the stored state is
-        # what the document was saved with, and a test can prove it
-        # round-tripped instead of proving a recompute agrees. The next
-        # recompute re-derives anyway.
-        return
-
-    def execute(self, fp):
-        """Re-derive the state from the document and store it."""
-        state = compute_guide_state(fp.Document or FreeCAD.ActiveDocument)
-        counts = state["counts"]
-        seams = state["seam_counts"]
-        fp.NextStepHint = state["hint"]
-        fp.Complete = bool(state["complete"])
-        fp.EdgeCount = counts["edges"]
-        fp.PatchCount = counts["patches"]
-        fp.BlendCount = counts["blends"]
-        fp.SeamCount = seams["total"]
-        fp.BlendableSeams = seams["blendable"]
-        fp.BlendedSeams = seams["blended"]
-        fp.BlockedSeams = seams["blocked"]
-        # non-geometric: keep a valid (empty) shape so the container never
-        # renders anything and never goes invalid.
-        fp.Shape = Part.Shape()
-
-    def onChanged(self, fp, prop):
-        # No-op on purpose: the container owns nothing, so no property of
-        # its own warrants a recompute and nothing may couple back into
-        # the production modules.
-        return
-
-
-class WorkflowGuideViewProvider:
-    def __init__(self, vobj):
-        vobj.Proxy = self
-
-    def getIcon(self):
-        return ICON
-
-    def attach(self, vobj):
-        self.ViewObject = vobj
-
-    def updateData(self, obj, prop):
-        return True
-
-    def __getstate__(self):
-        return None
-
-    def __setstate__(self, state):
-        return None
-
-
-def create_guide(name="WorkflowGuide", doc=None):
-    """Create the guide state container in `doc` (active document by
-    default): addObject -> WorkflowGuide -> view provider -> recompute ->
-    return the created object. The same shape as the ops layer's
-    builders; it lives here because SilkWorkflowOps (#44) is frozen and
-    #48 may equally call `WorkflowGuide(obj)` directly.
-    """
-    doc = doc if doc is not None else FreeCAD.ActiveDocument
-    obj = doc.addObject("Part::FeaturePython", name)
-    WorkflowGuide(obj)
-    WorkflowGuideViewProvider(obj.ViewObject)
-    doc.recompute()
-    return obj

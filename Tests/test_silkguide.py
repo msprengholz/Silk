@@ -1,11 +1,15 @@
 """
-SilkGuide headless core (ticket #47): stateless hint query + container.
+SilkGuide headless core (ticket #47): the stateless hint query.
 
 compute_guide_state(doc) is PURE -- "what's next" is derived from the
 document on every call (no Stage enum, no stored stage counter), so the
 guide scales with the document instead of replaying a linear script.
-WorkflowGuide is a state SINK that mirrors the last derived state into
-serializable properties.
+
+#62 removed the module's second half: the WorkflowGuide container that
+mirrored the last derived state into serializable properties. The #62
+task panel computes live and publishes nothing to the property editor,
+so the container was a snapshot nothing ever read back. What survives
+here is the query, and the tests that pin it.
 
 Pinned hint semantics (all four asserted verbatim below):
   no edges                 -> "select sketches and create edges ..."
@@ -20,7 +24,8 @@ Documented decisions pinned by tests here:
     blendable, so it is not outstanding blend work, and no action exists
     for it until the deferred corner fill lands;
   * the seam pass-through equals seam_inventory(doc) entry-for-entry;
-  * the container round-trips through save/reload.
+  * #62's removal is total: the module exposes no container, no
+    create_guide, and nothing writes guide state into a document.
 
 Fixtures are imported from Tests/test_seam_resolver.py (#45 precedent);
 no shared test module was refactored.
@@ -33,7 +38,7 @@ from Tests.test_seam_resolver import (
 )
 
 from SilkGuide import (
-    compute_guide_state, create_guide, HINT_CREATE_EDGE,
+    compute_guide_state, HINT_CREATE_EDGE,
     HINT_CREATE_PATCH, HINT_BLEND, HINT_COMPLETE,
 )
 
@@ -393,142 +398,41 @@ def test_guide_state_seams_match_seam_inventory(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_guide_container_execute_populates_properties(doc):
-    """create_guide -> execute() mirrors compute_guide_state into the
-    container's properties.
+def test_guide_container_removed(doc):
+    """#62: the WorkflowGuide container and create_guide are GONE from
+    SilkGuide -- the task panel computes live and publishes no state to
+    the property editor, so a snapshot object had nothing to serve.
 
-    Also pins the SINK contract: a plain `doc.recompute()` must NOT
-    refresh the container (nothing in SilkEdge/SilkPatch/SilkBlend/
-    SilkWorkflowOps knows it exists -- settled #16 Q16b), and an explicit
-    recompute of the container re-derives from the document."""
+    Asserted on the module itself (not by constructing anything), because
+    the point is that the constructor is no longer reachable at all.
+    """
+    import SilkGuide
+
     errors, checks = [], []
+    for name in ("WorkflowGuide", "WorkflowGuideViewProvider",
+                 "create_guide"):
+        if hasattr(SilkGuide, name):
+            errors.append("SilkGuide still exposes %s" % name)
+    checks.append("no container class, no create_guide on SilkGuide")
+
+    # And no SILK-GUIDE-typed object can appear in a document any more.
     a = _square_patch(doc, "A")
     _patch_sharing(doc, a.Edges[0], "B")
-
-    guide = create_guide(name="Guide")
-    if getattr(guide, "object_type", None) != "WorkflowGuide":
-        errors.append("container object_type is %r, want 'WorkflowGuide'"
-                      % getattr(guide, "object_type", None))
-    checks.append("container: %s (%s)"
-                  % (guide.Name, getattr(guide, "object_type", None)))
-
-    state = compute_guide_state(doc)
-    if guide.NextStepHint != state["hint"]:
-        errors.append("container NextStepHint %r != compute_guide_state %r"
-                      % (guide.NextStepHint, state["hint"]))
-    checks.append("NextStepHint: %r" % guide.NextStepHint)
-    if (guide.EdgeCount, guide.PatchCount, guide.BlendCount) != (
-            state["counts"]["edges"], state["counts"]["patches"],
-            state["counts"]["blends"]):
-        errors.append("container counts (%d/%d/%d) != state %r"
-                      % (guide.EdgeCount, guide.PatchCount, guide.BlendCount,
-                         state["counts"]))
-    checks.append("counts: %d edges / %d patches / %d blends"
-                  % (guide.EdgeCount, guide.PatchCount, guide.BlendCount))
-    if (guide.SeamCount, guide.BlendableSeams, guide.BlendedSeams,
-            guide.BlockedSeams) != (
-            state["seam_counts"]["total"], state["seam_counts"]["blendable"],
-            state["seam_counts"]["blended"],
-            state["seam_counts"]["blocked"]):
-        errors.append("container seam counts (%d/%d/%d/%d) != state %r"
-                      % (guide.SeamCount, guide.BlendableSeams,
-                         guide.BlendedSeams, guide.BlockedSeams,
-                         state["seam_counts"]))
-    checks.append("seams: %d total / %d blendable / %d blended / %d blocked"
-                  % (guide.SeamCount, guide.BlendableSeams,
-                     guide.BlendedSeams, guide.BlockedSeams))
-    if bool(guide.Complete) != bool(state["complete"]):
-        errors.append("container Complete=%r != state %r"
-                      % (guide.Complete, state["complete"]))
-    checks.append("Complete: %r" % guide.Complete)
-
-    # The container is non-geometric: it must never add geometry.
-    if len(guide.Shape.Faces) or len(guide.Shape.Edges):
-        errors.append("container has geometry (%d faces, %d edges) -- it "
-                      "must stay non-geometric"
-                      % (len(guide.Shape.Faces), len(guide.Shape.Edges)))
-    checks.append("container shape is empty (non-geometric)")
-
-    # Blend the seam. The container is a SINK, not an owner: nothing in
-    # the production modules notifies it, so `doc.recompute()` alone
-    # leaves the stored state untouched -- refreshing it is the panel's
-    # job (#48), and that is the settled #16 Q16b design.
-    import SilkWorkflowOps as ops
-    with _Capture() as cap:
-        ops.create_blend_by_edge(a.Edges[0], name="BlendSeam")
-    errors += ["console error: %s" % e for e in cap.errors]
     doc.recompute()
-    if guide.NextStepHint != state["hint"]:
-        errors.append("the container refreshed itself without being asked "
-                      "(hint changed to %r) -- it must stay a passive sink"
-                      % guide.NextStepHint)
-    checks.append("plain doc.recompute() does NOT refresh the sink "
-                  "(no production-module coupling)")
-
-    # Refreshing the sink re-derives the state from the document.
-    guide.recompute()
-    doc.recompute()
-    state2 = compute_guide_state(doc)
-    if guide.NextStepHint != state2["hint"]:
-        errors.append("after blending, container NextStepHint %r != state %r"
-                      % (guide.NextStepHint, state2["hint"]))
-    if not guide.Complete or guide.BlendedSeams != 1:
-        errors.append("after blending, container reports Complete=%r "
-                      "BlendedSeams=%d, want True/1"
-                      % (guide.Complete, guide.BlendedSeams))
-    checks.append("after blending + explicit refresh: hint=%r Complete=%r"
-                  % (guide.NextStepHint, guide.Complete))
-    return {"pass": not errors, "errors": errors, "checks": checks}
-
-
-def test_guide_container_serialization_round_trip(doc):
-    """Save / close / reopen: the stored state properties survive the
-    round trip (not merely re-derivable) -- the container's onDocument
-    Restored deliberately does not re-derive."""
-    import os
-    errors, checks = [], []
-    import SilkWorkflowOps as ops
-
-    a = _square_patch(doc, "A")
-    _patch_sharing(doc, a.Edges[0], "B")
-    with _Capture() as cap:
-        ops.create_blend_by_edge(a.Edges[0], name="BlendSeam")
-    errors += ["console error: %s" % e for e in cap.errors]
-    guide = create_guide(name="Guide")
-
-    before = (guide.NextStepHint, guide.Complete, guide.EdgeCount,
-              guide.PatchCount, guide.BlendCount, guide.SeamCount,
-              guide.BlendableSeams, guide.BlendedSeams, guide.BlockedSeams)
-
-    save_path = "/tmp/_test_silkguide_serialize.FCStd"
-    doc.saveAs(save_path)
-    FreeCAD.closeDocument(doc.Name)
-
-    doc2 = FreeCAD.openDocument(save_path)
-    try:
-        g2 = [o for o in doc2.Objects
+    guides = [o for o in doc.Objects
               if getattr(o, "object_type", None) == "WorkflowGuide"]
-        if len(g2) != 1:
-            errors.append("reload: expected exactly one WorkflowGuide "
-                          "container, got %d" % len(g2))
-            return {"pass": False, "errors": errors, "checks": checks}
-        g2 = g2[0]
-        after = (g2.NextStepHint, g2.Complete, g2.EdgeCount, g2.PatchCount,
-                 g2.BlendCount, g2.SeamCount, g2.BlendableSeams,
-                 g2.BlendedSeams, g2.BlockedSeams)
-        if before != after:
-            errors.append("reload: state changed %r -> %r" % (before, after))
-        checks.append("round trip: hint=%r complete=%s counts=%d/%d/%d "
-                      "seams=%d/%d/%d/%d" % after)
-        # And the sink still agrees with a fresh query on the reloaded doc.
-        state2 = compute_guide_state(doc2)
-        if g2.NextStepHint != state2["hint"]:
-            errors.append("reload: stored hint %r != fresh query %r"
-                          % (g2.NextStepHint, state2["hint"]))
-        checks.append("stored hint agrees with a fresh query on reload")
-    finally:
-        os.remove(save_path)
-        FreeCAD.closeDocument(doc2.Name)
+    if guides:
+        errors.append("document holds %d WorkflowGuide object(s): %s"
+                      % (len(guides), [o.Name for o in guides]))
+    checks.append("no WorkflowGuide object can reach a document")
+
+    # The query itself is untouched and still pure.
+    state = compute_guide_state(doc)
+    if state["hint"] != HINT_BLEND:
+        errors.append("hint %r != %r after the container removal"
+                      % (state["hint"], HINT_BLEND))
+    checks.append("compute_guide_state still returns hint=%r"
+                  % state["hint"])
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -541,6 +445,5 @@ ALL_TESTS = [
     test_guide_state_scales_to_many_patches,
     test_guide_state_blocked_seam_does_not_block_completion,
     test_guide_state_seams_match_seam_inventory,
-    test_guide_container_execute_populates_properties,
-    test_guide_container_serialization_round_trip,
+    test_guide_container_removed,
 ]
