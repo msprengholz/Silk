@@ -813,7 +813,14 @@ def test_splits_normalized_on_set(doc):
     whatever goes in, what comes back out is exactly what the geometry
     used, and the console says what was rejected and why (#53 display
     residue — before this the property editor kept showing 0.0 / 1.0 /
-    duplicates that the geometry had already dropped)."""
+    duplicates that the geometry had already dropped).
+
+    The console word has a THRESHOLD (#62 follow-up): a write that loses
+    EVERY value ([0], [1.5]) is the suspicious case and is reported, but
+    a PARTIAL correction — a reorder, a duplicate, one mistyped value
+    among good ones — is corrected silently. The property editor commits
+    a bare `0` while `0.2` is still being typed, so warning on every
+    discarded value scolded input the editor never meant to send."""
     from Tests.test_seam_resolver import _square_patch
 
     p = _square_patch(doc, "Norm")
@@ -830,7 +837,8 @@ def test_splits_normalized_on_set(doc):
         ([0.7, 0.0, 0.2, 1.0, -0.5, 2.0, 0.2], [0.2, 0.7], 3),
         ([0.5, 0.5], [0.5], 2),
         ([0.9, 0.3, 0.6], [0.3, 0.6, 0.9], 4),   # unsorted in
-        ([0.0, 1.0], [], 0),                     # nothing survives
+        ([0.0, 1.0], [], 0),                     # nothing survives -> loud
+        ([0.0, 0.25, 1.0], [0.25], 2),           # a partial fix -> silent
         ([0.5], [0.5], 2),                       # a legal write: no-op
     ]
     for written, want, n_cells in cases:
@@ -849,36 +857,52 @@ def test_splits_normalized_on_set(doc):
             errors.append("stored USplits %s is not strictly increasing"
                           % _fmt(got))
         msg = "\n".join(cap.errors)
-        rejected = [v for v in written if not 0.0 < v < 1.0]
-        if rejected and not all(("%g" % v) in msg for v in rejected):
-            errors.append("USplits = %s: rejected values %s not all named "
-                          "in the console message:\n%s"
-                          % (_fmt(written), rejected, msg))
-        if len(written) != len(set(written)) and "repeated" not in msg:
-            errors.append("USplits = %s: repeated values not reported:\n%s"
-                          % (_fmt(written), msg))
-        if not rejected and len(written) == len(set(written)) \
-                and list(written) == sorted(written) and msg.strip():
-            errors.append("USplits = %s is already legal but produced a "
-                          "message:\n%s" % (_fmt(written), msg))
+        # The threshold: a NON-EMPTY input that discards every one of its
+        # values is reported, naming the values; anything else is
+        # corrected in silence.
+        if written and not want:
+            rejected = [v for v in written if not 0.0 < v < 1.0]
+            if not msg.strip():
+                errors.append("USplits = %s lost every value and said "
+                              "nothing" % _fmt(written))
+            elif not all(("%g" % v) in msg for v in rejected):
+                errors.append("USplits = %s: rejected values %s not all "
+                              "named in the console message:\n%s"
+                              % (_fmt(written), rejected, msg))
+        elif msg.strip():
+            errors.append("USplits = %s was corrected to %s and reported "
+                          "anyway (only a wholesale discard warns):\n%s"
+                          % (_fmt(written), _fmt(want), msg))
     checks.append("%d USplits writes: stored list always sorted, deduped, "
-                  "strictly inside (0, 1); cell count always matches it"
-                  % len(cases))
+                  "strictly inside (0, 1); cell count always matches it; "
+                  "only a wholesale discard is reported" % len(cases))
 
-    # The V axis is normalized the same way, independently.
+    # The V axis is normalized the same way, independently -- and the
+    # same threshold holds there.
     with _Capture() as cap:
         p.VSplits = [0.0, 0.25, 1.0, 0.75]
     if stored("VSplits") != [0.25, 0.75]:
         errors.append("VSplits stored as %s, want [0.25, 0.75]"
                       % _fmt(stored("VSplits")))
+    if cap.errors:
+        errors.append("a PARTLY corrected VSplits reported: %s" % cap.errors)
+    with _Capture() as cap:
+        p.VSplits = [1.0, 1.5]
+    if stored("VSplits") != []:
+        errors.append("VSplits stored as %s, want []"
+                      % _fmt(stored("VSplits")))
+    if not any("VSplits" in e for e in cap.errors):
+        errors.append("a WHOLLY discarded VSplits said nothing: %s"
+                      % cap.errors)
     want_cells = (len(stored("USplits")) + 1) * (len(stored("VSplits")) + 1)
     if cells() != want_cells:
         errors.append("USplits=%s x VSplits=%s gives %d cells, want %d"
                       % (_fmt(stored("USplits")), _fmt(stored("VSplits")),
                          cells(), want_cells))
-    checks.append("VSplits normalized independently: %s; %dx%d = %d cells "
-                  "matches the stored lists"
-                  % (_fmt(stored("VSplits")), len(stored("USplits")) + 1,
+    checks.append("VSplits normalized independently and SILENTLY when only "
+                  "partly corrected, loudly when wholly discarded; "
+                  "%dx%d = %d cells matches the stored lists"
+                  % (len(stored("USplits")) + 1,
                      len(stored("VSplits")) + 1, cells()))
 
     # Geometry agrees with the stored list: every interval is a cell and

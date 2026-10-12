@@ -29,6 +29,14 @@ What is asserted here:
      alone;
   8. closing rebuilds fresh -- FreeCAD deletes the widget and nulls the
      adapter's `.form`.
+  9. the band split stays EDITABLE after the blend exists (a blended row
+     carries a working editor; editing it moves the width, the blend's
+     poles follow, and collecting the row is still refused);
+ 10. a split correction only warns when it discards EVERY value, so the
+     property editor's transient `0` on the way to `0.2` is silent;
+ 11. the panel's own layout: no width floor, capped collection lists with
+     a greyed placeholder, and the next-step guidance out of the prime
+     space above the accordion but still reachable.
 
 Fixture helpers are imported, not refactored: the square / sharing /
 stray builders and the console capture from Tests.test_seam_resolver,
@@ -1383,6 +1391,503 @@ def test_band_cell_mirror_agrees_with_the_real_band_cells(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+# ---- the band split, AFTER the blend exists (the #62 follow-up) ----------
+
+def test_blended_seam_row_keeps_a_working_split_editor(doc):
+    """The band split stays EDITABLE once the seam is blended.
+
+    #62 mounted the editor only on COLLECTED rows, and a collected row is
+    by definition blendable -- so a seam that had already been blended had
+    no editor at all and its width could only be reached through the
+    property editor. Here a blended row exposes a working editor, and
+    editing it moves the band width on BOTH patches, re-drives the
+    existing blend's poles (asserted on the poles themselves), and leaves
+    the oracle green.
+
+    Unchanged by this: a blended row still REFUSES blend creation
+    (`accepts`), so the collect-then-confirm rule is exactly as before."""
+    errors, checks = [], []
+    from SilkChecks import check_blend
+    from SilkMachinery import band_cells, patch_side, split_at_end
+    from SilkTaskPanel import read_band_split
+    from Tests.test_seam_resolver import _Capture
+
+    fixture, pa, pb, g = _open_gt_chain(doc)
+    try:
+        edge = g["E_Shr"]
+        panel = _open_panel(doc)
+        if not check(panel is not None, "Activated left no panel open",
+                     errors):
+            return {"pass": False, "errors": errors, "checks": checks}
+        try:
+            panel.toolbox.setCurrentIndex(2)
+            row = panel.seam_row_index(edge)
+            check(row >= 0, "%s has no row" % edge.Name, errors)
+            panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
+            with _Capture() as cap:
+                panel.panel_confirm()
+            doc.recompute()
+            blends = _blend_objects(doc)
+            if not check(len(blends) == 1,
+                         "confirm created %d blend(s), expected 1"
+                         % len(blends), errors):
+                return {"pass": False, "errors": errors, "checks": checks}
+            bl = blends[0]
+            errors += ["console error: %s" % e for e in cap.errors]
+            check(panel.row_texts(row)[2] == "blended by %s" % bl.Name,
+                  "the row did not flip to blended: %r"
+                  % panel.row_texts(row)[2], errors)
+
+            # --- the row now carries a WORKING editor ---------------
+            spin = panel.split_editor(edge)
+            if not check(spin is not None,
+                         "a BLENDED seam row has no band-split editor -- "
+                         "the width the blend was built from is unreachable "
+                         "from the panel", errors):
+                return {"pass": False, "errors": errors, "checks": checks}
+            entry = next(e for e in panel.seam_inventory()
+                         if e["edge"] is edge)
+            check(entry["status"] == "blended",
+                  "the seam is not reported as blended (%r)"
+                  % entry["status"], errors)
+            read = read_band_split(entry)
+            check(abs(spin.value() - read[2]) < 1e-9,
+                  "the editor shows %g, the patch's own band split is %g"
+                  % (spin.value(), read[2]), errors)
+            check("blended" in spin.toolTip(),
+                  "the editor's tooltip does not say the seam is blended: %r"
+                  % spin.toolTip(), errors)
+
+            # --- ... and collectability is unchanged -----------------
+            check(not panel.accepts(2, edge),
+                  "a blended seam became collectable again -- the editor's "
+                  "availability must not leak into blend CREATION", errors)
+            panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
+            check(panel.collected() == [],
+                  "a blended row collected %r on click" % panel.collected(),
+                  errors)
+
+            # --- editing it moves the band width --------------------
+            # The width lives at ITS end's half of the axis:
+            # split_at_end reads the lowest split for side 0 and the
+            # highest for side 1.
+            want = 0.2 if read[1] == 0 else 0.8
+            before_poles = [Vector(p) for p in bl.Poles]
+            before_undo = _undo_count(doc)
+            names_before = list(doc.UndoNames)
+            with _Capture() as cap2:
+                spin.setValue(want)
+                spin.editingFinished.emit()
+            doc.recompute()
+            # One transaction per patch's split write (#62's rule: a split
+            # edit is NEVER folded into the confirm transaction), so two
+            # writes are two undo steps -- but never zero and never the
+            # whole stack.
+            # UndoNames is newest-first.
+            added = list(doc.UndoNames[:len(doc.UndoNames)
+                                        - len(names_before)])
+            check(_undo_count(doc) - before_undo == 2,
+                  "the two patches' split writes moved the undo stack by %d "
+                  "steps (expected 2)" % (_undo_count(doc) - before_undo),
+                  errors)
+            check(all(str(n).startswith("Silk band split") for n in added),
+                  "the split edit was not its own transaction(s): %r" % added,
+                  errors)
+            for p, prop, ss, what in ((pa, read[0], read[1], "patch A"),
+                                      (pb, read[3], read[4], "patch B")):
+                got = split_at_end(list(getattr(p, prop) or []), ss)
+                check(got is not None and abs(got - want) < 1e-9,
+                      "%s.%s reads %r after the edit, expected %g"
+                      % (what, prop, list(getattr(p, prop) or []), want),
+                      errors)
+            # still exactly one band cell per side -- the edit did not turn
+            # the seam into an unsupported multi-cell band
+            for p, other, what in ((pa, pb, "A"), (pb, pa, "B")):
+                ea, sa = patch_side(p, other)
+                cells = band_cells(p, ea, sa) if ea else []
+                check(len(cells) == 1,
+                      "patch %s band covers %d cells after the edit (want 1)"
+                      % (what, len(cells)), errors)
+
+            # --- and the blend's poles followed ---------------------
+            after_poles = [Vector(p) for p in bl.Poles]
+            moved = max((x - y).Length for x, y in zip(before_poles,
+                                                       after_poles))
+            check(moved > 1e-6,
+                  "the blend's poles did not move at all when the band width "
+                  "changed (max pole delta %.3e)" % moved, errors)
+            results = check_blend(bl, pa, pb, edge=bl.Edge)
+            checked = {n: ok for n, ok, _d in results}
+            for name in ("structural", "B1_c0_seams", "B2_c1_tangents",
+                         "B3_surface_valid"):
+                check(checked.get(name) is True,
+                      "oracle %s failed after the post-blend width edit: %r"
+                      % (name, [(n, d) for n, ok, d in results if not ok]),
+                      errors)
+            errors += ["console error: %s" % e for e in cap2.errors]
+            checks.append("blended row keeps an editor; width %g -> both "
+                          "patches (2 own undo steps), poles moved %.3g, "
+                          "oracle structural/B1/B2/B3 green, collect still "
+                          "refused" % (want, moved))
+        finally:
+            _close_panel(panel)
+    finally:
+        Gui.Selection.clearSelection()
+        FreeCAD.closeDocument(fixture.Name)
+        FreeCAD.setActiveDocument(doc.Name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_unresolvable_seam_row_does_not_abandon_the_table(doc):
+    """A seam whose patches cannot be resolved gets NO band editor, and the
+    rows after it still render.
+
+    Found by screenshotting, not by a test: mounting an editor on EVERY
+    row (the post-blend fix) means every refresh now asks each seam which
+    axis its band lives on. A patch whose fill failed carries no poles, so
+    that resolution RAISES -- and the exception escaped into FreeCAD's
+    task-dialog callback, which swallows it. The visible result was a
+    half-rendered table: rows present, cells blank, everything below the
+    bad seam missing."""
+    errors, checks = [], []
+    from SilkWorkflowOps import seam_inventory
+    from Tests.test_seam_resolver import _square_patch, _patch_sharing
+
+    a = _square_patch(doc, "A")
+    b = _patch_sharing(doc, a.Edges[0], "B")
+    good = next(e for e in seam_inventory(doc) if e["edge"] is a.Edges[0])
+
+    class _Unbuilt:
+        """A Patch-shaped object whose fill never produced poles."""
+        Name = "Ghost"
+
+        def __init__(self):
+            self.Poles = []
+
+    ghost_edge = a.Edges[1]
+    ghost = {"edge": ghost_edge, "patch_a": _Unbuilt(),
+             "patch_b": _Unbuilt(), "status": "blendable", "blend": None}
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.toolbox.setCurrentIndex(2)
+        raised = None
+        try:
+            panel._render_table([good, ghost, good],
+                                {"blended": 0, "total": 3})
+        except Exception as e:                    # pragma: no cover
+            raised = e
+        check(raised is None,
+              "rendering a table with an unresolvable seam raised %r" % raised,
+              errors)
+        check(panel.blend_table.rowCount() == 3,
+              "the table has %d rows, expected 3"
+              % panel.blend_table.rowCount(), errors)
+        for row in range(3):
+            texts = panel.row_texts(row)
+            check(all(texts),
+                  "row %d did not render its cells: %r" % (row, texts), errors)
+        check(panel.blend_table.cellWidget(1, panel.COL_SPLIT) is None,
+              "the unresolvable row was given a band editor anyway", errors)
+        check(panel.blend_table.cellWidget(2, panel.COL_SPLIT) is not None,
+              "the row AFTER the unresolvable one lost its editor", errors)
+        checks.append("an unresolvable seam row renders blank-but-present "
+                      "and the rows around it survive")
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_post_blend_width_that_would_break_the_band_is_refused(doc):
+    """The editor refuses a width that would NOT leave one band cell,
+    naming the patch and the values, and puts the spin back -- the same
+    rule the confirm path uses, now protecting a blend that already
+    exists instead of preventing one that has not been made yet."""
+    errors, checks = [], []
+    from Tests.test_seam_resolver import _Capture, _square_patch, \
+        _patch_sharing
+    from SilkWorkflowOps import create_blend_by_edge
+
+    a = _square_patch(doc, "A")
+    b = _patch_sharing(doc, a.Edges[0], "B")
+    edge = a.Edges[0]
+    bl = create_blend_by_edge(edge)
+    doc.recompute()
+    check(bl is not None, "no blend was created on %s" % edge.Name, errors)
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.toolbox.setCurrentIndex(2)
+        spin = panel.split_editor(edge)
+        if not check(spin is not None, "the blended row has no editor",
+                     errors):
+            return {"pass": False, "errors": errors, "checks": checks}
+        # A plain mid split at 0.5 on the seam-PARALLEL axis marks
+        # neither end, so a band split on top of it spans two cells.
+        from SilkTaskPanel import _side_of
+        band_prop, band_ss = _side_of(a, b)
+        along_prop = "VSplits" if band_prop == "USplits" else "USplits"
+        setattr(a, along_prop, [0.5])
+        doc.recompute()
+        panel.refresh()
+        spin = panel.split_editor(edge)
+        before = list(getattr(a, band_prop) or [])
+        with _Capture() as cap:
+            spin.setValue(0.2)
+            spin.editingFinished.emit()
+        doc.recompute()
+        msgs = "".join(cap.errors)
+        check("band cells" in msgs,
+              "the refusal does not explain the cell count: %r" % msgs, errors)
+        check(edge.Name in msgs and a.Name in msgs,
+              "the refusal does not name the seam and the patch: %r" % msgs,
+              errors)
+        check(list(getattr(a, band_prop) or []) == before,
+              "the refused width was written anyway: %s was %s"
+              % (list(getattr(a, band_prop) or []), before), errors)
+        check(abs(spin.value() - (before[0] if before else 0.1)) < 1e-9,
+              "the spin box was not put back to the stored split (%g)"
+              % spin.value(), errors)
+        checks.append("multi-cell width refused on a blended row and the "
+                      "split left alone")
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+# ---- the split warning threshold (the #62 follow-up) ----------------------
+
+def test_split_warning_only_fires_on_a_wholesale_discard(doc):
+    """#62's "not strictly inside (0, 1)" warning fired on the property
+    editor's TRANSIENT commits: typing 0.2 commits a bare 0 on the way, so
+    `USplits = [0]` briefly normalized to `[]` and printed an error while
+    the user was still typing.
+
+    The threshold is now: a NON-EMPTY input that discards EVERY one of its
+    values is the genuinely suspicious case and is reported (naming the
+    values); anything that keeps at least one is corrected in silence. The
+    normalization itself is untouched -- the stored list always equals what
+    the geometry used, which the cell count proves here."""
+    errors, checks = [], []
+    from Tests.test_seam_resolver import _Capture, _square_patch
+
+    p = _square_patch(doc, "W")
+
+    def stored(prop):
+        return [round(float(v), 12) for v in (getattr(p, prop) or [])]
+
+    def cells():
+        return len(p.Proxy._subgrids)
+
+    # -- the transient: an emptied list on the way to 0.2, then 0.2 ------
+    with _Capture() as cap:
+        p.USplits = []
+    transient_errors = list(cap.errors)
+    with _Capture() as cap2:
+        p.USplits = [0.2]
+    if transient_errors or cap2.errors:
+        errors.append("the transient 0 -> 0.2 sequence warned: %s %s"
+                      % (transient_errors, cap2.errors))
+    if stored("USplits") != [0.2]:
+        errors.append("after the transient the list reads %s, want [0.2]"
+                      % stored("USplits"))
+    if cells() != 2:
+        errors.append("USplits=[0.2] gave %d cells, want 2" % cells())
+    checks.append("transient 0 then 0.2: silent, list [0.2], 2 cells")
+
+    # -- the partial correction: one bad value among good ones -----------
+    for written, want in (([0.0, 0.2], [0.2]), ([0.2, 0.2], [0.2]),
+                          ([0.3, 0.6], [0.3, 0.6])):
+        with _Capture() as cap:
+            setattr(p, "USplits", list(written))
+        if cap.errors:
+            errors.append("USplits = %s was partly corrected and still "
+                          "reported: %s" % (written, cap.errors))
+        if stored("USplits") != want:
+            errors.append("USplits = %s stored as %s, want %s"
+                          % (written, stored("USplits"), want))
+    checks.append("partial corrections (0 dropped, duplicate, reorder) "
+                  "silent and correctly stored")
+
+    # -- the wholesale discard: still reported, still named ------------
+    for written in ([0.0], [1.0], [1.5], [-0.2, 3.0]):
+        with _Capture() as cap:
+            setattr(p, "USplits", list(written))
+        msg = "".join(cap.errors)
+        if not msg.strip():
+            errors.append("USplits = %s lost every value and said nothing"
+                          % written)
+        if not all(("%g" % v) in msg for v in written):
+            errors.append("USplits = %s: the message does not name every "
+                          "rejected value: %r" % (written, msg))
+        if stored("USplits") != []:
+            errors.append("USplits = %s stored as %s, want []"
+                          % (written, stored("USplits")))
+    checks.append("wholesale discards ([0], [1.0], [1.5], [-0.2, 3.0]) "
+                  "still warn and still name the values")
+
+    # -- and the same on the other axis, through a real panel refresh ----
+    with _Capture() as cap:
+        p.VSplits = [0.0, 0.4]
+    if cap.errors:
+        errors.append("a partial VSplits correction reported: %s" % cap.errors)
+    if stored("VSplits") != [0.4]:
+        errors.append("VSplits stored as %s, want [0.4]" % stored("VSplits"))
+    checks.append("the V axis follows the same threshold")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+# ---- the panel's own layout (the #62 follow-up) ---------------------------
+
+def test_hint_is_out_of_the_way_and_still_reachable(doc):
+    """#62 put the next-step hint in a QGroupBox ABOVE the accordion, where
+    it restated the instruction directly beneath it and spent the panel's
+    prime space on it. It now sits BELOW the accordion as a muted line,
+    and the same guidance is the panel's and the toolbox's tooltip, so the
+    words survive without costing the sections a row."""
+    errors, checks = [], []
+    from PySide import QtWidgets
+    from SilkTaskPanel import HINT_TOOLTIP
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        Gui.updateGui()
+        hint, toolbox = panel.hint_lbl, panel.toolbox
+        check(hint.isVisible(), "the next-step hint is not visible at all",
+              errors)
+        check(hint.y() > toolbox.y(),
+              "the hint still sits ABOVE the accordion (hint y=%d, toolbox "
+              "y=%d)" % (hint.y(), toolbox.y()), errors)
+        check(hint.parent() is panel
+              and hint.parentWidget().layout().indexOf(hint) > 0,
+              "the hint is no longer a top-level item of the form layout",
+              errors)
+        check(panel.layout().indexOf(hint) > panel.layout().indexOf(toolbox),
+              "the form layout still puts the hint before the accordion",
+              errors)
+        check(not [g for g in panel.findChildren(QtWidgets.QGroupBox)],
+              "a group box is back in the panel", errors)
+        # the guidance survives, visibly AND as a tooltip
+        check(panel.hint_text().strip() != "",
+              "the hint carries no text", errors)
+        check(HINT_TOOLTIP and "seam" in HINT_TOOLTIP,
+              "the static guidance is missing", errors)
+        check(panel.toolTip() == HINT_TOOLTIP
+              and toolbox.toolTip() == HINT_TOOLTIP,
+              "the guidance is not reachable as a tooltip (panel %r, "
+              "toolbox %r)" % (panel.toolTip()[:30], toolbox.toolTip()[:30]),
+              errors)
+        # muted, not a second bold instruction block
+        check(hint.font().italic(), "the hint is not styled as guidance",
+              errors)
+        checks.append("hint below the accordion, muted, and carried in the "
+                      "panel + toolbox tooltips")
+    finally:
+        _close_panel(panel)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_panel_fits_a_narrow_dock_and_lists_stay_small(doc):
+    """The layout facts that #62's geometry numbers got wrong.
+
+    Two of them are structural and assertable here: the panel has NO width
+    floor (it shrinks into the dock instead of pushing past it), and the
+    collection lists are CAPPED with a greyed placeholder when empty
+    rather than being an empty box eating the panel. (The pixels are still
+    the human round's job -- see the screenshots -- but these are the
+    regression guards.)"""
+    errors, checks = [], []
+    from PySide import QtCore, QtWidgets
+    from SilkTaskPanel import LIST_MAX_ROWS, PLACEHOLDERS, SECTION_EDGE, \
+        SECTION_PATCH
+    from Tests.test_seam_resolver import _square_patch
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        Gui.updateGui()
+        # -- no width floor: the panel may shrink into its dock --------
+        check(panel.minimumWidth() == 0,
+              "the panel still has a %dpx width floor -- a narrower dock "
+              "clips it (and earns a horizontal scrollbar)"
+              % panel.minimumWidth(), errors)
+        check(panel.minimumSizeHint().width() < 320,
+              "the panel's minimum width is %dpx, wider than a narrow dock"
+              % panel.minimumSizeHint().width(), errors)
+
+        # -- the collection lists are capped -------------------------
+        for section, widget in ((SECTION_EDGE, panel.edge_list),
+                                (SECTION_PATCH, panel.patch_list)):
+            row_h = widget.fontMetrics().height() + 6
+            cap = 2 * widget.frameWidth() + row_h * LIST_MAX_ROWS
+            check(widget.maximumHeight() <= cap,
+                  "the %s list may grow to %dpx, cap is %dpx"
+                  % ("Edge" if section == SECTION_EDGE else "Patch",
+                     widget.maximumHeight(), cap), errors)
+            check(widget.maximumHeight() < widget.sizeHint().height()
+                  or widget.maximumHeight() <= 27,
+                  "the %s list is uncapped (%dpx)"
+                  % ("Edge" if section == SECTION_EDGE else "Patch",
+                     widget.maximumHeight()), errors)
+            # -- an empty list shows a greyed placeholder -------------
+            check(widget.count() == 1,
+                  "an empty %s collection list holds %d rows, expected the "
+                  "1 placeholder"
+                  % ("Edge" if section == SECTION_EDGE else "Patch",
+                     widget.count()), errors)
+            item = widget.item(0)
+            check(item.text() == PLACEHOLDERS[section],
+                  "the placeholder reads %r, expected %r"
+                  % (item.text(), PLACEHOLDERS[section]), errors)
+            check(not (item.flags() & QtCore.Qt.ItemIsSelectable),
+                  "the placeholder row is selectable -- it must not be "
+                  "mistaken for a collection entry", errors)
+            grey = item.foreground().color().value()
+            check(grey > 0x40, "the placeholder is not greyed (%d)" % grey,
+                  errors)
+            # -- and it never scrolls sideways ------------------------
+            check(widget.horizontalScrollBarPolicy()
+                  == QtCore.Qt.ScrollBarAlwaysOff,
+                  "a collection list can scroll horizontally", errors)
+
+        # -- the seam table is capped too ----------------------------
+        row_h = panel.blend_table.fontMetrics().height() + 10
+        check(panel.blend_table.maximumHeight() < panel.height(),
+              "the seam table may grow to %dpx inside a %dpx panel -- an "
+              "uncapped table is the same empty chrome as an uncapped list"
+              % (panel.blend_table.maximumHeight(), panel.height()), errors)
+        check(panel.blend_table.horizontalScrollBarPolicy()
+              == QtCore.Qt.ScrollBarAlwaysOff,
+              "the seam table can scroll horizontally", errors)
+
+        # -- a collected entry still lists, and the box grows to fit --
+        from Tests.test_seam_resolver import _line_sketch
+        sk = _line_sketch(doc, "Fill", [(200, 0, 0), (220, 0, 0),
+                                        (240, 0, 0), (260, 0, 0)])
+        _click(sk)
+        check(panel.edge_list.count() == 1,
+              "the collected sketch did not replace the placeholder (%d rows)"
+              % panel.edge_list.count(), errors)
+        check(panel.edge_list.item(0).text() != PLACEHOLDERS[SECTION_EDGE],
+              "the placeholder is still showing over a real entry", errors)
+        checks.append("no width floor; lists capped + greyed placeholder; "
+                      "table capped; no sideways scrolling; 1 collected "
+                      "entry replaces the placeholder")
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 # ---- production coupling ----------------------------------------------------
 
 def test_no_production_module_knows_the_panel(doc):
@@ -1455,5 +1960,11 @@ ALL_TESTS = [
     test_user_band_split_is_honoured_by_the_blend,
     test_band_split_multi_cell_is_refused_naming_patch_and_values,
     test_band_cell_mirror_agrees_with_the_real_band_cells,
+    test_blended_seam_row_keeps_a_working_split_editor,
+    test_unresolvable_seam_row_does_not_abandon_the_table,
+    test_post_blend_width_that_would_break_the_band_is_refused,
+    test_split_warning_only_fires_on_a_wholesale_discard,
+    test_hint_is_out_of_the_way_and_still_reachable,
+    test_panel_fits_a_narrow_dock_and_lists_stay_small,
     test_no_production_module_knows_the_panel,
 ]

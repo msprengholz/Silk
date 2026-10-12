@@ -115,6 +115,17 @@ class Patch:
         #     messaging alone would leave the residue the ticket is
         #     about.
         #
+        # ...but only when the write lost EVERYTHING. Typing 0.2 into the
+        # property editor commits a bare 0 on the way (the line edit fires
+        # before the text is finished), so `USplits = [0]` normalizes to
+        # `[]` and used to print an error while the user was still typing
+        # -- a warning for input the editor never meant to send. Warning on
+        # the genuinely suspicious case only, a non-empty input that
+        # discards every one of its values ([0], [1.5], [-0.1, 2.0]), keeps
+        # the mistyped-width report and drops the noise. The normalization
+        # itself is untouched: the stored list still always equals what the
+        # geometry used.
+        #
         # The rule is unchanged (SilkMachinery.normalize_splits):
         # strictly inside (0, 1), strictly increasing, no repeats. It is
         # idempotent, and the write is guarded, so onChanged cannot
@@ -171,6 +182,13 @@ class Patch:
         On a document restore the residue is fixed silently: an old file
         carrying a 0.0 split should not greet the user with a complaint
         every time it opens. The next real edit reports again.
+
+        The same silence covers a PARTIAL correction -- a reorder, a
+        duplicate, one mistyped value among good ones. Those are corrected
+        and the stored list is right, so there is nothing for the user to
+        act on; only a write that loses every value is worth a word (see
+        onChanged for why the property editor's transient `0` must not
+        raise one).
         """
         current = list(getattr(fp, prop, None) or [])
         kept, out_of_range, repeated = normalize_splits_report(current)
@@ -179,6 +197,8 @@ class Patch:
         setattr(fp, prop, list(kept))
         if 'Restore' in fp.State:
             return
+        if not current or kept:
+            return      # a partial correction: correct it, do not scold
         why = []
         if out_of_range:
             why.append("outside (0, 1): %s"
@@ -187,12 +207,11 @@ class Patch:
             why.append("repeated: %s"
                        % ", ".join("%g" % v for v in repeated))
         FreeCAD.Console.PrintError(
-            "Silk: Patch '%s': %s = %s is not strictly inside (0, 1) and "
-            "strictly increasing (%s) -> using %s. The stored list now "
-            "matches the geometry.\n"
+            "Silk: Patch '%s': %s = %s has no value strictly inside (0, 1) "
+            "(%s) -- every entry was discarded, so no split is set. Enter "
+            "a width between 0 and 1 if that was meant.\n"
             % (fp.Name, prop, ", ".join("%g" % v for v in current),
-               "; ".join(why) or "reordered",
-               ", ".join("%g" % v for v in kept) or "[]"))
+               "; ".join(why)))
 
     def _rebuild_display(self, fp):
         """Recompose the display Shape from the cached base surface,

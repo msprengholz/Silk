@@ -37,6 +37,17 @@
 #    collected entry is REFUSED LOUDLY, naming the item -- never
 #    silently dropped (that would turn a quad patch into a pointed one).
 #
+#    Every seam row, BLENDED ones included, carries its band's split
+#    editor: the seam's band is the blend's cross-section, so the width
+#    stays tunable once the blend exists (#62 follow-up). Collectability
+#    is separate and unchanged -- a blended row still refuses a blend.
+#
+#    The panel is built for a NARROW dock: no width floor, every label
+#    wrapping, the collection lists and the seam table capped to their
+#    content with an empty one showing a greyed placeholder, and the next
+#    step's guidance below the accordion and in the tooltips rather than
+#    in a block above it (#62 follow-up).
+#
 #    #47's `compute_guide_state` stays the source of truth for the
 #    next-step hint and the seam table; its WorkflowGuide container
 #    (#47/#19's persisting half) and #48's panel are gone.
@@ -78,6 +89,33 @@ BLEND_MIN = 1
 # ss 1 -> 0.9). Shown for an UNSET split so the row is editable before
 # the blend writes anything.
 DEFAULT_BAND = (0.1, 0.9)
+
+# How tall a collection list may grow. The stages collect at most 2
+# sketches and 4 edges, so a taller box is pure empty chrome: #62's
+# uncapped QListWidget ate ~40% of the panel for zero rows, which is
+# what made the panel read as EMPTY rather than ready.
+LIST_MAX_ROWS = 4
+
+# How tall the seam table may grow before it scrolls. A document has a
+# handful of seams; a table filling the whole panel hides that.
+TABLE_MAX_ROWS = 6
+
+# Placeholder shown in an empty collection list, so "nothing yet" reads
+# as deliberate rather than as a list that failed to load.
+PLACEHOLDERS = {
+    SECTION_EDGE: "nothing collected -- click a sketch in the 3D view",
+    SECTION_PATCH: "nothing collected -- click edges in the 3D view",
+}
+
+# The static guidance, kept as the panel's / sections' tooltip and in the
+# adapter's needsFullSpace() explanation. It used to be a permanent
+# top-of-panel block duplicating the section instruction directly below.
+HINT_TOOLTIP = (
+    "Edge: click 1 or 2 sketches (1 reads 3L, 2 read 2N).\n"
+    "Patch: click 3 or 4 edges (4 read a quad fill, 3 the pointed one).\n"
+    "Blend: click a seam to collect it, click again to remove it; Enter or "
+    "OK blends every collected seam in one undo step. A blended seam's band "
+    "split stays editable -- it is the width that blend uses.")
 
 
 # ---- the open panel --------------------------------------------------------
@@ -193,7 +231,12 @@ class SilkTaskDialog:
                 | QtWidgets.QDialogButtonBox.Cancel)
 
     def needsFullSpace(self):
-        # No trailing stretch: the toolbox fills the Tasks panel.
+        # No trailing stretch of our own: the toolbox fills the Tasks
+        # panel, and each page's OWN trailing stretch keeps a capped list
+        # or table from stretching to fill (which is what made #62's panel
+        # read as empty). The guidance that used to sit in a group box
+        # above the accordion lives here and on the panel's / sections'
+        # tooltips -- the primary space belongs to the three sections.
         return True
 
     def isAllowedAlterDocument(self):
@@ -305,10 +348,11 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                 carrying its own status (blendable / blended by X /
                 blocked). Clicking a row collects that seam; a collected
                 row is highlighted and clicking it again removes it.
-                Each collected row also exposes the band's split value,
-                edited straight onto the patch's USplits/VSplits -- since
-                #64 the blend READS that split, so a width set here is
-                the width the blend uses.
+                EVERY row -- blended ones included -- also exposes the
+                band's split value, edited straight onto the patch's
+                USplits/VSplits: since #64 the blend READS that split, so
+                a width set here is the width the blend uses, whether the
+                blend already exists or not.
 
     Confirm (Enter or the native OK button) is one document transaction:
     one undo step, even when several seams blend at once. After applying,
@@ -336,23 +380,16 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self._split_widgets = {}
 
         self.setWindowTitle("Silk Workflow")
-        # The Tasks dock is narrow; let the panel shrink into it and keep
-        # its labels wrapping rather than pushing the panel wider than the
-        # dock (which clips the buttons and the table).
-        self.setMinimumWidth(320)
+        # The Tasks dock is narrow, and #62 shipped a 320px floor that
+        # made the PANEL wider than a narrower dock -- the dock then
+        # clipped the right-hand column (and showed its own horizontal
+        # scrollbar). No floor: the panel's true minimum is its layout's,
+        # and every label in it wraps, so it shrinks with the dock.
+        self.setMinimumWidth(0)
 
         form = QtWidgets.QVBoxLayout(self)
-
-        # --- the next-step hint, from #47's stateless query ----------
-        hint_box = QtWidgets.QGroupBox("Next step")
-        hint_layout = QtWidgets.QVBoxLayout(hint_box)
-        self.hint_lbl = QtWidgets.QLabel("")
-        f = self.hint_lbl.font()
-        f.setBold(True)
-        self.hint_lbl.setFont(f)
-        self.hint_lbl.setWordWrap(True)
-        hint_layout.addWidget(self.hint_lbl)
-        form.addWidget(hint_box)
+        form.setContentsMargins(4, 4, 4, 4)
+        form.setSpacing(4)
 
         # --- the three-stage accordion -------------------------------
         self.toolbox = QtWidgets.QToolBox(self)
@@ -366,9 +403,29 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self._build_patch_page()
         self._build_blend_page()
 
+        # --- the footer: guidance OUT of the prime top-of-panel space --
+        # #62 put the next-step hint in a QGroupBox above the accordion,
+        # where it restated the section instruction sitting directly
+        # underneath and ate the width the dock actually needed. It now
+        # lives BELOW the accordion as one muted line -- guidance stays
+        # visible and wrapping -- and is also the panel's and each
+        # section's tooltip, so the words are one hover away without
+        # costing a row of the reading order.
+        self.hint_lbl = QtWidgets.QLabel("")
+        self.hint_lbl.setWordWrap(True)
+        f = self.hint_lbl.font()
+        f.setItalic(True)
+        self.hint_lbl.setFont(f)
+        self.hint_lbl.setEnabled(False)      # muted: not an input
+        self.hint_lbl.setToolTip(HINT_TOOLTIP)
+        form.addWidget(self.hint_lbl)
+        self.setToolTip(HINT_TOOLTIP)
+        self.toolbox.setToolTip(HINT_TOOLTIP)
+
         # --- the status line: the last action's outcome --------------
         self.status_lbl = QtWidgets.QLabel("")
         self.status_lbl.setWordWrap(True)
+        self.status_lbl.setMinimumWidth(0)
         form.addWidget(self.status_lbl)
 
         self._install_shortcuts()
@@ -382,7 +439,49 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         minimum width, which clips the whole panel."""
         lbl = QtWidgets.QLabel(text)
         lbl.setWordWrap(True)
+        lbl.setToolTip(HINT_TOOLTIP)
         return lbl
+
+    @staticmethod
+    def _fit_list(widget, n_rows):
+        """Cap a collection list at LIST_MAX_ROWS rows' worth of height.
+
+        An uncapped list expands to fill the page, so on an empty
+        collection a QListWidget with nothing in it dominated the panel --
+        the layout read as BROKEN rather than ready (#62). The box now
+        grows with its content up to the cap and the page's trailing
+        stretch takes the slack."""
+        row_h = widget.sizeHintForRow(0) or (widget.fontMetrics().height() + 8)
+        frame = 2 * widget.frameWidth()
+        wanted = frame + row_h * max(1, min(n_rows, LIST_MAX_ROWS))
+        widget.setMaximumHeight(wanted)
+        widget.setMinimumHeight(min(wanted, frame + row_h))
+
+    @staticmethod
+    def _placeholder_item(text):
+        """The greyed 'nothing yet' row of an empty collection list. Not
+        selectable and not a collection entry: it exists so an empty box
+        reads as deliberate."""
+        item = QtWidgets.QListWidgetItem(text)
+        item.setFlags(QtCore.Qt.NoItemFlags)
+        item.setForeground(QtGui.QBrush(QtGui.QColor(0x90, 0x90, 0x90)))
+        item.setToolTip("This list fills as you click in the 3D view.")
+        return item
+
+    @staticmethod
+    def _collection_list(page):
+        """A collection list that never scrolls sideways.
+
+        A horizontal scrollbar across a narrow dock is exactly the
+        overflow #62 shipped; text elides instead (the collection entry
+        is still named in full in the tooltip and by _item_text)."""
+        widget = QtWidgets.QListWidget(page)
+        widget.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection)
+        widget.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        widget.setTextElideMode(QtCore.Qt.ElideRight)
+        widget.setWordWrap(False)
+        return widget
 
     def _build_edge_page(self):
         page = QtWidgets.QWidget()
@@ -390,9 +489,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         lay.addWidget(self._instruction(
             "Click 1 or 2 sketches in the 3D view. 1 sketch reads 3L, "
             "2 sketches read 2N."))
-        self.edge_list = QtWidgets.QListWidget(page)
-        self.edge_list.setSelectionMode(
-            QtWidgets.QAbstractItemView.SingleSelection)
+        self.edge_list = self._collection_list(page)
         self.edge_list.itemSelectionChanged.connect(self._on_collected_changed)
         lay.addWidget(self.edge_list)
         row = QtWidgets.QHBoxLayout()
@@ -407,6 +504,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self.edge_remove_btn.clicked.connect(self._remove_selected)
         row.addWidget(self.edge_remove_btn)
         lay.addLayout(row)
+        # The slack belongs to the PAGE, not to an empty list box.
+        lay.addStretch(1)
         self.toolbox.addItem(page, SECTION_TITLES[SECTION_EDGE])
 
     def _build_patch_page(self):
@@ -415,9 +514,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         lay.addWidget(self._instruction(
             "Click 3 or 4 edges in the 3D view. 4 edges read a quad "
             "patch, 3 edges the pointed fill."))
-        self.patch_list = QtWidgets.QListWidget(page)
-        self.patch_list.setSelectionMode(
-            QtWidgets.QAbstractItemView.SingleSelection)
+        self.patch_list = self._collection_list(page)
         self.patch_list.itemSelectionChanged.connect(
             self._on_collected_changed)
         lay.addWidget(self.patch_list)
@@ -433,6 +530,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self.patch_remove_btn.clicked.connect(self._remove_selected)
         row.addWidget(self.patch_remove_btn)
         lay.addLayout(row)
+        # The slack belongs to the PAGE, not to an empty list box.
+        lay.addStretch(1)
         self.toolbox.addItem(page, SECTION_TITLES[SECTION_PATCH])
 
     def _build_blend_page(self):
@@ -458,9 +557,21 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         # still holds the full string.
         self.blend_table.horizontalHeader().setSectionResizeMode(
             QtWidgets.QHeaderView.Stretch)
+        # Belt and braces for the same overrun: the columns stretch, so
+        # no section may exceed its share. A minimum section size (or a
+        # long unbreakable cell) would otherwise push the table's
+        # minimum past the dock and earn the dock a horizontal
+        # scrollbar.
+        self.blend_table.horizontalHeader().setMinimumSectionSize(16)
+        self.blend_table.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOff)
         self.blend_table.setTextElideMode(QtCore.Qt.ElideRight)
         self.blend_table.cellClicked.connect(self._on_blend_row_clicked)
         lay.addWidget(self.blend_table)
+        # Same rule as the collection lists: a one-row table stretched to
+        # the full panel height is empty chrome. The page's trailing
+        # stretch takes the slack instead.
+        lay.addStretch(1)
         self.toolbox.addItem(page, SECTION_TITLES[SECTION_BLEND])
 
     def _install_shortcuts(self):
@@ -599,7 +710,10 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         # fewer than two patches is not a seam, and a non-manifold one is
         # not blendable -- both are silently ignored here; the table still
         # SHOWS them with their status, which is where a blocked seam is
-        # explained.
+        # explained. A seam that is ALREADY BLENDED is refused here too:
+        # its blend exists, so collecting it would only ever re-run an
+        # idempotent no-op. Its band split is still editable in place --
+        # that is the editor's availability, not its collectability.
         if self.object_type(obj) != "Edge":
             return False
         return any(e["edge"] is obj and e["status"] == "blendable"
@@ -691,8 +805,15 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                                 (SECTION_PATCH, self.patch_list)):
             items = self._collected[section]
             widget.clear()
-            for item in items:
-                widget.addItem(self._item_text(item))
+            if items:
+                for item in items:
+                    widget.addItem(self._item_text(item))
+            else:
+                # An empty box with nothing in it reads as a failure to
+                # load. One greyed, unselectable line reads as "not yet".
+                widget.addItem(self._placeholder_item(
+                    PLACEHOLDERS[section]))
+            self._fit_list(widget, len(items))
 
         edges = self._collected[SECTION_EDGE]
         self.edge_count_lbl.setText("%d/%d" % (len(edges), EDGE_MAX))
@@ -758,14 +879,41 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                     else:
                         item.setBackground(QtGui.QBrush())
             self.blend_table.setCellWidget(row, self.COL_SPLIT, None)
-            if taken and entry["status"] == "blendable":
+            # EVERY seam row carries its band-split editor, blended or
+            # not. #62 mounted it only on COLLECTED rows, and a collected
+            # row is by definition blendable, so a seam that had already
+            # been blended had no editor at all -- the width that blend
+            # is actually built from was then only reachable through the
+            # property editor, which is the thing #62 exists to replace.
+            # Collectability is a separate question and stays where it
+            # is (`accepts`), so a blended row still refuses blend
+            # CREATION -- only the editor's availability changed.
+            if entry["status"] in ("blendable", "blended"):
                 self._mount_split_editor(row, entry)
+        self._fit_table(len(seams))
+
+    def _fit_table(self, n_rows):
+        """Cap the seam table at TABLE_MAX_ROWS rows; it scrolls beyond."""
+        vh = self.blend_table.verticalHeader()
+        row_h = vh.sectionSize(0) if self.blend_table.rowCount() else 0
+        row_h = row_h or (self.blend_table.fontMetrics().height() + 12)
+        head_h = self.blend_table.horizontalHeader().height() + 4
+        frame = 2 * self.blend_table.frameWidth()
+        wanted = frame + head_h + row_h * max(
+            1, min(n_rows, TABLE_MAX_ROWS))
+        self.blend_table.setMaximumHeight(wanted)
 
     def _mount_split_editor(self, row, entry):
-        """Expose the band's split on the collected row: the value comes
+        """Expose the band's split on EVERY seam row: the value comes
         straight off the patch's USplits/VSplits and writing it goes
         straight back onto that property, which is exactly what #64's
-        blend reads."""
+        blend reads.
+
+        Blended rows included (#62 follow-up). The seam's band IS the
+        blend's cross-section, so a width set here re-drives an existing
+        blend exactly as it would size a new one's -- which is the whole
+        reason to be able to edit it after the blend exists. Refusing to
+        COLLECT an already-blended row is untouched (`accepts`)."""
         read = read_band_split(entry)
         if read is None:
             return
@@ -777,19 +925,49 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         spin.setValue(pa_val)
         spin.setToolTip(
             "Band split written on %s.%s (side %d) and %s.%s (side %d).\n"
-            "The blend reads these splits -- this is the band width."
+            "The blend reads these splits -- this is the band width.%s"
             % (pa_prop and entry["patch_a"].Name, pa_prop, pa_ss,
-               entry["patch_b"].Name, pb_prop, pb_ss))
+               entry["patch_b"].Name, pb_prop, pb_ss,
+               "\nThis seam is blended: editing the width re-drives that "
+               "blend." if entry["status"] == "blended" else ""))
         spin.editingFinished.connect(
             lambda e=entry: self._on_split_edited(e))
         self.blend_table.setCellWidget(row, self.COL_SPLIT, spin)
         self._split_widgets[entry["edge"].Name] = spin
 
     def _on_split_edited(self, entry):
+        """One split edit, as its own transaction, written straight onto
+        both patches.
+
+        A width that would NOT leave exactly one band cell is REFUSED
+        before the write, naming the patch and the values: that write is
+        what the blend's cross-section is built from, so committing an
+        unusable width would silently break a blend the user can already
+        see. A refused edit puts the spin back where it was, so the panel
+        and the property never disagree."""
         spin = self._split_widgets.get(entry["edge"].Name)
         if spin is None:
-            return
-        write_band_split(entry, spin.value())
+            return False
+        value = spin.value()
+        problem = band_cell_problem(entry, value)
+        if problem:
+            before = read_band_split(entry)
+            if before is not None:
+                spin.setValue(before[2])
+            self._refuse("Silk: cannot set the band width on %s -- %s. The "
+                         "split was left as it was."
+                         % (entry["edge"].Name, problem))
+            return False
+        if not write_band_split(entry, value):
+            return False
+        read = read_band_split(entry)
+        self.status_lbl.setText(
+            "band width %g set on %s.%s and %s.%s%s"
+            % (value, entry["patch_a"].Name, read[0],
+               entry["patch_b"].Name, read[3],
+               " -- the existing blend followed it"
+               if entry["status"] == "blended" else ""))
+        return True
 
     # ---- validity ------------------------------------------------------
 
@@ -1007,6 +1185,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         return self.status_lbl.text()
 
     def hint_text(self):
+        """#47's next-step wording. It sits BELOW the accordion as a muted
+        line (and in the tooltips), not above it in a box of its own."""
         return self.hint_lbl.text()
 
     def progress_text(self):
@@ -1026,8 +1206,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                 for col in (self.COL_EDGE, self.COL_PATCHES, self.COL_STATUS)]
 
     def split_editor(self, edge):
-        """The mounted QDoubleSpinBox for a collected seam's band split,
-        or None."""
+        """The mounted QDoubleSpinBox for a seam row's band split, or
+        None. Mounted on every blendable and every blended row."""
         return self._split_widgets.get(edge.Name)
 
 
@@ -1046,8 +1226,16 @@ def status_text(entry):
 
 def _side_of(p, other):
     """(property_name, side) of the band p contributes to the seam it
-    shares with `other`, or (None, None) when they share no edge."""
-    etype, ss = patch_side(p, other)
+    shares with `other`, or (None, None) when they share no edge.
+
+    Tolerates an unresolved pair: a patch that never built (its fill
+    failed, or it is mid-recompute) carries no poles to compare, and seam
+    resolution raises on the empty corner list. That is no reason to
+    abandon the whole table -- the row simply has no band to size."""
+    try:
+        etype, ss = patch_side(p, other)
+    except Exception:
+        return None, None
     if etype is None:
         return None, None
     # A seam along U fixes a V interval, so the band lives in VSplits.
@@ -1134,8 +1322,10 @@ def band_cell_problem(entry, value=None):
     if pa_prop is None or pb_prop is None:
         return ("%s and %s share no edge, so there is no band to size"
                 % (pa.Name, pb.Name))
-    pa_etype, _ = patch_side(pa, pb)
-    pb_etype, _ = patch_side(pb, pa)
+    # A seam along U fixes a V interval, so the band lives in VSplits:
+    # the direction follows from the property, no second resolution.
+    pa_etype = ("U" if pa_prop == "VSplits" else "V", pa_ss)
+    pb_etype = ("U" if pb_prop == "VSplits" else "V", pb_ss)
 
     def layout(p, prop, ss, along_prop):
         cur = list(getattr(p, prop) or [])
