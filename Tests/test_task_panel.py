@@ -965,8 +965,9 @@ def test_stale_blend_seam_refuses_naming_it(doc):
 
     pa, pb, s_left, s_right = _build_tube(doc)
     # blend the left seam behind the panel's back
-    create_blend_by_edge(s_left)
+    made = create_blend_by_edge(s_left)
     doc.recompute()
+    s_blend_name = made.Name
 
     panel = _open_panel(doc)
     if not check(panel is not None, "Activated left no panel open", errors):
@@ -975,9 +976,13 @@ def test_stale_blend_seam_refuses_naming_it(doc):
         panel.toolbox.setCurrentIndex(2)
         row = panel.seam_row_index(s_left)
         check(row >= 0, "the already-blended seam has no row", errors)
-        check(panel.row_texts(row)[2].startswith("blended by"),
-              "row status %r does not name the blend"
-              % panel.row_texts(row)[2], errors)
+        flag = panel.blend_flag(s_left)
+        check(flag is not None and flag.isChecked(),
+              "the row's flag is not ticked for an already-blended seam",
+              errors)
+        check(flag is not None and s_blend_name in flag.toolTip(),
+              "the flag tooltip does not name the blend: %r"
+              % (flag.toolTip() if flag else None), errors)
         # put it into the collection by hand -- the click path correctly
         # refuses a non-blendable row, staleness is about what happens if
         # one is in there anyway.
@@ -1204,10 +1209,11 @@ def test_closes_on_document_switch(doc):
 
 # ---- stage 3: Blend ---------------------------------------------------------
 
-def test_blend_table_merges_every_seam_with_its_status(doc):
-    """One merged table, one row per seam_inventory entry IN ORDER, each
-    row carrying that entry's own status wording -- including `blocked`
-    on a non-manifold seam and `blended by <Blend>` once blended, plus the
+def test_blend_table_merges_every_seam_with_its_flag(doc):
+    """One merged table, one row per seam_inventory entry IN ORDER, and
+    the status column is a CHECKBOX whose state and greying say the same
+    thing the status word used to (#69): ticked for blended, unticked and
+    LIVE for blendable, unticked and GREYED for blocked. Plus the
     "N of M seams blended" roll-up."""
     errors, checks = [], []
     from SilkWorkflowOps import create_blend_by_edge, seam_inventory
@@ -1219,7 +1225,7 @@ def test_blend_table_merges_every_seam_with_its_status(doc):
     c = _square_patch(doc, "C")
     ec = c.Edges[0]
     _patch_sharing(doc, ec, "D")
-    create_blend_by_edge(ea)
+    created = create_blend_by_edge(ea)
     _patch_sharing(doc, ec, "E")          # -> blocked (3 patches)
 
     panel = _open_panel(doc)
@@ -1235,6 +1241,7 @@ def test_blend_table_merges_every_seam_with_its_status(doc):
         check(panel.blend_table.rowCount() == len(inv),
               "table has %d rows, seam_inventory has %d"
               % (panel.blend_table.rowCount(), len(inv)), errors)
+        seen = {}
         for row, entry in enumerate(inv):
             cells = panel.row_texts(row)
             check(cells[0] == entry["edge"].Name,
@@ -1243,18 +1250,38 @@ def test_blend_table_merges_every_seam_with_its_status(doc):
             check(cells[1] == "%s <-> %s" % (entry["patch_a"].Name,
                                              entry["patch_b"].Name),
                   "row %d pair cell %r" % (row, cells[1]), errors)
-            want = ("blended by %s" % entry["blend"].Name
-                    if entry["status"] == "blended" and entry["blend"]
-                    else entry["status"])
-            check(cells[2] == want,
-                  "row %d status cell %r != %r" % (row, cells[2], want),
+            flag = panel.blend_flag(entry["edge"])
+            if not check(flag is not None,
+                         "row %d (%s) carries no blended flag"
+                         % (row, entry["edge"].Name), errors):
+                continue
+            status = entry["status"]
+            check(flag.isChecked() == (status == "blended"),
+                  "row %d (%s): flag checked=%s for status %r"
+                  % (row, entry["edge"].Name, flag.isChecked(), status),
                   errors)
+            # blocked is GREYED, blendable is not: the two must not be
+            # told apart by an unticked tick alone
+            check(flag.isEnabled() == (status != "blocked"),
+                  "row %d (%s): flag enabled=%s for status %r"
+                  % (row, entry["edge"].Name, flag.isEnabled(), status),
+                  errors)
+            seen[status] = flag
+        if "blended" in seen:
+            check(created.Name in seen["blended"].toolTip(),
+                  "the blended flag's tooltip does not name the blend: %r"
+                  % seen["blended"].toolTip(), errors)
+        if "blocked" in seen:
+            check("three or more patches" in seen["blocked"].toolTip(),
+                  "the blocked flag's tooltip does not say WHY: %r"
+                  % seen["blocked"].toolTip(), errors)
         blended = sum(1 for s in statuses if s == "blended")
         check(panel.progress_text() == "%d of %d seams blended"
               % (blended, len(inv)),
               "progress %r != '%d of %d seams blended'"
               % (panel.progress_text(), blended, len(inv)), errors)
-        checks.append("%d rows match statuses %r" % (len(inv), statuses))
+        checks.append("%d rows; flag ticked/live/greyed per status, "
+                      "reasons in the tooltips" % len(inv))
     finally:
         _close_panel(panel)
         Gui.Selection.clearSelection()
@@ -1358,8 +1385,11 @@ def test_blend_confirm_matches_the_resolver(doc):
                 check("%s created across %s" % (bl.Name, e_shr.Name)
                       == panel.status_text(),
                       "status line %r" % panel.status_text(), errors)
-                check(panel.row_texts(row)[2] == "blended by %s" % bl.Name,
-                      "the row did not flip: %r" % panel.row_texts(row)[2],
+                flag = panel.blend_flag(e_shr)
+                check(flag is not None and flag.isChecked()
+                      and bl.Name in flag.toolTip(),
+                      "the row did not flip to a ticked flag naming the "
+                      "blend: %r" % (flag.toolTip() if flag else None),
                       errors)
                 errors += ["console error: %s" % e for e in cap.errors]
                 checks.append("confirm -> %s across %s: oracle %d checks, "
@@ -1377,12 +1407,18 @@ def test_blend_confirm_matches_the_resolver(doc):
 # ---- the band split ----------------------------------------------------------
 
 def test_band_split_editor_reads_and_writes_the_patch_split(doc):
-    """The collected row's split editor reads the patch's OWN split and
-    writes straight back onto it -- which since #64 is what the blend
-    reads, so a width set here is the width the blend uses. Asserted
-    against the patch property, not against a panel copy."""
+    """The collected row's band editors read each patch's OWN split and
+    write straight back onto it -- which since #64 is what the blend
+    reads, so a width set here is the width the blend uses on that patch.
+    Asserted against the patch properties, not against a panel copy.
+
+    #69: TWO editors, one per patch. Editing Band A must move A and leave
+    B alone -- the write targets the patch the user touched, not "the
+    seam", because the seam has two bands and they are allowed to differ.
+    """
     errors, checks = [], []
     from SilkMachinery import split_at_end
+    from SilkTaskPanel import BAND_A, BAND_B
     from Tests.test_seam_resolver import _square_patch, _patch_sharing
 
     a = _square_patch(doc, "A")
@@ -1392,7 +1428,9 @@ def test_band_split_editor_reads_and_writes_the_patch_split(doc):
     # resolver, so this stays true whichever way the seam happens to run.
     from SilkTaskPanel import _side_of
     a_prop, a_ss = _side_of(a, b)
+    b_prop, b_ss = _side_of(b, a)
     setattr(a, a_prop, [0.35])
+    setattr(b, b_prop, [0.35])
     doc.recompute()
 
     panel = _open_panel(doc)
@@ -1403,28 +1441,54 @@ def test_band_split_editor_reads_and_writes_the_patch_split(doc):
         row = panel.seam_row_index(a.Edges[0])
         check(row >= 0, "the seam has no row", errors)
         panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
-        spin = panel.split_editor(a.Edges[0])
-        if not check(spin is not None,
-                     "no split editor was mounted on the collected row",
+        spin_a = panel.split_editor(a.Edges[0], BAND_A)
+        spin_b = panel.split_editor(a.Edges[0], BAND_B)
+        if not check(spin_a is not None and spin_b is not None,
+                     "the row carries %d of 2 band editors"
+                     % sum(1 for s in (spin_a, spin_b) if s is not None),
                      errors):
             return {"pass": False, "errors": errors, "checks": checks}
-        check(abs(spin.value() - 0.35) < 1e-9,
-              "the editor shows %g, expected the patch's own 0.35"
-              % spin.value(), errors)
-        check(spin.minimum() > 0.0 and spin.maximum() < 1.0,
-              "the editor is not constrained to 0 < u < 1 (range %g..%g)"
-              % (spin.minimum(), spin.maximum()), errors)
+        check(panel.blend_table.cellWidget(row, panel.COL_BAND_A) is spin_a
+              and panel.blend_table.cellWidget(row, panel.COL_BAND_B)
+              is spin_b,
+              "the two editors are not mounted in their own columns",
+              errors)
+        for spin, what in ((spin_a, "Band A"), (spin_b, "Band B")):
+            check(abs(spin.value() - 0.35) < 1e-9,
+                  "%s shows %g, expected the patch's own 0.35"
+                  % (what, spin.value()), errors)
+            check(spin.minimum() > 0.0 and spin.maximum() < 1.0,
+                  "%s is not constrained to 0 < u < 1 (range %g..%g)"
+                  % (what, spin.minimum(), spin.maximum()), errors)
 
-        spin.setValue(0.22)
-        spin.editingFinished.emit()
+        b_before = list(getattr(b, b_prop) or [])
+        undo_before = _undo_count(doc)
+        names_before = list(doc.UndoNames)
+        spin_a.setValue(0.22)
+        spin_a.editingFinished.emit()
         doc.recompute()
         after = split_at_end(list(getattr(a, a_prop) or []), a_ss)
         check(after is not None and abs(after - 0.22) < 1e-9,
-              "the patch still reads %r on %s after the edit -- the editor "
+              "patch A still reads %r on %s after the edit -- the editor "
               "did not write through"
               % (list(getattr(a, a_prop) or []), a_prop), errors)
-        checks.append("editor reads 0.35 off A.%s and writes 0.22 back"
-                      % a_prop)
+        check(list(getattr(b, b_prop) or []) == b_before,
+              "editing Band A also wrote patch B: %r was %r"
+              % (list(getattr(b, b_prop) or []), b_before), errors)
+        check(abs(panel.split_editor(a.Edges[0], BAND_B).value() - 0.35)
+              < 1e-9, "the Band B editor was dragged along by the Band A "
+              "edit", errors)
+        # its OWN undo step: one transaction for one patch's property
+        added = list(doc.UndoNames[:len(doc.UndoNames)
+                                    - len(names_before)])
+        check(_undo_count(doc) - undo_before == 1,
+              "one edit moved the undo stack by %d steps (expected 1)"
+              % (_undo_count(doc) - undo_before), errors)
+        check([str(n) for n in added] == ["Silk band split"],
+              "the split edit was not its own transaction: %r" % added,
+              errors)
+        checks.append("2 editors seeded 0.35; Band A -> 0.22 writes "
+                      "A.%s only, 1 undo step, B untouched" % a_prop)
     finally:
         _close_panel(panel)
         Gui.Selection.clearSelection()
@@ -1442,6 +1506,7 @@ def test_user_band_split_is_honoured_by_the_blend(doc):
     continuity and surface validity -- is asserted green."""
     errors, checks = [], []
     from SilkChecks import check_blend
+    from SilkTaskPanel import BAND_A, BAND_B
     from Tests.test_seam_resolver import _Capture
 
     fixture, pa, pb, g = _open_gt_chain(doc)
@@ -1454,8 +1519,11 @@ def test_user_band_split_is_honoured_by_the_blend(doc):
         row = panel.seam_row_index(g["E_Shr"])
         check(row >= 0, "the shared edge is not a row", errors)
         panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
-        spin = panel.split_editor(g["E_Shr"])
-        if not check(spin is not None, "no split editor on the row", errors):
+        spin_a = panel.split_editor(g["E_Shr"], BAND_A)
+        spin_b = panel.split_editor(g["E_Shr"], BAND_B)
+        if not check(spin_a is not None and spin_b is not None,
+                     "the row does not carry a band editor per patch",
+                     errors):
             return {"pass": False, "errors": errors, "checks": checks}
         # where the width must land, read from the panel's own resolver
         from SilkMachinery import split_at_end
@@ -1463,8 +1531,11 @@ def test_user_band_split_is_honoured_by_the_blend(doc):
         entry = next(e for e in panel.seam_inventory()
                      if e["edge"] is g["E_Shr"])
         pa_prop, pa_ss, _v1, pb_prop, pb_ss, _v2 = read_band_split(entry)
-        spin.setValue(0.2)
-        spin.editingFinished.emit()
+        # both editors to the same width: the symmetric case is still one
+        # value per patch, set twice, and both patches must end up there
+        for spin in (spin_a, spin_b):
+            spin.setValue(0.2)
+            spin.editingFinished.emit()
         doc.recompute()
         with _Capture() as cap:
             panel.panel_confirm()
@@ -1544,6 +1615,9 @@ def test_band_split_multi_cell_is_refused_naming_patch_and_values(doc):
             check(a.Name in message and "band cells" in message,
                   "the refusal does not name the patch and the cell count: "
                   "%r" % message, errors)
+            check("band A" in message,
+                  "the refusal does not say WHICH band was judged: %r"
+                  % message, errors)
             check(band_prop in message and along_prop in message,
                   "the refusal does not name the split values %r/%r: %r"
                   % (band_prop, along_prop, message), errors)
@@ -1570,44 +1644,58 @@ def test_band_cell_mirror_agrees_with_the_real_band_cells(doc):
     SilkMachinery.band_cells computed on lists (so a width can be checked
     BEFORE it is written). It must agree with the real thing on a live
     patch -- otherwise the panel would refuse valid widths or accept
-    invalid ones."""
+    invalid ones.
+
+    Judged PER PATCH (#69): the two patches of this fixture are given
+    different split layouts, because a mirror that only ever agrees on
+    symmetric pairs is exactly the mirror that would let a second editor
+    validate against its partner's geometry."""
     errors, checks = [], []
     from SilkMachinery import band_cells, patch_side
-    from SilkTaskPanel import band_cell_problem
+    from SilkTaskPanel import BAND_A, BAND_B, band_cell_problem
     from Tests.test_seam_resolver import _square_patch, _patch_sharing
 
     layouts = [[], [0.1], [0.9], [0.5], [0.1, 0.9], [0.2, 0.85],
                [0.3, 0.5, 0.7]]
-    for along in layouts:
-        for band in layouts:
-            a = _square_patch(doc, "A_%s_%s" % ("_".join(map(str, along)) or "n",
-                                                 "_".join(map(str, band)) or "n"))
-            b = _patch_sharing(doc, a.Edges[0], "B")
-            a.USplits = list(along)
-            a.VSplits = list(band)
-            b.USplits = list(along)
-            b.VSplits = list(band)
-            doc.recompute()
-            ea, ss = patch_side(a, b)
-            if ea is None:
-                continue
-            real = len(band_cells(a, ea, ss))
-            entry = {"edge": a.Edges[0], "patch_a": a, "patch_b": b,
-                     "status": "blendable", "blend": None}
-            problem = band_cell_problem(entry, None)
-            mirrored = 1 if problem is None else int(
-                problem.rsplit("covers ", 1)[1].split(" ")[0])
-            if mirrored != real:
-                errors.append(
-                    "layout along=%r band=%r: mirror says %d cells, "
-                    "SilkMachinery.band_cells says %d"
-                    % (along, band, mirrored, real))
-            if (real == 1) != (problem is None):
-                errors.append("layout along=%r band=%r: problem=%r but "
-                              "real count is %d"
-                              % (along, band, problem, real))
-    checks.append("candidate-layout mirror matches band_cells on %d layouts"
-                  % (len(layouts) ** 2))
+    compared = 0
+    for along_a in layouts:
+        for band_a in layouts:
+            for along_b, band_b in ((along_a, band_a), ([], [0.2]),
+                                    ([0.5], [])):
+                a = _square_patch(doc, "A_%s_%s" % (
+                    "_".join(map(str, along_a)) or "n",
+                    "_".join(map(str, band_a)) or "n"))
+                b = _patch_sharing(doc, a.Edges[0], "B")
+                a.USplits = list(along_a)
+                a.VSplits = list(band_a)
+                b.USplits = list(along_b)
+                b.VSplits = list(band_b)
+                doc.recompute()
+                entry = {"edge": a.Edges[0], "patch_a": a, "patch_b": b,
+                         "status": "blendable", "blend": None}
+                for which, patch, other, along, band in (
+                        (BAND_A, a, b, along_a, band_a),
+                        (BAND_B, b, a, along_b, band_b)):
+                    ea, ss = patch_side(patch, other)
+                    if ea is None:
+                        continue
+                    real = len(band_cells(patch, ea, ss))
+                    problem = band_cell_problem(entry, which, None)
+                    mirrored = 1 if problem is None else int(
+                        problem.rsplit("covers ", 1)[1].split(" ")[0])
+                    compared += 1
+                    if mirrored != real:
+                        errors.append(
+                            "%s layout along=%r band=%r: mirror says %d "
+                            "cells, SilkMachinery.band_cells says %d"
+                            % (which, along, band, mirrored, real))
+                    if (real == 1) != (problem is None):
+                        errors.append("%s layout along=%r band=%r: "
+                                      "problem=%r but real count is %d"
+                                      % (which, along, band, problem, real))
+    checks.append("candidate-layout mirror matches band_cells on %d "
+                  "(patch, layout) pairs, including ASYMMETRIC pairs"
+                  % compared)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -1629,7 +1717,7 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
     errors, checks = [], []
     from SilkChecks import check_blend
     from SilkMachinery import band_cells, patch_side, split_at_end
-    from SilkTaskPanel import read_band_split
+    from SilkTaskPanel import BAND_A, BAND_B, read_band_split
     from Tests.test_seam_resolver import _Capture
 
     fixture, pa, pb, g = _open_gt_chain(doc)
@@ -1654,16 +1742,19 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
                 return {"pass": False, "errors": errors, "checks": checks}
             bl = blends[0]
             errors += ["console error: %s" % e for e in cap.errors]
-            check(panel.row_texts(row)[2] == "blended by %s" % bl.Name,
-                  "the row did not flip to blended: %r"
-                  % panel.row_texts(row)[2], errors)
+            flag = panel.blend_flag(edge)
+            check(flag is not None and flag.isChecked(),
+                  "the row did not flip to a ticked flag: %r"
+                  % (flag.isChecked() if flag else None), errors)
 
-            # --- the row now carries a WORKING editor ---------------
-            spin = panel.split_editor(edge)
-            if not check(spin is not None,
-                         "a BLENDED seam row has no band-split editor -- "
-                         "the width the blend was built from is unreachable "
-                         "from the panel", errors):
+            # --- the row now carries a WORKING editor per PATCH -----
+            spin_a = panel.split_editor(edge, BAND_A)
+            spin_b = panel.split_editor(edge, BAND_B)
+            if not check(spin_a is not None and spin_b is not None,
+                         "a BLENDED seam row has %d of 2 band editors -- the "
+                         "width the blend was built from is unreachable from "
+                         "the panel" % sum(1 for s in (spin_a, spin_b)
+                                          if s is not None), errors):
                 return {"pass": False, "errors": errors, "checks": checks}
             entry = next(e for e in panel.seam_inventory()
                          if e["edge"] is edge)
@@ -1671,12 +1762,16 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
                   "the seam is not reported as blended (%r)"
                   % entry["status"], errors)
             read = read_band_split(entry)
-            check(abs(spin.value() - read[2]) < 1e-9,
-                  "the editor shows %g, the patch's own band split is %g"
-                  % (spin.value(), read[2]), errors)
-            check("blended" in spin.toolTip(),
-                  "the editor's tooltip does not say the seam is blended: %r"
-                  % spin.toolTip(), errors)
+            check(abs(spin_a.value() - read[2]) < 1e-9,
+                  "Band A shows %g, patch A's own band split is %g"
+                  % (spin_a.value(), read[2]), errors)
+            check(abs(spin_b.value() - read[5]) < 1e-9,
+                  "Band B shows %g, patch B's own band split is %g"
+                  % (spin_b.value(), read[5]), errors)
+            for spin, what in ((spin_a, "A"), (spin_b, "B")):
+                check("blended" in spin.toolTip(),
+                      "the %s editor's tooltip does not say the seam is "
+                      "blended: %r" % (what, spin.toolTip()), errors)
 
             # --- ... and collectability is unchanged -----------------
             check(not panel.accepts(2, edge),
@@ -1687,7 +1782,7 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
                   "a blended row collected %r on click" % panel.collected(),
                   errors)
 
-            # --- editing it moves the band width --------------------
+            # --- editing it moves THAT patch's band width -----------
             # The width lives at ITS end's half of the axis:
             # split_at_end reads the lowest split for side 0 and the
             # highest for side 1.
@@ -1695,31 +1790,31 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
             before_poles = [Vector(p) for p in bl.Poles]
             before_undo = _undo_count(doc)
             names_before = list(doc.UndoNames)
+            pb_before = list(getattr(pb, read[3]) or [])
             with _Capture() as cap2:
-                spin.setValue(want)
-                spin.editingFinished.emit()
+                spin_a.setValue(want)
+                spin_a.editingFinished.emit()
             doc.recompute()
-            # One transaction per patch's split write (#62's rule: a split
-            # edit is NEVER folded into the confirm transaction), so two
-            # writes are two undo steps -- but never zero and never the
-            # whole stack.
+            # ONE transaction per split edit (#62's rule: a split edit is
+            # NEVER folded into the confirm transaction), and since #69 one
+            # edit writes ONE patch, so it is one undo step -- not two.
             # UndoNames is newest-first.
             added = list(doc.UndoNames[:len(doc.UndoNames)
                                         - len(names_before)])
-            check(_undo_count(doc) - before_undo == 2,
-                  "the two patches' split writes moved the undo stack by %d "
-                  "steps (expected 2)" % (_undo_count(doc) - before_undo),
+            check(_undo_count(doc) - before_undo == 1,
+                  "the split write moved the undo stack by %d steps "
+                  "(expected 1)" % (_undo_count(doc) - before_undo), errors)
+            check([str(n) for n in added] == ["Silk band split"],
+                  "the split edit was not its own transaction: %r" % added,
                   errors)
-            check(all(str(n).startswith("Silk band split") for n in added),
-                  "the split edit was not its own transaction(s): %r" % added,
+            check(list(getattr(pb, read[3]) or []) == pb_before,
+                  "editing Band A wrote patch B too: %r was %r"
+                  % (list(getattr(pb, read[3]) or []), pb_before), errors)
+            got = split_at_end(list(getattr(pa, read[0]) or []), read[1])
+            check(got is not None and abs(got - want) < 1e-9,
+                  "patch A.%s reads %r after the edit, expected %g"
+                  % (read[0], list(getattr(pa, read[0]) or []), want),
                   errors)
-            for p, prop, ss, what in ((pa, read[0], read[1], "patch A"),
-                                      (pb, read[3], read[4], "patch B")):
-                got = split_at_end(list(getattr(p, prop) or []), ss)
-                check(got is not None and abs(got - want) < 1e-9,
-                      "%s.%s reads %r after the edit, expected %g"
-                      % (what, prop, list(getattr(p, prop) or []), want),
-                      errors)
             # still exactly one band cell per side -- the edit did not turn
             # the seam into an unsupported multi-cell band
             for p, other, what in ((pa, pb, "A"), (pb, pa, "B")):
@@ -1745,10 +1840,10 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
                       % (name, [(n, d) for n, ok, d in results if not ok]),
                       errors)
             errors += ["console error: %s" % e for e in cap2.errors]
-            checks.append("blended row keeps an editor; width %g -> both "
-                          "patches (2 own undo steps), poles moved %.3g, "
-                          "oracle structural/B1/B2/B3 green, collect still "
-                          "refused" % (want, moved))
+            checks.append("blended row keeps an editor per patch; Band A "
+                          "%g -> A only (1 own undo step), poles moved "
+                          "%.3g, oracle structural/B1/B2/B3 green, collect "
+                          "still refused" % (want, moved))
         finally:
             _close_panel(panel)
     finally:
@@ -1809,10 +1904,17 @@ def test_unresolvable_seam_row_does_not_abandon_the_table(doc):
             texts = panel.row_texts(row)
             check(all(texts),
                   "row %d did not render its cells: %r" % (row, texts), errors)
-        check(panel.blend_table.cellWidget(1, panel.COL_SPLIT) is None,
-              "the unresolvable row was given a band editor anyway", errors)
-        check(panel.blend_table.cellWidget(2, panel.COL_SPLIT) is not None,
-              "the row AFTER the unresolvable one lost its editor", errors)
+            flag = panel.blend_table.cellWidget(row, panel.COL_BLENDED)
+            check(flag is not None,
+                  "row %d carries no blended flag -- an unresolvable seam "
+                  "must still say what it is" % row, errors)
+        for col in (panel.COL_BAND_A, panel.COL_BAND_B):
+            check(panel.blend_table.cellWidget(1, col) is None,
+                  "the unresolvable row was given a band editor anyway",
+                  errors)
+            check(panel.blend_table.cellWidget(2, col) is not None,
+                  "the row AFTER the unresolvable one lost its Band editor",
+                  errors)
         checks.append("an unresolvable seam row renders blank-but-present "
                       "and the rows around it survive")
     finally:
@@ -1822,11 +1924,12 @@ def test_unresolvable_seam_row_does_not_abandon_the_table(doc):
 
 
 def test_post_blend_width_that_would_break_the_band_is_refused(doc):
-    """The editor refuses a width that would NOT leave one band cell,
-    naming the patch and the values, and puts the spin back -- the same
-    rule the confirm path uses, now protecting a blend that already
-    exists instead of preventing one that has not been made yet."""
+    """A width that would NOT leave one band cell refuses, naming the patch
+    and the values, and puts back ONLY the spin that was edited (#69) --
+    the same rule the confirm path uses, now protecting a blend that
+    already exists instead of preventing one that has not been made yet."""
     errors, checks = [], []
+    from SilkTaskPanel import BAND_A, BAND_B, _side_of
     from Tests.test_seam_resolver import _Capture, _square_patch, \
         _patch_sharing
     from SilkWorkflowOps import create_blend_by_edge
@@ -1843,8 +1946,8 @@ def test_post_blend_width_that_would_break_the_band_is_refused(doc):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
         panel.toolbox.setCurrentIndex(2)
-        spin = panel.split_editor(edge)
-        if not check(spin is not None, "the blended row has no editor",
+        spin = panel.split_editor(edge, BAND_A)
+        if not check(spin is not None, "the blended row has no Band A editor",
                      errors):
             return {"pass": False, "errors": errors, "checks": checks}
         # A plain mid split at 0.5 on the seam-PARALLEL axis marks
@@ -1855,7 +1958,10 @@ def test_post_blend_width_that_would_break_the_band_is_refused(doc):
         setattr(a, along_prop, [0.5])
         doc.recompute()
         panel.refresh()
-        spin = panel.split_editor(edge)
+        spin = panel.split_editor(edge, BAND_A)
+        spin_b = panel.split_editor(edge, BAND_B)
+        b_before = list(getattr(b, _side_of(b, a)[0]) or [])
+        spin_b_before = spin_b.value()
         before = list(getattr(a, band_prop) or [])
         with _Capture() as cap:
             spin.setValue(0.2)
@@ -1867,14 +1973,488 @@ def test_post_blend_width_that_would_break_the_band_is_refused(doc):
         check(edge.Name in msgs and a.Name in msgs,
               "the refusal does not name the seam and the patch: %r" % msgs,
               errors)
+        check("band A" in msgs,
+              "the refusal does not say WHICH editor was refused: %r" % msgs,
+              errors)
         check(list(getattr(a, band_prop) or []) == before,
               "the refused width was written anyway: %s was %s"
               % (list(getattr(a, band_prop) or []), before), errors)
         check(abs(spin.value() - (before[0] if before else 0.1)) < 1e-9,
-              "the spin box was not put back to the stored split (%g)"
+              "the refused spin was not put back to the stored split (%g)"
               % spin.value(), errors)
-        checks.append("multi-cell width refused on a blended row and the "
-                      "split left alone")
+        # ... and only THAT spin was touched: the partner editor keeps the
+        # value the user can still see, and patch B is untouched.
+        check(abs(spin_b.value() - spin_b_before) < 1e-9,
+              "the refused edit moved the other editor (%g -> %g)"
+              % (spin_b_before, spin_b.value()), errors)
+        check(list(getattr(b, _side_of(b, a)[0]) or []) == b_before,
+              "the refused edit on A still wrote patch B", errors)
+        checks.append("multi-cell width refused on the Band A editor, only "
+                      "that spin restored, Band B untouched")
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+# ---- #69: two band editors, one per patch ----------------------------------
+
+def test_two_band_editors_start_equal_and_name_their_own_patch(doc):
+    """A seam row carries TWO band editors (#69), one per patch, and both
+    are seeded from their own patch's stored split.
+
+    Seeded EQUAL for the ordinary seam -- the two patches carry the same
+    width, so symmetry is still one value shown twice, and typing it into
+    one and the other keeps being an act of symmetry rather than a chase.
+    Each tooltip names the patch it writes AND what its partner holds, so
+    two numbers on one row are still legible without a third column.
+    """
+    errors, checks = [], []
+    from SilkTaskPanel import BAND_A, BAND_B, band_side, read_band_split
+    from Tests.test_seam_resolver import _square_patch, _patch_sharing
+
+    a = _square_patch(doc, "A")
+    b = _patch_sharing(doc, a.Edges[0], "B")
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.toolbox.setCurrentIndex(2)
+        edge = a.Edges[0]
+        row = panel.seam_row_index(edge)
+        check(row >= 0, "the seam has no row", errors)
+        spin_a = panel.split_editor(edge, BAND_A)
+        spin_b = panel.split_editor(edge, BAND_B)
+        if not check(spin_a is not None and spin_b is not None,
+                     "the row carries %d of 2 band editors"
+                     % sum(1 for s in (spin_a, spin_b) if s is not None),
+                     errors):
+            return {"pass": False, "errors": errors, "checks": checks}
+        check(spin_a is not spin_b,
+              "both editors are the same widget", errors)
+        entry = next(e for e in panel.seam_inventory() if e["edge"] is edge)
+        read = read_band_split(entry)
+        pa, pb = band_side(entry, BAND_A, read), band_side(entry, BAND_B, read)
+        check(pa[0] is a and pb[0] is b,
+              "the editors are not bound to patch_a / patch_b "
+              "(A -> %r, B -> %r)" % (pa[0].Name, pb[0].Name), errors)
+        check(abs(spin_a.value() - spin_b.value()) < 1e-12,
+              "the two editors are seeded differently (%g vs %g) on a seam "
+              "whose patches agree"
+              % (spin_a.value(), spin_b.value()), errors)
+        check(abs(spin_a.value() - pa[3]) < 1e-12
+              and abs(spin_b.value() - pb[3]) < 1e-12,
+              "the editors do not show their own patches' stored splits "
+              "(%g/%g vs %g/%g)" % (spin_a.value(), pa[3],
+                                    spin_b.value(), pb[3]), errors)
+        # each tooltip says which patch it writes, and what the other holds
+        check(a.Name in spin_a.toolTip() and b.Name in spin_b.toolTip(),
+              "the tooltips do not name their own patch: %r / %r"
+              % (spin_a.toolTip(), spin_b.toolTip()), errors)
+        check(pa[1] in spin_a.toolTip() and pb[1] in spin_b.toolTip(),
+              "the tooltips do not name their own split property: %r / %r"
+              % (spin_a.toolTip(), spin_b.toolTip()), errors)
+        check("same" in spin_a.toolTip(),
+              "the tooltip does not say the two agree: %r"
+              % spin_a.toolTip(), errors)
+        # five columns, and the flag column is the narrow one
+        check(panel.blend_table.columnCount() == 5,
+              "the table has %d columns, expected 5"
+              % panel.blend_table.columnCount(), errors)
+        check(list(panel.blend_table.horizontalHeaderItem(i).text()
+                   for i in range(5))
+              == ["Seam", "Patches", "Blended?", "Band A", "Band B"],
+              "unexpected column headers: %r"
+              % [panel.blend_table.horizontalHeaderItem(i).text()
+                 for i in range(5)], errors)
+
+        # A DETACHED editor -- one the table has already replaced by a
+        # re-render -- must be inert. Acting on it would apply ITS value
+        # to the LIVE editor's patch, and the live editor is sitting there
+        # showing the seed, so the user would be told their number was
+        # written when the other one was.
+        old_a = panel.split_editor(edge, BAND_A)
+        panel.refresh()
+        new_a = panel.split_editor(edge, BAND_A)
+        check(old_a is not new_a,
+              "the refresh did not re-mount the Band A editor -- the "
+              "stale-editor guard below would be untestable", errors)
+        pa_before = list(getattr(a, pa[1]) or [])
+        old_a.setValue(0.28)
+        old_a.editingFinished.emit()
+        doc.recompute()
+        check(list(getattr(a, pa[1]) or []) == pa_before,
+              "a detached editor wrote %r onto %s.%s"
+              % (list(getattr(a, pa[1]) or []), a.Name, pa[1]), errors)
+        check(abs(panel.split_editor(edge, BAND_A).value() - pa[3]) < 1e-12,
+              "the live editor's value moved on a detached edit (%g)"
+              % panel.split_editor(edge, BAND_A).value(), errors)
+        checks.append("2 editors per row, seeded equal from their own "
+                      "patches, each tooltip naming its own property; a "
+                      "detached editor is inert")
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_band_edit_validation_is_per_patch(doc):
+    """Each edit is judged against ITS OWN patch (#69).
+
+    The fixture is built so the answer must differ: patch A carries a
+    plain mid split at 0.5 on the axis ALONG the seam, which leaves two
+    cells under any band width, so every width is refused on A. Patch B
+    is clean, so every width is fine on B. A panel that still validated
+    the pair would refuse both editors; a panel that validated the
+    partner's layout on A's behalf would accept A. Only the per-patch
+    rule gets both answers right.
+
+    Also asserted, because it is the easy half to get wrong: a refused
+    edit restores ONLY its own spin, leaves the partner editor showing
+    what it showed, and writes neither patch."""
+    errors, checks = [], []
+    from SilkTaskPanel import BAND_A, BAND_B, _side_of
+    from Tests.test_seam_resolver import _Capture, _square_patch, \
+        _patch_sharing
+
+    a = _square_patch(doc, "A")
+    b = _patch_sharing(doc, a.Edges[0], "B")
+    edge = a.Edges[0]
+    band_prop, _ss = _side_of(a, b)
+    along_prop = "VSplits" if band_prop == "USplits" else "USplits"
+    b_band_prop, b_ss = _side_of(b, a)
+    setattr(a, along_prop, [0.5])          # A: two cells under any width
+    doc.recompute()
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.toolbox.setCurrentIndex(2)
+        spin_a = panel.split_editor(edge, BAND_A)
+        spin_b = panel.split_editor(edge, BAND_B)
+        if not check(spin_a is not None and spin_b is not None,
+                     "the row carries %d of 2 band editors"
+                     % sum(1 for s in (spin_a, spin_b) if s is not None),
+                     errors):
+            return {"pass": False, "errors": errors, "checks": checks}
+        a_before = list(getattr(a, band_prop) or [])
+        b_before = list(getattr(b, b_band_prop) or [])
+
+        # -- refused on A, because A is the one that cannot take it -----
+        with _Capture() as cap:
+            spin_a.setValue(0.2)
+            spin_a.editingFinished.emit()
+        doc.recompute()
+        msgs = "".join(cap.errors)
+        check("band A" in msgs and a.Name in msgs and "band cells" in msgs,
+              "the refusal on A does not name the editor, the patch and the "
+              "reason: %r" % msgs, errors)
+        check(list(getattr(a, band_prop) or []) == a_before,
+              "the refused width was written to A anyway: %r was %r"
+              % (list(getattr(a, band_prop) or []), a_before), errors)
+        check(abs(spin_a.value() - (a_before[0] if a_before else 0.1))
+              < 1e-9,
+              "the refused editor was not put back (%g)" % spin_a.value(),
+              errors)
+
+        # -- ... and B was never dragged into it -----------------------
+        b_shown_before = spin_b.value()
+        with _Capture() as cap:
+            spin_b.setValue(0.2)
+            spin_b.editingFinished.emit()
+        doc.recompute()
+        msgs = "".join(cap.errors)
+        check("band cells" not in msgs,
+              "the same width was refused on the CLEAN patch B: %r" % msgs,
+              errors)
+        check(list(getattr(b, b_band_prop) or []) != b_before,
+              "the valid width was not written to B: %r"
+              % list(getattr(b, b_band_prop) or []), errors)
+        check(list(getattr(a, band_prop) or []) == a_before,
+              "the successful edit on B also wrote A: %r"
+              % list(getattr(a, band_prop) or []), errors)
+        check(abs(spin_b.value() - 0.2) < 1e-9,
+              "the Band B editor does not show the width it just wrote "
+              "(%g)" % spin_b.value(), errors)
+        check(abs(spin_a.value() - (a_before[0] if a_before else 0.1))
+              < 1e-9,
+              "the successful edit on B moved the Band A editor (%g)"
+              % spin_a.value(), errors)
+        checks.append("0.2 refused on A (two cells), accepted on B (one); "
+                      "only the refused spin restored, neither editor "
+                      "leaked onto the other patch")
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_asymmetric_band_widths_blend_green_and_differ_from_symmetric(doc):
+    """A != B is reachable now, and it has to WORK (#69).
+
+    Built end to end through the real panel on the ground-truth chain:
+    Band A = 0.2, Band B = 0.35, confirm, and the oracle is green on
+    everything the user can still break (links, C0 at the seam, C1
+    tangents, surface validity). B4 is deliberately NOT asserted -- its
+    reference poles are the default 0.1-wide blend, which a user width
+    must miss -- and the 24 poles are asserted to be NON-NULL and to
+    differ from both the symmetric build and each other, which is the
+    real claim: the cross-section really was cut from two cells of
+    different widths on two differently-parametrized patches."""
+    errors, checks = [], []
+    from SilkChecks import check_blend
+    from SilkMachinery import split_at_end
+    from SilkTaskPanel import BAND_A, BAND_B, read_band_split
+    from Tests.test_seam_resolver import _Capture
+
+    fixture, pa, pb, g = _open_gt_chain(doc)
+    try:
+        panel = _open_panel(doc)
+        if not check(panel is not None, "Activated left no panel open",
+                     errors):
+            return {"pass": False, "errors": errors, "checks": checks}
+        try:
+            panel.toolbox.setCurrentIndex(2)
+            edge = g["E_Shr"]
+            row = panel.seam_row_index(edge)
+            check(row >= 0, "%s is not a row" % edge.Name, errors)
+            entry = next(e for e in panel.seam_inventory()
+                         if e["edge"] is edge)
+            read = read_band_split(entry)
+            sa, sb = panel.split_editor(edge, BAND_A), \
+                panel.split_editor(edge, BAND_B)
+            if not check(sa is not None and sb is not None,
+                         "the row carries %d of 2 band editors"
+                         % sum(1 for s in (sa, sb) if s is not None), errors):
+                return {"pass": False, "errors": errors, "checks": checks}
+            panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
+
+            # 1) symmetric 0.2 on both, confirmed -> the reference poles
+            sa.setValue(0.2)
+            sa.editingFinished.emit()
+            sb.setValue(0.2)
+            sb.editingFinished.emit()
+            doc.recompute()
+            with _Capture() as cap:
+                panel.panel_confirm()
+            doc.recompute()
+            blends = _blend_objects(doc)
+            if not check(len(blends) == 1,
+                         "the symmetric confirm created %d blend(s)"
+                         % len(blends), errors):
+                return {"pass": False, "errors": errors, "checks": checks}
+            sym_poles = [Vector(p) for p in blends[0].Poles]
+            sym_bl = blends[0]
+            sym_res = check_blend(sym_bl, pa, pb, edge=sym_bl.Edge)
+            sym_checked = {n: ok for n, ok, _d in sym_res}
+            for name in ("structural", "B1_c0_seams", "B2_c1_tangents",
+                         "B3_surface_valid"):
+                check(sym_checked.get(name) is True,
+                      "oracle %s failed on the symmetric build: %r"
+                      % (name, [(n, d) for n, ok, d in sym_res if not ok]),
+                      errors)
+            errors += ["console error: %s" % e for e in cap.errors]
+
+            # 2) now make it ASYMMETRIC on the blended row and let the
+            #    existing blend re-drive itself (no new confirm: #65).
+            #    The confirm above re-rendered the table, so the editors
+            #    are RE-FETCHED -- holding the pre-confirm widgets would
+            #    be editing widgets the table has already thrown away.
+            sa = panel.split_editor(edge, BAND_A)
+            sb = panel.split_editor(edge, BAND_B)
+            entry = next(e for e in panel.seam_inventory()
+                         if e["edge"] is edge)
+            read = read_band_split(entry)
+            if not check(sa is not None and sb is not None,
+                         "the blended row has %d of 2 band editors after "
+                         "the confirm" % sum(1 for s in (sa, sb)
+                                            if s is not None), errors):
+                return {"pass": False, "errors": errors, "checks": checks}
+            sa.setValue(0.2)
+            sa.editingFinished.emit()
+            sb.setValue(0.35)
+            sb.editingFinished.emit()
+            doc.recompute()
+            check(split_at_end(list(getattr(pa, read[0]) or []), read[1])
+                  is not None
+                  and abs(split_at_end(list(getattr(pa, read[0]) or []),
+                                       read[1]) - 0.2) < 1e-9,
+                  "patch A did not take 0.2: %r"
+                  % list(getattr(pa, read[0]) or []), errors)
+            check(abs(split_at_end(list(getattr(pb, read[3]) or []),
+                                   read[4]) - 0.35) < 1e-9,
+                  "patch B did not take 0.35: %r"
+                  % list(getattr(pb, read[3]) or []), errors)
+
+            asy_poles = [Vector(p) for p in sym_bl.Poles]
+            check(len(asy_poles) == 24,
+                  "the asymmetric blend has %d poles, expected 24"
+                  % len(asy_poles), errors)
+            check(getattr(sym_bl, "Shape", None) is not None
+                  and not sym_bl.Shape.isNull(),
+                  "the asymmetric blend has a null shape", errors)
+            moved = max((x - y).Length for x, y in zip(sym_poles, asy_poles))
+            check(moved > 1e-6,
+                  "widening B's band from 0.2 to 0.35 moved no pole at all "
+                  "(max delta %.3e) -- the second editor is not reaching the "
+                  "blend" % moved, errors)
+            res = check_blend(sym_bl, pa, pb, edge=sym_bl.Edge)
+            checked = {n: ok for n, ok, _d in res}
+            for name in ("structural", "B1_c0_seams", "B2_c1_tangents",
+                         "B3_surface_valid"):
+                check(checked.get(name) is True,
+                      "oracle %s failed on the ASYMMETRIC band: %r"
+                      % (name, [(n, d) for n, ok, d in res if not ok]),
+                      errors)
+            errors += ["console error: %s" % e for e in cap.errors]
+            checks.append("Band A=0.2 / Band B=0.35 on a live blend: 24 "
+                          "poles, non-null, poles moved %.3g from the "
+                          "symmetric build, oracle structural/B1/B2/B3 "
+                          "green" % moved)
+        finally:
+            _close_panel(panel)
+    finally:
+        Gui.Selection.clearSelection()
+        FreeCAD.closeDocument(fixture.Name)
+        FreeCAD.setActiveDocument(doc.Name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_setting_both_editors_to_the_same_value_writes_both(doc):
+    """Symmetry is still one gesture (#69): typing the same width into
+    both editors writes BOTH patches, each in its own transaction, and the
+    blend reads it on both sides."""
+    errors, checks = [], []
+    from SilkMachinery import split_at_end
+    from SilkTaskPanel import BAND_A, BAND_B, read_band_split
+    from Tests.test_seam_resolver import _square_patch, _patch_sharing
+
+    a = _square_patch(doc, "A")
+    b = _patch_sharing(doc, a.Edges[0], "B")
+    edge = a.Edges[0]
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.toolbox.setCurrentIndex(2)
+        sa = panel.split_editor(edge, BAND_A)
+        sb = panel.split_editor(edge, BAND_B)
+        if not check(sa is not None and sb is not None,
+                     "the row carries %d of 2 band editors"
+                     % sum(1 for s in (sa, sb) if s is not None), errors):
+            return {"pass": False, "errors": errors, "checks": checks}
+        entry = next(e for e in panel.seam_inventory() if e["edge"] is edge)
+        read = read_band_split(entry)
+        undo_before = _undo_count(doc)
+        sa.setValue(0.25)
+        sa.editingFinished.emit()
+        sb.setValue(0.25)
+        sb.editingFinished.emit()
+        doc.recompute()
+        check(_undo_count(doc) - undo_before == 2,
+              "two edits moved the undo stack by %d steps (expected 2, one "
+              "per patch)" % (_undo_count(doc) - undo_before), errors)
+        for p, prop, ss, what in ((a, read[0], read[1], "A"),
+                                  (b, read[3], read[4], "B")):
+            got = split_at_end(list(getattr(p, prop) or []), ss)
+            check(got is not None and abs(got - 0.25) < 1e-9,
+                  "%s.%s reads %r, expected 0.25"
+                  % (what, prop, list(getattr(p, prop) or [])), errors)
+        check(abs(panel.split_editor(edge, BAND_A).value() - 0.25) < 1e-9
+              and abs(panel.split_editor(edge, BAND_B).value() - 0.25)
+              < 1e-9,
+              "the two editors do not agree after being set to the same "
+              "value", errors)
+        checks.append("0.25 into both editors -> both patches, 2 undo "
+                      "steps")
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_blocked_row_is_not_actionable_and_has_no_editor(doc):
+    """A BLOCKED seam row (#69): greyed flag, no band editors at all, and
+    clicking it still does nothing. The two editors are the point of the
+    row, so putting live-looking editors on a row that cannot blend would
+    be two controls promising something the document cannot deliver."""
+    errors, checks = [], []
+    from PySide import QtCore
+    from SilkTaskPanel import BAND_A, BAND_B
+    from Tests.test_seam_resolver import _square_patch, _patch_sharing
+
+    a = _square_patch(doc, "A")
+    blocked = a.Edges[0]
+    _patch_sharing(doc, blocked, "B")
+    _patch_sharing(doc, blocked, "C")        # three patches -> blocked
+    live = a.Edges[1]
+    _patch_sharing(doc, live, "D")           # two patches -> blendable
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.toolbox.setCurrentIndex(2)
+        row = panel.seam_row_index(blocked)
+        check(row >= 0, "the blocked seam has no row", errors)
+        flag = panel.blend_flag(blocked)
+        check(flag is not None and not flag.isChecked()
+              and not flag.isEnabled(),
+              "the blocked row's flag is checked=%s enabled=%s (want "
+              "unchecked + greyed)"
+              % (flag.isChecked() if flag else None,
+                 flag.isEnabled() if flag else None), errors)
+        check(flag is not None and "Blocked" in flag.toolTip(),
+              "the blocked flag's tooltip does not say it is blocked: %r"
+              % (flag.toolTip() if flag else None), errors)
+        # The ROW greys too, not just the flag: an unchecked tick is
+        # already pale in most styles, so disabling the checkbox on its
+        # own changes almost nothing on screen. This is what makes
+        # "blocked" unmistakable from "blendable" without a word.
+        from SilkTaskPanel import GREY_BRUSH
+        for col in (panel.COL_EDGE, panel.COL_PATCHES):
+            fg = panel.blend_table.item(row, col).foreground()
+            check(fg.color() == GREY_BRUSH.color(),
+                  "the blocked row's cell %d is not greyed (%s)"
+                  % (col, fg.color().name()), errors)
+        live_row = panel.seam_row_index(live)
+        for col in (panel.COL_EDGE, panel.COL_PATCHES):
+            fg = panel.blend_table.item(live_row, col).foreground()
+            check(fg.color() != GREY_BRUSH.color(),
+                  "the BLENDABLE row's cell %d is greyed like a blocked "
+                  "one's (%s)" % (col, fg.color().name()), errors)
+        for which in (BAND_A, BAND_B):
+            check(panel.split_editor(blocked, which) is None,
+                  "the blocked row carries a Band %s editor" % which, errors)
+            check(panel.blend_table.cellWidget(
+                row, panel.COL_BAND_A if which == BAND_A
+                else panel.COL_BAND_B) is None,
+                  "the blocked row has a cell widget in Band %s" % which,
+                  errors)
+        # a blocked row is still inert on click, as before
+        panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
+        check(panel.collected() == [],
+              "a BLOCKED row collected %r" % panel.collected(), errors)
+        check(not panel.can_confirm(),
+              "OK lit up for a collection of nothing", errors)
+        # and the flag takes no focus: confirm is an ApplicationShortcut and
+        # must never have a tick box in its way
+        check(flag.focusPolicy() == QtCore.Qt.NoFocus,
+              "the blended flag takes focus (policy %r)"
+              % (flag.focusPolicy() if flag else None), errors)
+        # the live row next to it is fully equipped, so the grey is a real
+        # difference and not the table being broken everywhere
+        for which in (BAND_A, BAND_B):
+            check(panel.split_editor(live, which) is not None,
+                  "the BLENDABLE row has no Band %s editor" % which, errors)
+        check(panel.blend_flag(live) is not None
+              and panel.blend_flag(live).isEnabled(),
+              "the blendable row's flag is greyed", errors)
+        checks.append("blocked row: greyed flag, no editors, click inert; "
+                      "blendable neighbour fully equipped")
     finally:
         _close_panel(panel)
         Gui.Selection.clearSelection()
@@ -2176,7 +2756,7 @@ ALL_TESTS = [
     test_close_then_reopen_rebuilds_fresh,
     test_adapter_form_is_nulled_on_close,
     test_closes_on_document_switch,
-    test_blend_table_merges_every_seam_with_its_status,
+    test_blend_table_merges_every_seam_with_its_flag,
     test_blend_collect_highlight_and_remove,
     test_blend_confirm_matches_the_resolver,
     test_band_split_editor_reads_and_writes_the_patch_split,
@@ -2186,6 +2766,12 @@ ALL_TESTS = [
     test_blended_seam_row_keeps_a_working_split_editor,
     test_unresolvable_seam_row_does_not_abandon_the_table,
     test_post_blend_width_that_would_break_the_band_is_refused,
+    # #69
+    test_two_band_editors_start_equal_and_name_their_own_patch,
+    test_band_edit_validation_is_per_patch,
+    test_asymmetric_band_widths_blend_green_and_differ_from_symmetric,
+    test_setting_both_editors_to_the_same_value_writes_both,
+    test_blocked_row_is_not_actionable_and_has_no_editor,
     test_split_warning_only_fires_on_a_wholesale_discard,
     test_hint_is_out_of_the_way_and_still_reachable,
     test_panel_fits_a_narrow_dock_and_lists_stay_small,

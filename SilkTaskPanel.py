@@ -48,9 +48,30 @@
 #    "Patch created" on an invisible ghost).
 #
 #    Every seam row, BLENDED ones included, carries its band's split
-#    editor: the seam's band is the blend's cross-section, so the width
+#    editors: the seam's band is the blend's cross-section, so the width
 #    stays tunable once the blend exists (#62 follow-up). Collectability
 #    is separate and unchanged -- a blended row still refuses a blend.
+#
+#    The seam's status is a CHECKBOX, not a word (#69). "blended" is the
+#    one state worth a glance at a glance, so it is the one that gets the
+#    tick; "blocked" -- an edge three or more patches reference, which is
+#    not a seam anyone can blend -- is greyed out rather than merely left
+#    unticked, because unticked-and-live is exactly what "blendable" looks
+#    like, and the two must not be mistaken for each other. The reason is
+#    in the checkbox's tooltip: it costs no column width, and the column
+#    it saved is what pays for the two editors below.
+#
+#    Those editors are TWO, one per patch (#69), because a seam is
+#    bounded by one split on EACH patch and those two are already free to
+#    disagree -- measured on the human's own file, one patch carries
+#    USplits=[0.3] and VSplits=[0.1] for two different seams. Each spin is
+#    seeded from its OWN patch's split, so the ordinary symmetric seam
+#    still shows the same number twice (symmetry stays one gesture) while
+#    a seam that already diverges shows its divergence instead of a
+#    flattering lie about it. One edit validates against its own patch
+#    only and writes its own patch only: a width that leaves one band cell
+#    on A may leave two on B, and refusing B's edit would refuse A's
+#    because they sat next to each other.
 #
 #    The panel is built for a NARROW dock: no width floor, every label
 #    wrapping, the collection lists and the seam table capped to their
@@ -110,6 +131,48 @@ LIST_MAX_ROWS = 4
 # handful of seams; a table filling the whole panel hides that.
 TABLE_MAX_ROWS = 6
 
+# How wide the blended-flag column is, at least (#69). A QCheckBox needs
+# its indicator plus the cell's own margins and nothing else -- but the
+# column is also carrying the word "Blended?", and a header that elides
+# into "lended" is worse than a column that is a few pixels too wide. So
+# the width actually used is the HEADER's, measured from the font at
+# build time rather than guessed. Everything beyond that -- and the header
+# is the whole of it -- goes to the two band editors, which are the point
+# of the row.
+FLAG_MIN_WIDTH = 44
+
+# The grey a BLOCKED seam row's own text is drawn in (#69). Module level
+# so the panel and its tests name one brush.
+GREY_BRUSH = QtGui.QBrush(QtGui.QColor(0x90, 0x90, 0x90))
+
+
+def flag_column_width(table):
+    """The width the `Blended?` column needs so its own label fits.
+
+    The header text plus the header's own left+right padding, and never
+    less than FLAG_MIN_WIDTH (which is also QHeaderView's own default
+    floor -- ask for less and it is silently clamped back, so a too-small
+    request is a lie about what got drawn)."""
+    header = table.horizontalHeader()
+    label = table.horizontalHeaderItem(SilkTaskPanel.COL_BLENDED)
+    text = label.text() if label is not None else "Blended?"
+    fm = header.fontMetrics()
+    try:
+        padding = 2 * header.style().pixelMetric(
+            QtWidgets.QStyle.PM_HeaderMargin)
+    except Exception:
+        padding = 12          # a style with no such metric: guess
+    return max(FLAG_MIN_WIDTH, fm.horizontalAdvance(text) + padding + 4)
+
+
+# Which patch of a seam's pair a band editor is about (#69). `patch_a` is
+# the pair's first referrer in document order, `patch_b` the second --
+# the same pairing seam_inventory reports, so an editor and a patch are
+# never matched by name-matching or by position guessing. Module level
+# because the read / write / validate helpers all key off it, and the
+# helpers are module level.
+BAND_A, BAND_B = "A", "B"
+
 # Placeholder shown in an empty collection list, so "nothing yet" reads
 # as deliberate rather than as a list that failed to load.
 PLACEHOLDERS = {
@@ -124,8 +187,10 @@ HINT_TOOLTIP = (
     "Edge: click 1 or 2 sketches (1 reads 3L, 2 read 2N).\n"
     "Patch: click 3 or 4 edges (4 read a quad fill, 3 the pointed one).\n"
     "Blend: click a seam to collect it, click again to remove it; Enter or "
-    "OK blends every collected seam in one undo step. A blended seam's band "
-    "split stays editable -- it is the width that blend uses.")
+    "OK blends every collected seam in one undo step. A seam is bounded by "
+    "one band split on EACH of its two patches, so a blended row has an "
+    "editor per patch (Band A / Band B) -- they start equal, and setting "
+    "them apart is deliberate.")
 
 
 # ---- the open panel --------------------------------------------------------
@@ -354,15 +419,20 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
       Patch  -- collect 3 or 4 EDGES. "N/4" plus the resulting fill:
                 4 -> quad, 3 -> pointed. OK lights up at 3 or 4.
 
-      Blend  -- ONE merged table of every seam in the document, each row
-                carrying its own status (blendable / blended by X /
-                blocked). Clicking a row collects that seam; a collected
+      Blend  -- ONE merged table of every seam in the document. Each
+                row is ticked in the `Blended?` column when its seam is
+                already blended; an unticked LIVE row is blendable, and
+                an unticked GREYED row is blocked (three or more patches
+                reference the edge) with the reason in the tooltip.
+                Clicking a blendable row collects that seam; a collected
                 row is highlighted and clicking it again removes it.
-                EVERY row -- blended ones included -- also exposes the
-                band's split value, edited straight onto the patch's
-                USplits/VSplits: since #64 the blend READS that split, so
-                a width set here is the width the blend uses, whether the
-                blend already exists or not.
+                EVERY live row -- blended ones included -- also exposes
+                the band's width, one editor PER PATCH (`Band A` /
+                `Band B`, #69): since #64 the blend READS each patch's
+                split, so a width set here is the width that blend uses
+                on that patch, whether the blend already exists or not.
+                The two are seeded equal, but a seam's two bands are
+                independently sized and may diverge.
 
     Confirm (Enter or the native OK button) is one document transaction:
     one undo step, even when several seams blend at once. After applying,
@@ -370,8 +440,13 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
     by itself.
     """
 
-    COL_EDGE, COL_PATCHES, COL_STATUS, COL_SPLIT = 0, 1, 2, 3
-    COLUMNS = ("Seam", "Patches", "Status", "Band split")
+    # #69: the status WORD is gone -- it became a checkbox, so the width
+    # it occupied pays for a SECOND band editor (one per patch). Five
+    # columns now, and the row's whole content is: which seam, which two
+    # patches, has it been blended, and how wide is its band on each of
+    # them.
+    COL_EDGE, COL_PATCHES, COL_BLENDED, COL_BAND_A, COL_BAND_B = 0, 1, 2, 3, 4
+    COLUMNS = ("Seam", "Patches", "Blended?", "Band A", "Band B")
 
     def __init__(self, doc):
         super().__init__()
@@ -385,9 +460,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         # one list of collected objects per section
         self._collected = {SECTION_EDGE: [], SECTION_PATCH: [],
                            SECTION_BLEND: []}
-        # seam edge Name -> (QDoubleSpinBox, patch_a, patch_b) for the
-        # band-split editors currently mounted in the table.
+        # seam edge Name -> {BAND_A: QDoubleSpinBox, BAND_B: ...} for the
+        # band-split editors currently mounted in the table. Two per row
+        # since #69: one per patch, each writing only its own.
         self._split_widgets = {}
+        # seam edge Name -> QCheckBox for the row's blended flag.
+        self._flag_widgets = {}
+        # the row brush for a row that is NOT blocked; see _live_brush
+        self._live_foreground = None
 
         self.setWindowTitle("Silk Workflow")
         # The Tasks dock is narrow, and #62 shipped a 320px floor that
@@ -565,14 +645,26 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         # content-sized table would force a horizontal scrollbar (or a
         # panel wider than its dock). Text elides visually; item.text()
         # still holds the full string.
-        self.blend_table.horizontalHeader().setSectionResizeMode(
-            QtWidgets.QHeaderView.Stretch)
+        #
+        # #69: five columns now -- the status WORD became a checkbox and
+        # its width bought a second band editor -- so the checkbox column
+        # is sized to what it actually needs (its label, see
+        # flag_column_width) instead of taking a fifth of the table like
+        # the four columns that share the slack. Every pixel it does not
+        # take is a pixel the two band editors keep, and they are the
+        # point of the row.
+        header = self.blend_table.horizontalHeader()
+        header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(self.COL_BLENDED,
+                                    QtWidgets.QHeaderView.Fixed)
+        header.resizeSection(self.COL_BLENDED,
+                             flag_column_width(self.blend_table))
         # Belt and braces for the same overrun: the columns stretch, so
         # no section may exceed its share. A minimum section size (or a
         # long unbreakable cell) would otherwise push the table's
         # minimum past the dock and earn the dock a horizontal
         # scrollbar.
-        self.blend_table.horizontalHeader().setMinimumSectionSize(16)
+        header.setMinimumSectionSize(16)
         self.blend_table.setHorizontalScrollBarPolicy(
             QtCore.Qt.ScrollBarAlwaysOff)
         self.blend_table.setTextElideMode(QtCore.Qt.ElideRight)
@@ -719,11 +811,12 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         # Blend: an Edge object that is a seam right now. An edge with
         # fewer than two patches is not a seam, and a non-manifold one is
         # not blendable -- both are silently ignored here; the table still
-        # SHOWS them with their status, which is where a blocked seam is
-        # explained. A seam that is ALREADY BLENDED is refused here too:
-        # its blend exists, so collecting it would only ever re-run an
-        # idempotent no-op. Its band split is still editable in place --
-        # that is the editor's availability, not its collectability.
+        # SHOWS them, with the blocked one GREYED in the flag column
+        # (#69), which is where a blocked seam is explained. A seam that
+        # is ALREADY BLENDED is refused here too: its blend exists, so
+        # collecting it would only ever re-run an idempotent no-op. Its
+        # band editors are still live -- that is the editors'
+        # availability, not its collectability.
         if self.object_type(obj) != "Edge":
             return False
         return any(e["edge"] is obj and e["status"] == "blendable"
@@ -861,46 +954,125 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self.blend_progress_lbl.setText(
             "%d of %d seams blended" % (counts["blended"], counts["total"]))
         self.blend_table.setRowCount(len(seams))
-        # Drop every mounted split editor first; the rows below re-mount
-        # the ones that are still needed.
+        # Drop every mounted editor first; the rows below re-mount the
+        # ones that are still needed.
         self._split_widgets = {}
+        self._flag_widgets = {}
         for row, entry in enumerate(seams):
             texts = (entry["edge"].Name,
                      "%s <-> %s" % (entry["patch_a"].Name,
-                                    entry["patch_b"].Name),
-                     status_text(entry))
-            for col, text in enumerate(texts):
+                                    entry["patch_b"].Name))
+            for col, text in zip((self.COL_EDGE, self.COL_PATCHES), texts):
                 item = self.blend_table.item(row, col)
                 if item is None:
                     item = QtWidgets.QTableWidgetItem(text)
                     self.blend_table.setItem(row, col, item)
                 else:
                     item.setText(text)
+                # Five columns in a 380px dock means the seam name and
+                # the patch pair can be elided to nothing (#69). Their
+                # full text is one hover away, which is what the split
+                # column did before it became a widget column.
+                item.setToolTip(text)
             taken = any(i.obj is entry["edge"] for i in collected)
-            for col in range(len(self.COLUMNS)):
+            blocked = entry["status"] == "blocked"
+            # The collection highlight is over the TEXT cells only. The
+            # blended flag and the two band editors are cell widgets now,
+            # and a cell widget paints over its cell: there is nothing
+            # for a background brush to reach there, and reaching past
+            # them is how a "highlighted" row ends up looking half done.
+            for col in (self.COL_EDGE, self.COL_PATCHES):
                 item = self.blend_table.item(row, col)
-                if item is not None:
-                    font = item.font()
-                    font.setBold(taken)
-                    item.setFont(font)
-                    if taken:
-                        item.setBackground(QtGui.QBrush(
-                            QtGui.QColor(0xD8, 0xF0, 0xD8)))
-                    else:
-                        item.setBackground(QtGui.QBrush())
-            self.blend_table.setCellWidget(row, self.COL_SPLIT, None)
-            # EVERY seam row carries its band-split editor, blended or
-            # not. #62 mounted it only on COLLECTED rows, and a collected
-            # row is by definition blendable, so a seam that had already
-            # been blended had no editor at all -- the width that blend
-            # is actually built from was then only reachable through the
-            # property editor, which is the thing #62 exists to replace.
-            # Collectability is a separate question and stays where it
-            # is (`accepts`), so a blended row still refuses blend
-            # CREATION -- only the editor's availability changed.
+                if item is None:
+                    continue
+                font = item.font()
+                font.setBold(taken)
+                item.setFont(font)
+                if taken:
+                    item.setBackground(QtGui.QBrush(
+                        QtGui.QColor(0xD8, 0xF0, 0xD8)))
+                else:
+                    item.setBackground(QtGui.QBrush())
+                # A BLOCKED row greys its own TEXT too, and this is not
+                # decoration. `setEnabled(False)` on the flag is what the
+                # ticket asks for, but in most styles an UNCHECKED tick
+                # is already drawn in a pale grey -- so greying it changes
+                # almost nothing on screen, and the one thing that has to
+                # be unmistakable (blocked is not blendable) is the one
+                # thing the pixels do not say. A greyed row is the idiom
+                # every disabled control in Qt already speaks, and the
+                # seam name and the patch pair going grey is what makes it
+                # read at a glance. The name is still selectable, still in
+                # the tooltip and still in item.text().
+                item.setForeground(
+                    GREY_BRUSH if blocked else self._live_brush())
+            for col in (self.COL_BLENDED, self.COL_BAND_A, self.COL_BAND_B):
+                self.blend_table.setCellWidget(row, col, None)
+            self._mount_blended_flag(row, entry)
+            # EVERY seam row carries its band-split editors, blended or
+            # not. #62 mounted the (single) one only on COLLECTED rows,
+            # and a collected row is by definition blendable, so a seam
+            # that had already been blended had no editor at all -- the
+            # width that blend is actually built from was then only
+            # reachable through the property editor, which is the thing
+            # #62 exists to replace. Collectability is a separate
+            # question and stays where it is (`accepts`), so a blended row
+            # still refuses blend CREATION -- only the editors'
+            # availability changed.
+            #
+            # A BLOCKED seam gets neither editor: it is not blendable, so
+            # there is no band for a width to size, and a live-looking
+            # editor on a row that cannot act is a control that lies
+            # about being one.
             if entry["status"] in ("blendable", "blended"):
-                self._mount_split_editor(row, entry)
+                self._mount_split_editors(row, entry)
         self._fit_table(len(seams))
+
+    def _live_brush(self):
+        """The row brush for a row that is NOT blocked (#69).
+
+        Captured once, from a cell that has never been greyed. A blocked
+        row that later stops being blocked (drop a patch and the seam
+        becomes a seam again) must go back to the palette's own text
+        colour, and `item.foreground()` on a cell we just greyed would
+        hand back the grey -- so the live one is remembered rather than
+        read back."""
+        if self._live_foreground is None:
+            self._live_foreground = self.blend_table.palette().brush(
+                QtGui.QPalette.Text)
+        return self._live_foreground
+
+    def _mount_blended_flag(self, row, entry):
+        """The row's status as a checkbox (#69).
+
+        Ticked = blended, the one state worth a glance at a glance.
+        Unticked and LIVE = blendable, the ordinary not-yet case.
+        Unticked and GREYED = blocked: an edge three or more patches
+        reference, which is not a seam anyone can blend.
+
+        The grey is the whole reason this is a widget and not a word. A
+        column of text can say `blocked`; a column of ticks can say
+        nothing except ticked / not, and an unticked-but-clickable row
+        reads as "ready" to anyone who glances. Disabling it draws the
+        difference without spending a character on it, and the reason --
+        which IS words, and which used to be the status text -- moves to
+        the tooltip, where it costs no column width at all.
+
+        A readout, not an input: it takes no focus (confirm is an
+        Application-scoped shortcut and must never have a tick box to
+        fight) and does not toggle on click. Clicking the ROW is how a
+        seam is collected, and that is unchanged."""
+        status = entry["status"]
+        flag = QtWidgets.QCheckBox()
+        flag.setFocusPolicy(QtCore.Qt.NoFocus)
+        flag.setToolTip(status_reason(entry))
+        flag.setChecked(status == "blended")
+        if status == "blocked":
+            # Greyed, the way any disabled control renders -- so the row
+            # reads as inert with no new vocabulary to learn.
+            flag.setEnabled(False)
+        self.blend_table.setCellWidget(row, self.COL_BLENDED, flag)
+        self._flag_widgets[entry["edge"].Name] = flag
 
     def _fit_table(self, n_rows):
         """Cap the seam table at TABLE_MAX_ROWS rows; it scrolls beyond."""
@@ -913,68 +1085,132 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             1, min(n_rows, TABLE_MAX_ROWS))
         self.blend_table.setMaximumHeight(wanted)
 
-    def _mount_split_editor(self, row, entry):
-        """Expose the band's split on EVERY seam row: the value comes
-        straight off the patch's USplits/VSplits and writing it goes
-        straight back onto that property, which is exactly what #64's
-        blend reads.
+    def _mount_split_editors(self, row, entry):
+        """Expose the band's split on EVERY seam row -- and there are TWO
+        of them now (#69), because a seam is bounded by one split on EACH
+        patch.
 
-        Blended rows included (#62 follow-up). The seam's band IS the
+        Each value comes straight off its OWN patch's USplits/VSplits and
+        each write goes straight back onto that property, which is exactly
+        what #64's blend reads. So an editor is a width, a width is a
+        band, and a band is a cross-section -- there is no panel-side copy
+        to drift.
+
+        Blended rows included (#62 follow-up): the seam's band IS the
         blend's cross-section, so a width set here re-drives an existing
-        blend exactly as it would size a new one's -- which is the whole
+        blend exactly as it would size a new one -- which is the whole
         reason to be able to edit it after the blend exists. Refusing to
-        COLLECT an already-blended row is untouched (`accepts`)."""
+        COLLECT an already-blended row is untouched (`accepts`).
+
+        Both editors are seeded from their own patch, so the ordinary
+        symmetric seam shows the same number twice and symmetry is still
+        one gesture, while a seam whose two patches already disagree shows
+        that disagreement rather than one of the two numbers pretending to
+        speak for both. The tooltip names which patch this editor writes
+        and what the OTHER one currently holds, so the pair is legible
+        without a third column."""
         read = read_band_split(entry)
         if read is None:
             return
-        pa_prop, pa_ss, pa_val, pb_prop, pb_ss, pb_val = read
-        spin = QtWidgets.QDoubleSpinBox()
-        spin.setDecimals(3)
-        spin.setSingleStep(0.05)
-        spin.setRange(0.001, 0.999)     # constrained 0 < u < 1
-        spin.setValue(pa_val)
-        spin.setToolTip(
-            "Band split written on %s.%s (side %d) and %s.%s (side %d).\n"
-            "The blend reads these splits -- this is the band width.%s"
-            % (pa_prop and entry["patch_a"].Name, pa_prop, pa_ss,
-               entry["patch_b"].Name, pb_prop, pb_ss,
-               "\nThis seam is blended: editing the width re-drives that "
+        col = {BAND_A: self.COL_BAND_A, BAND_B: self.COL_BAND_B}
+        spins = {}
+        for which in (BAND_A, BAND_B):
+            patch, prop, ss, value = band_side(entry, which, read)
+            spin = QtWidgets.QDoubleSpinBox()
+            spin.setDecimals(3)
+            spin.setSingleStep(0.05)
+            spin.setRange(0.001, 0.999)     # constrained 0 < u < 1
+            # No up/down buttons (#69): two editors must fit a 380px dock
+            # side by side, and the steppers are ~30px of chrome on each
+            # -- wider than the digits they surround. The keyboard and the
+            # wheel still step, and the value is what the user is really
+            # editing.
+            spin.setButtonSymbols(
+                QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+            spin.setValue(value)
+            spin.setToolTip(self._band_tooltip(entry, which, read))
+            spin.editingFinished.connect(
+                lambda e=entry, w=which, s=spin:
+                self._on_split_edited(e, w, s))
+            self.blend_table.setCellWidget(row, col[which], spin)
+            spins[which] = spin
+        self._split_widgets[entry["edge"].Name] = spins
+
+    @staticmethod
+    def _band_tooltip(entry, which, read):
+        """What one band editor writes, and what its partner holds.
+
+        The per-patch wording (#69) is the point: an editor says WHICH
+        patch's property it moves, because after this there are two and
+        "the band split" alone would not say which of them a number is
+        about."""
+        patch, prop, ss, value = band_side(entry, which, read)
+        other = BAND_B if which == BAND_A else BAND_A
+        o_patch, o_prop, o_ss, o_value = band_side(entry, other, read)
+        same = abs(o_value - value) < 1e-12
+        return (
+            "Band width on %s.%s (this seam's %s end).\n"
+            "The blend reads this split, so this is the width the band is "
+            "cut at on that patch."
+            % (patch.Name, prop, "parametric-0" if ss == 0
+               else "parametric-1")
+            + ("\n%s.%s currently holds %g -- the two patches' bands "
+               "differ, which is allowed." % (o_patch.Name, o_prop, o_value)
+               if not same else
+               "\n%s.%s holds the same %g, so this seam's band is "
+               "symmetric." % (o_patch.Name, o_prop, o_value))
+            + ("\nThis seam is blended: editing the width re-drives that "
                "blend." if entry["status"] == "blended" else ""))
-        spin.editingFinished.connect(
-            lambda e=entry: self._on_split_edited(e))
-        self.blend_table.setCellWidget(row, self.COL_SPLIT, spin)
-        self._split_widgets[entry["edge"].Name] = spin
 
-    def _on_split_edited(self, entry):
-        """One split edit, as its own transaction, written straight onto
-        both patches.
+    def _on_split_edited(self, entry, which=BAND_A, edited=None):
+        """One split edit: validate against ITS OWN patch, then write
+        ITS OWN patch, as its own transaction.
 
-        A width that would NOT leave exactly one band cell is REFUSED
-        before the write, naming the patch and the values: that write is
-        what the blend's cross-section is built from, so committing an
-        unusable width would silently break a blend the user can already
-        see. A refused edit puts the spin back where it was, so the panel
-        and the property never disagree."""
-        spin = self._split_widgets.get(entry["edge"].Name)
+        Per-PATCH is the substance of #69. A width is refused when it
+        would not leave exactly one band cell on the patch it is being
+        written to -- that write is what the blend's cross-section is
+        built from, so committing an unusable one would silently break a
+        blend the user can already see. What the check must NOT do is
+        consult the OTHER patch: with one shared spin that was free, and
+        with two editors it is a trap, because the two bands are
+        independently sized and a layout that leaves one cell on A can
+        leave two on B. So a width refused on A neither rolls B back nor
+        stops B being edited; each editor owns its own verdict.
+
+        Only the refused spin is put back, and from its own patch's
+        stored split, so the panel and the property never disagree and
+        the partner editor is not yanked to a value the user never typed.
+        """
+        spins = self._split_widgets.get(entry["edge"].Name) or {}
+        spin = spins.get(which)
         if spin is None:
             return False
+        if edited is not None and edited is not spin:
+            # The table re-rendered under this editor (a refresh, or the
+            # confirm that re-mounts every row) and `edited` is no longer
+            # the one mounted. Acting anyway would apply the DETACHED
+            # widget's value to the LIVE one -- which is 0.1, the seed --
+            # and report the user's own number as having been written. Say
+            # nothing and change nothing instead: the live editor is still
+            # on screen with the right value.
+            return False
         value = spin.value()
-        problem = band_cell_problem(entry, value)
+        problem = band_cell_problem(entry, which, value)
         if problem:
             before = read_band_split(entry)
             if before is not None:
-                spin.setValue(before[2])
-            self._refuse("Silk: cannot set the band width on %s -- %s. The "
-                         "split was left as it was."
-                         % (entry["edge"].Name, problem))
+                spin.setValue(band_side(entry, which, before)[3])
+            self._refuse("Silk: cannot set the band width on %s for %s -- "
+                         "%s. That split was left as it was."
+                         % (entry["edge"].Name, band_label(which), problem))
             return False
-        if not write_band_split(entry, value):
+        if not write_band_split(entry, which, value):
             return False
         read = read_band_split(entry)
+        patch, prop = band_side(entry, which, read)[:2]
         self.status_lbl.setText(
-            "band width %g set on %s.%s and %s.%s%s"
-            % (value, entry["patch_a"].Name, read[0],
-               entry["patch_b"].Name, read[3],
+            "band width %g set on %s.%s%s"
+            % (value, patch.Name, prop,
                " -- the existing blend followed it"
                if entry["status"] == "blended" else ""))
         return True
@@ -1047,7 +1283,12 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         """Collected blend rows whose chosen width would NOT leave
         exactly one band cell, as (edge, message) pairs naming the patch
         and the values. Multi-cell bands are still unsupported, so this
-        refuses clearly instead of creating something wrong."""
+        refuses clearly instead of creating something wrong.
+
+        Per-PATCH (#69): each editor is judged against its own patch
+        alone. Two bands that are independently sized can each be fine
+        and the pair still be right -- checking them as one number was
+        only ever possible because there was one spin to check."""
         bad = []
         for item in self._collected[SECTION_BLEND]:
             edge = item.obj
@@ -1055,11 +1296,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                           if e["edge"] is edge), None)
             if entry is None or entry["status"] != "blendable":
                 continue
-            spin = self._split_widgets.get(item.name)
-            value = spin.value() if spin is not None else None
-            problem = band_cell_problem(entry, value)
-            if problem:
-                bad.append((item, problem))
+            spins = self._split_widgets.get(item.name) or {}
+            for which in (BAND_A, BAND_B):
+                spin = spins.get(which)
+                value = spin.value() if spin is not None else None
+                problem = band_cell_problem(entry, which, value)
+                if problem:
+                    bad.append((item, "%s: %s" % (band_label(which), problem)))
+                    break
         return bad
 
     # ---- confirm ---------------------------------------------------------
@@ -1251,26 +1495,55 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         return -1
 
     def row_texts(self, row):
-        """The three static cell strings of `row` (the split column is a
-        widget, not text)."""
+        """The two static cell strings of `row`: the seam and the patch
+        pair. Since #69 the other three columns are widgets -- the
+        blended flag and one band editor per patch -- so their content is
+        read off the widgets themselves (blend_flag / split_editor), not
+        off items."""
         return [self.blend_table.item(row, col).text()
-                for col in (self.COL_EDGE, self.COL_PATCHES, self.COL_STATUS)]
+                for col in (self.COL_EDGE, self.COL_PATCHES)]
 
-    def split_editor(self, edge):
-        """The mounted QDoubleSpinBox for a seam row's band split, or
-        None. Mounted on every blendable and every blended row."""
-        return self._split_widgets.get(edge.Name)
+    def blend_flag(self, edge):
+        """The row's mounted blended-flag QCheckBox, or None. Mounted on
+        every seam row, blocked ones included (that is where the grey
+        lives)."""
+        return self._flag_widgets.get(edge.Name)
+
+    def split_editor(self, edge, which=BAND_A):
+        """The mounted QDoubleSpinBox for ONE patch of a seam row's band,
+        or None. Two per row since #69; `which` is BAND_A or BAND_B and
+        selects the patch. Mounted on every blendable and every blended
+        row, never on a blocked one."""
+        spins = self._split_widgets.get(edge.Name) or {}
+        return spins.get(which)
 
 
-def status_text(entry):
-    """The display string for one seam_inventory entry's status.
+def status_reason(entry):
+    """Why one seam_inventory entry is in the state it is -- the words
+    the flag column used to spell out (#69).
 
-    `blendable` / `blended by <Blend.Name>` / `blocked` -- the entry's own
-    words, with the blend named so the progress is legible.
+    A checkbox says ticked / not and the grey says live / inert, which is
+    all a glance needs. But "greyed, why?" is a hover away, and the
+    tooltip is the one place the full explanation costs nothing at all:
+      blendable  ready; say what a click would do;
+      blended    name the blend, since that is the thing a user hunting
+                 for "why is this not collecting?" needs;
+      blocked    the reason it cannot act -- three or more patches share
+                 the edge, which needs the deferred corner fill.
     """
-    if entry["status"] == "blended" and entry["blend"] is not None:
-        return "blended by %s" % entry["blend"].Name
-    return entry["status"]
+    status = entry["status"]
+    if status == "blended":
+        made = ("%s" % entry["blend"].Name if entry["blend"] is not None
+                else "another blend")
+        return ("Blended by %s.\nThis seam is done: clicking the row does "
+                "nothing. Its band editors still work -- a width set here "
+                "re-drives that blend." % made)
+    if status == "blocked":
+        return ("Blocked: three or more patches reference this edge, so it "
+                "is not a seam you can blend (it needs the deferred corner "
+                "fill). Clicking the row does nothing.")
+    return ("Not blended yet -- blendable.\nClick the row to collect this "
+            "seam, then Enter or OK to blend it.")
 
 
 # ---- band split: read / write / validate ----------------------------------
@@ -1294,18 +1567,22 @@ def _side_of(p, other):
 
 
 def read_band_split(entry):
-    """(pa_prop, pa_ss, pa_value, pb_prop, pb_ss, pb_value) for one seam:
-    which split property on each patch carves this seam's band, at which
-    end, and what the value is now. A value the patch does not carry yet
-    reads as the DEFAULT the blend would write (#64 leaves the patch's own
-    split alone when there is one). Returns None when the pair shares no
-    edge."""
+    """BOTH patches' band splits for one seam, as
+    (pa_prop, pa_ss, pa_value, pb_prop, pb_ss, pb_value): which split
+    property on each patch carves this seam's band, at which end, and what
+    the value is now. A value the patch does not carry yet reads as the
+    DEFAULT the blend would write (#64 leaves the patch's own split alone
+    when there is one). Returns None when the pair shares no edge.
+
+    Both were always here -- what #69 changes is not the read but what is
+    DONE with it: the two halves were being collapsed into one spin box
+    and one write, which quietly asserted that a seam has a single width.
+    It does not; see band_side."""
     pa, pb = entry["patch_a"], entry["patch_b"]
     pa_prop, pa_ss = _side_of(pa, pb)
     pb_prop, pb_ss = _side_of(pb, pa)
     if pa_prop is None or pb_prop is None:
         return None
-    tol = 0.01
 
     def value(p, prop, ss):
         v = split_at_end(list(getattr(p, prop) or []), ss)
@@ -1314,35 +1591,60 @@ def read_band_split(entry):
             pb_prop, pb_ss, value(pb, pb_prop, pb_ss))
 
 
-def write_band_split(entry, value):
-    """Write `value` onto BOTH patches' band splits for this seam.
+def band_side(entry, which, read=None):
+    """(patch, prop, ss, value) for ONE patch of the seam's band, or
+    (None, None, None, None) when the pair shares no edge.
+
+    `which` is BAND_A / BAND_B. Every read, write and validation goes
+    through here, so "which patch is this editor about" is answered in
+    exactly one place -- there is no second derivation to drift from the
+    first, and no path that can validate a width against the patch the
+    user did not edit."""
+    if read is None:
+        read = read_band_split(entry)
+    if read is None:
+        return None, None, None, None
+    if which == BAND_A:
+        return entry["patch_a"], read[0], read[1], read[2]
+    if which == BAND_B:
+        return entry["patch_b"], read[3], read[4], read[5]
+    return None, None, None, None
+
+
+def band_label(which):
+    """How a band side is NAMED in a message. "patch A" would collide with
+    a patch literally called A; "band A" and "band B" name the column."""
+    return "band %s" % which
+
+
+def write_band_split(entry, which, value):
+    """Write `value` onto ONE patch's band split for this seam.
 
     Since #64 the blend READS the split rather than asserting a default,
     so this is the band width -- the panel's stand-in for a fillet
-    radius. Both patches get it because the row is one seam with one
-    width; each patch keeps it on its own axis and at its own end, and
-    #61 normalizes each list on set. Each write is its own transaction
-    (one undo step per edit), kept out of the confirm transaction.
-    """
-    read = read_band_split(entry)
-    if read is None:
+    radius. The patch keeps it on its own axis and at its own end, and
+    #61 normalizes each list on set.
+
+    ONE patch, and it is named (`which`) rather than implied: since #69 a
+    seam carries two independently sized bands, so "write the width" no
+    longer has a single object to mean. Touching only the target is what
+    makes a refused edit on A leave B exactly as the user left it.
+
+    One transaction -- one undo step per edit -- and it stays OUT of the
+    confirm transaction, so a width edit is always undoable on its own."""
+    p, prop, ss = band_side(entry, which)[:3]
+    if p is None or prop is None:
         return False
-    pa, pb = entry["patch_a"], entry["patch_b"]
-    pa_prop, pa_ss = read[0], read[1]
-    pb_prop, pb_ss = read[3], read[4]
+    cur = list(getattr(p, prop) or [])
+    old = split_at_end(cur, ss)
+    new = [v for v in cur if old is None or v != old]
+    new = sorted(set(new + [float(value)]))
     doc = entry["edge"].Document
-    for p, prop, ss in ((pa, pa_prop, pa_ss), (pb, pb_prop, pb_ss)):
-        if prop is None:
-            continue
-        cur = list(getattr(p, prop) or [])
-        old = split_at_end(cur, ss)
-        new = [v for v in cur if old is None or v != old]
-        new = sorted(set(new + [float(value)]))
-        doc.openTransaction("Silk band split")
-        try:
-            setattr(p, prop, new)
-        finally:
-            doc.commitTransaction()
+    doc.openTransaction("Silk band split")
+    try:
+        setattr(p, prop, new)
+    finally:
+        doc.commitTransaction()
     doc.recompute()
     return True
 
@@ -1364,42 +1666,46 @@ def _band_cell_count(splits_along, splits_band, etype, ss):
     return n_band - len(corner_cells(splits_band, n_band))
 
 
-def band_cell_problem(entry, value=None):
-    """None when this seam's band is exactly ONE cell, otherwise a
-    message naming the patch and the values that break it."""
+def band_cell_problem(entry, which, value=None):
+    """None when ONE patch's band for `value` is exactly ONE cell,
+    otherwise a message naming that patch and the values that break it.
+
+    Per-PATCH since #69. The count is a property of a single patch's
+    split layout -- `along` intervals minus the corner cells, on that
+    patch's own two axes -- so checking it against the pair was never
+    more than checking each patch with a shared candidate. With one spin
+    that was harmless. With two, applying one candidate to both would
+    refuse a width that is perfectly good on the patch it was typed into
+    because the OTHER patch happens to subdivide differently. So `which`
+    is not a convenience: it is the only honest question to ask."""
     pa, pb = entry["patch_a"], entry["patch_b"]
     pa_prop, pa_ss = _side_of(pa, pb)
     pb_prop, pb_ss = _side_of(pb, pa)
     if pa_prop is None or pb_prop is None:
         return ("%s and %s share no edge, so there is no band to size"
                 % (pa.Name, pb.Name))
+    p, prop, ss = band_side(entry, which, (pa_prop, pa_ss, 0.0,
+                                           pb_prop, pb_ss, 0.0))[:3]
+    if p is None:
+        return ("unknown band side %r" % (which,))
     # A seam along U fixes a V interval, so the band lives in VSplits:
     # the direction follows from the property, no second resolution.
-    pa_etype = ("U" if pa_prop == "VSplits" else "V", pa_ss)
-    pb_etype = ("U" if pb_prop == "VSplits" else "V", pb_ss)
+    etype = ("U" if prop == "VSplits" else "V", ss)
+    along_prop = "USplits" if prop == "VSplits" else "VSplits"
 
-    def layout(p, prop, ss, along_prop):
-        cur = list(getattr(p, prop) or [])
-        old = split_at_end(cur, ss)
-        band = [v for v in cur if old is None or v != old]
-        if value is not None:
-            band = sorted(set(band + [float(value)]))
-        along = list(getattr(p, along_prop) or [])
-        return band, along
-
-    for p, prop, ss, etype, other_prop in (
-            (pa, pa_prop, pa_ss, pa_etype,
-             "USplits" if pa_prop == "VSplits" else "VSplits"),
-            (pb, pb_prop, pb_ss, pb_etype,
-             "USplits" if pb_prop == "VSplits" else "VSplits")):
-        band, along = layout(p, prop, ss, other_prop)
-        n = _band_cell_count(along, band, etype, ss)
-        if n != 1:
-            return ("patch %s.%s = %s with %s = %s covers %d band cells "
-                    "(exactly 1 is required; multi-cell bands are not "
-                    "supported yet)"
-                    % (p.Name, prop, ["%g" % v for v in band],
-                       other_prop, ["%g" % v for v in along], n))
+    cur = list(getattr(p, prop) or [])
+    old = split_at_end(cur, ss)
+    band = [v for v in cur if old is None or v != old]
+    if value is not None:
+        band = sorted(set(band + [float(value)]))
+    along = list(getattr(p, along_prop) or [])
+    n = _band_cell_count(along, band, etype, ss)
+    if n != 1:
+        return ("patch %s.%s = %s with %s = %s covers %d band cells "
+                "(exactly 1 is required; multi-cell bands are not "
+                "supported yet)"
+                % (p.Name, prop, ["%g" % v for v in band],
+                   along_prop, ["%g" % v for v in along], n))
     return None
 
 
