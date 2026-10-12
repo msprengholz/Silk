@@ -19,9 +19,26 @@ Three problems, three groups of tests:
    - test_corner_model_bands_follow_non_default_widths: real 2x2 corner
      model geometry, every band width moved off 0.1 / 0.9 — every band
      still resolves to the same single corner-free cell;
-   - test_blend_reasserts_its_default_band_width: what actually happens
-     when a user moves a band width today (the blend puts its default
-     back), pinned so the next ticket has a baseline to change.
+
+1b. #64 — the band width is the USER'S. The blend reads the two split
+   values the patch already carries at the seam-perpendicular axis's
+   ends instead of asserting its own default beside them (no new Blend
+   property; the patch owns its splits, the blend consumes them).
+   - test_split_at_end_picks_the_splits_own_end: the end-classification
+     rule (lowest split -> the 0 end, highest -> the 1 end, 0.5 -> both
+     neither), including two splits on ONE axis;
+   - test_blend_reads_the_user_band_width: a user width survives the
+     recompute with no duplicate added, is the band's ACTUAL parameter
+     extent (checked against the base surface, not a cell index), and
+     the blend's poles move onto it;
+   - test_band_widths_of_both_sides_are_independent: setting one side's
+     width leaves the other side's split list alone, in both directions;
+   - test_corner_patch_band_widths_stay_per_seam: the four-patch corner
+     keeps both splits per patch and one band cell per strip; a width on
+     one seam does not disturb the other seam's band axis;
+   - test_default_band_split_decision_is_unchanged: over every split list
+     the fixtures can produce, the new rule writes the default EXACTLY
+     when the pre-#64 one did — the no-user-choice path is unchanged.
 
 2. The multi-cell refusal named a cell count and nothing else.
    - test_multi_cell_band_refusal_names_patch_and_values: the message
@@ -36,20 +53,24 @@ Three problems, three groups of tests:
      the stored list equals what the geometry used, and the console
      says what was rejected and why.
 
-NOTE on the oracle — a known gap, deliberately NOT closed here.
+NOTE on the oracle — the gap noted here was CLOSED by #63.
 SilkChecks re-derives band_cells independently, on purpose ("the oracle
 re-derives the object code's tables instead of importing them, so a bug
-in the object code cannot hide itself"), and that copy still hard-codes
-0.1 / 0.9. Consequence, demonstrated: a SETTLED, correct blend whose
-seam-parallel axis carries a user width (e.g. Patch44.VSplits=[0.85] on
-the corner pair, where no blend writes that axis) builds its 24 poles
-from the correct single corner-free cell, yet check_blend derives a
-two-cell band, fails to produce reference rows and reports "no shared
-edge found" on B1/B2. Generalizing that independent copy is a
-SilkChecks change, which this ticket scopes out — so it needs its own
-ticket before any non-default band width can be oracle-checked. The
-tests here therefore assert on band_cells, the strip's poles and the
-hidden-cell sets, never on check_blend for a non-default width.
+in the object code cannot hide itself"), and that copy still hard-coded
+0.1 / 0.9 when this ticket was written. Consequence, demonstrated: a
+SETTLED, correct blend whose seam-parallel axis carries a user width
+(e.g. Patch44.VSplits=[0.85] on the corner pair, where no blend writes
+that axis) builds its 24 poles from the correct single corner-free cell,
+yet check_blend derived a two-cell band, failed to produce reference
+rows and reported "no shared edge found" on B1/B2 — the oracle
+disagreeing with correct geometry.
+
+#63 generalized that independent copy with the same end-classification
+rule (again MIRRORED, not imported — see Tests/test_oracle_band_cells.py,
+which also PROVES the new rule byte-identical to the old one on all 512
+default-reachable layouts). The oracle no longer has a gap here, so the
+tests in this file may now be complemented by a check_blend assertion on
+a non-default width; that one lives with the rest of the oracle work.
 """
 
 import itertools
@@ -57,6 +78,8 @@ import itertools
 import FreeCAD
 
 import Tests.corner_model as cm
+
+Vector = FreeCAD.Vector
 
 
 class _Capture:
@@ -310,65 +333,399 @@ def test_corner_model_bands_follow_non_default_widths(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_blend_reasserts_its_default_band_width(doc):
-    """The band width is NOT a Blend property (#61 background): each
-    seam's band split is written by the blend itself, at the fixed
-    default width (0.1 / 0.9), additively. So a user-moved band width
-    does not survive a document recompute — the blend puts its default
-    back. When the second default lands on the SAME end of the
-    seam-parallel axis as the user's width (Patch44 of the 2x2 corner
-    model meets two seams, one writing each axis), the band then spans
-    two cells and refuses.
+def _band_axis(p, other, tol=0.01):
+    """(seam label, side, band-axis property, side-0/1) of p's band for
+    the seam it shares with `other`.
 
-    Pinned here as the current contract, together with what that refusal
-    now reports: the patch, the seam, both split lists (the user's width
-    AND the blend's default re-added), and the value that would fix it.
-    Making the band width the user's is a design question for #62; until
-    then it is simply not the user's to move."""
+    Independently re-derived from the documented rule (AGENTS.md step 3):
+    the band axis is PERPENDICULAR to the seam, and the band sits at the
+    seam's own parametric end. Nothing here imports band_cells or the
+    blend's own seam helper, so the assertions below do not lean on the
+    code under test to decide what the band *should* be."""
+    from SilkMachinery import patch_side
+
+    e, ss = patch_side(p, other, tol)
+    if e is None:
+        return None, None, None, None
+    return e, ss, ("VSplits" if e[0] == "U" else "USplits"), ss
+
+
+def _intervals(splits):
+    """[(lo, hi)] from split values, written out here so the width
+    assertions do not borrow the object code's interval builder."""
+    s = sorted(set(float(v) for v in (splits or []) if 0.0 < v < 1.0))
+    return list(zip([0.0] + s, s + [1.0]))
+
+
+def _band_interval(p, prop, ss):
+    ivs = _intervals(getattr(p, prop) or [])
+    return ivs[0] if ss == 0 else ivs[-1]
+
+
+def _band_box(p, ea, ss):
+    """(u-interval, v-interval) of p's band cell for seam ea / side ss,
+    derived here from the split lists so it never borrows band_cells.
+
+    The band axis is PERPENDICULAR to the seam (seam along U -> V band)
+    and sits at the seam's own parametric end; the seam-PARALLEL extent
+    is the whole axis here because these fixtures put no extra split on
+    it. `None` on an axis means "derive it from the cell index"."""
+    us, vs = _intervals(p.USplits), _intervals(p.VSplits)
+    if ea[0] == "U":
+        return None, (vs[0] if ss == 0 else vs[-1])
+    return (us[0] if ss == 0 else us[-1]), None
+
+
+def _band_corners_on_surface(p, idx, want_u, want_v):
+    """Worst deviation of subgrid cell `idx`'s four corner poles from the
+    patch's base surface evaluated at the corners of the parameter box
+    (want_u, want_v).
+
+    This is the geometric proof that the band's ACTUAL extent is that box
+    -- not a bookkeeping claim about a cell index."""
+    nv = len(_intervals(p.VSplits))
+    iu, ivc = divmod(idx, nv)
+    us, vs = _intervals(p.USplits), _intervals(p.VSplits)
+    box_u = want_u if want_u is not None else us[iu]
+    box_v = want_v if want_v is not None else vs[ivc]
+    flat = list(p.Proxy._subgrids[idx])
+    base = p.Proxy._base_surface
+    # flat[U * 4 + V]; the cell's corners in its own local (0..3) grid
+    worst = 0.0
+    for u_i, v_i in ((0, 0), (0, 3), (3, 0), (3, 3)):
+        u = box_u[0] if u_i == 0 else box_u[1]
+        v = box_v[0] if v_i == 0 else box_v[1]
+        worst = max(worst, (flat[u_i * 4 + v_i] - base.value(u, v)).Length)
+    return worst
+
+
+def test_split_at_end_picks_the_splits_own_end(doc):
+    """The end-classification rule #64 reads the band boundary through:
+    the LOWEST split belongs to the parametric-0 end, the HIGHEST to the
+    parametric-1 end, and one exactly at 0.5 to NEITHER.
+
+    With two splits on ONE axis ([0.1, 0.9]) each end gets its own — the
+    rule is per (axis, end), never a single global value. That is what
+    lets a four-patch corner carry one split per seam side on the same
+    axis and still have each strip read the right one."""
+    from SilkMachinery import split_at_end
+
+    errors, checks = [], []
+    cases = [
+        # (splits, ss, expected)
+        ([], 0, None), ([], 1, None),
+        ([0.1], 0, 0.1), ([0.1], 1, None),
+        ([0.9], 0, None), ([0.9], 1, 0.9),
+        ([0.1, 0.9], 0, 0.1), ([0.1, 0.9], 1, 0.9),   # both ends, one axis
+        ([0.25], 0, 0.25), ([0.75], 1, 0.75),          # user widths
+        ([0.25, 0.75], 0, 0.25), ([0.25, 0.75], 1, 0.75),
+        ([0.5], 0, None), ([0.5], 1, None),            # neither end
+        ([0.15, 0.3, 0.8], 0, 0.15), ([0.15, 0.3, 0.8], 1, 0.8),
+        ([0.3, 0.5], 0, 0.3), ([0.3, 0.5], 1, None),
+    ]
+    for splits, ss, want in cases:
+        got = split_at_end(splits, ss)
+        ok = (got is None and want is None) or \
+             (got is not None and want is not None and abs(got - want) < 1e-12)
+        if not ok:
+            errors.append("split_at_end(%s, %d) = %r, want %r"
+                          % (_fmt(splits), ss, got, want))
+    checks.append("%d (splits, end) layouts: the lowest split is the 0-end's, "
+                  "the highest the 1-end's, 0.5 is neither" % len(cases))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_blend_reads_the_user_band_width(doc):
+    """#64, the defect: the blend used to ASSERT its default 0.1 / 0.9
+    instead of READING the patch's split, so a user width never took
+    effect — it accumulated beside the default ([0.1] + user 0.2 ->
+    [0.1, 0.2], band still 0.1 wide, and on a patch that already had a
+    split at that end the band grew a second cell and refused).
+
+    Now the patch owns its splits and the blend consumes them: a user
+    width survives the recompute with NO duplicate value added, it
+    becomes the band's actual width (verified against the base surface,
+    not just a cell index), and the blend's poles move onto it."""
     from SilkMachinery import band_cells
+    from SilkWorkflowOps import create_blend_by_edge
+    from Tests.test_patch_touched import _build_two_patch_pair
+
+    pa, pb, seam = _build_two_patch_pair(doc)
+    blend = create_blend_by_edge(seam)
+    doc.recompute()
+    errors, checks = [], []
+
+    ea, ss_a, prop_a, _ = _band_axis(pa, pb)
+    eb, ss_b, prop_b, _ = _band_axis(pb, pa)
+    if ea is None or eb is None:
+        return {"pass": False,
+                "errors": ["fixture: no shared seam resolved"],
+                "checks": checks}
+
+    default_poles = [tuple(q) for q in (blend.Poles or [])]
+    if len(default_poles) != 24:
+        return {"pass": False,
+                "errors": ["default blend has %d poles, want 24"
+                           % len(default_poles)], "checks": checks}
+    default_a = sorted(float(v) for v in (getattr(pa, prop_a) or []))
+    checks.append("default: %s seam %s/side %d -> %s = %s"
+                  % (pa.Name, ea, ss_a, prop_a, _fmt(default_a)))
+
+    # the user moves ONE side's band width (0.1 default -> 0.3)
+    user = 0.3 if ss_a == 0 else 0.7
+    with _Capture() as cap:
+        setattr(pa, prop_a, [user])
+        doc.recompute()
+
+    stored = sorted(float(v) for v in (getattr(pa, prop_a) or []))
+    checks.append("after setting %s.%s = %s and recomputing: %s = %s"
+                  % (pa.Name, prop_a, _fmt([user]), prop_a, _fmt(stored)))
+    if stored != [user]:
+        errors.append("%s.%s = %s after recompute, want exactly %s — the "
+                      "blend re-asserted its default beside the user's "
+                      "width" % (pa.Name, prop_a, _fmt(stored), _fmt([user])))
+    errors += ["console error: %s" % e for e in cap.errors]
+
+    # the width is the band's ACTUAL parameter extent ...
+    iv = _band_interval(pa, prop_a, ss_a)
+    width = iv[1] - iv[0]
+    if abs(width - abs(user - (0.0 if ss_a == 0 else 1.0))) > 1e-9:
+        errors.append("band interval on %s is %r, want width %g"
+                      % (pa.Name, iv, abs(user - (0.0 if ss_a == 0 else 1.0))))
+    idxs = band_cells(pa, ea, ss_a)
+    if len(idxs) != 1:
+        errors.append("%s band now covers %r cells, want exactly 1"
+                      % (pa.Name, idxs))
+    else:
+        dev = _band_corners_on_surface(pa, idxs[0], *_band_box(pa, ea, ss_a))
+        if dev > 1e-9:
+            errors.append("band cell corners deviate %.3e from the base "
+                          "surface over interval %r" % (dev, iv))
+        checks.append("band on %s = cell %r over %r (width %g), corners on "
+                      "the base surface to %.1e" % (pa.Name, idxs, iv, width,
+                                                    dev))
+
+    # ... and the blend's poles moved onto it.
+    new_poles = [tuple(q) for q in (blend.Poles or [])]
+    if len(new_poles) != 24:
+        errors.append("blend has %d poles after the width change, want 24"
+                      % len(new_poles))
+    elif new_poles == default_poles:
+        errors.append("blend poles did NOT move after the user set the band "
+                      "width — the blend is still reading its default")
+    else:
+        dev = max((Vector(*a) - Vector(*b)).Length
+                  for a, b in zip(default_poles, new_poles))
+        if dev <= 1e-6:
+            errors.append("blend poles moved only %.3e — not onto the new band"
+                          % dev)
+        checks.append("blend rebuilt on the new band: 24 poles, max move "
+                      "%.3f mm" % dev)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_band_widths_of_both_sides_are_independent(doc):
+    """Each side of the seam is read on its own patch, so a width set on
+    one leaves the other side's split list exactly as the blend wrote
+    it — in both directions, and each patch keeps its own user width."""
+    from SilkWorkflowOps import create_blend_by_edge
+    from Tests.test_patch_touched import _build_two_patch_pair
+
+    pa, pb, seam = _build_two_patch_pair(doc)
+    blend = create_blend_by_edge(seam)
+    doc.recompute()
+    errors, checks = [], []
+
+    _, ss_a, prop_a, _ = _band_axis(pa, pb)
+    _, ss_b, prop_b, _ = _band_axis(pb, pa)
+    def va(v):
+        return v if ss_a == 0 else 1.0 - v
+    def vb(v):
+        return v if ss_b == 0 else 1.0 - v
+
+    base_b = sorted(float(v) for v in (getattr(pb, prop_b) or []))
+    checks.append("defaults: %s.%s = %s, %s.%s = %s"
+                  % (pa.Name, prop_a, _fmt(getattr(pa, prop_a)), pb.Name,
+                     prop_b, _fmt(getattr(pb, prop_b))))
+
+    # A only
+    setattr(pa, prop_a, [va(0.25)])
+    doc.recompute()
+    doc.recompute()
+    if sorted(float(v) for v in (getattr(pa, prop_a) or [])) != [va(0.25)]:
+        errors.append("A's width did not stick: %s.%s = %s"
+                      % (pa.Name, prop_a, _fmt(getattr(pa, prop_a))))
+    if sorted(float(v) for v in (getattr(pb, prop_b) or [])) != base_b:
+        errors.append("setting A's width disturbed B: %s.%s = %s, want %s"
+                      % (pb.Name, prop_b, _fmt(getattr(pb, prop_b)),
+                         _fmt(base_b)))
+    if len(blend.Poles or []) != 24:
+        errors.append("blend lost poles after A's width change (%d)"
+                      % len(blend.Poles or []))
+    checks.append("A width %g: A reads it, B still %s, blend has 24 poles"
+                  % (0.25, _fmt(base_b)))
+
+    # now B too, with a different width — A must not be re-asserted
+    setattr(pb, prop_b, [vb(0.4)])
+    doc.recompute()
+    doc.recompute()
+    if sorted(float(v) for v in (getattr(pa, prop_a) or [])) != [va(0.25)]:
+        errors.append("setting B's width disturbed A: %s.%s = %s"
+                      % (pa.Name, prop_a, _fmt(getattr(pa, prop_a))))
+    if sorted(float(v) for v in (getattr(pb, prop_b) or [])) != [vb(0.4)]:
+        errors.append("B's width did not stick: %s.%s = %s"
+                      % (pb.Name, prop_b, _fmt(getattr(pb, prop_b))))
+    if len(blend.Poles or []) != 24:
+        errors.append("blend lost poles after both widths changed (%d)"
+                      % len(blend.Poles or []))
+    # and each side's band really is the width that side asked for
+    for p, other, prop, ss, want_w in ((pa, pb, prop_a, ss_a, 0.25),
+                                       (pb, pa, prop_b, ss_b, 0.4)):
+        iv = _band_interval(p, prop, ss)
+        if abs((iv[1] - iv[0]) - want_w) > 1e-9:
+            errors.append("%s band interval %r, want width %g"
+                          % (p.Name, iv, want_w))
+    checks.append("both widths set independently: A=%g B=%g, blend still 24 "
+                  "poles" % (0.25, 0.4))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_corner_patch_band_widths_stay_per_seam(doc):
+    """The four-patch corner must not regress: each patch legitimately
+    carries TWO splits, one per seam side (on its two axes), and every
+    strip still resolves to exactly ONE band cell. A non-default width
+    on ONE seam of a corner patch leaves that seam's split list alone —
+    the OTHER seam's band axis is a different list and is not touched."""
+    from SilkMachinery import band_cells, patch_side
+    from Tests.test_blend_corner_splits import EXPECTED_SPLITS
 
     model = cm.build_corner_model(doc)
     p44 = model["patches"]["Patch44"]
     errors, checks = [], []
 
-    if sorted(float(v) for v in p44.VSplits) != [0.9]:
-        errors.append("fixture: Patch44.VSplits = %s, want [0.9]"
-                      % _fmt(p44.VSplits))
+    for name, want_u, want_v in EXPECTED_SPLITS:
+        p = model["patches"][name]
+        got = (sorted(float(v) for v in (p.USplits or [])),
+               sorted(float(v) for v in (p.VSplits or [])))
+        if got != (sorted(want_u), sorted(want_v)):
+            errors.append("fixture: %s splits %s, want %s"
+                          % (name, got, (want_u, want_v)))
+    checks.append("default ring: all 4 corner patches carry both splits "
+                  "(%s)" % "; ".join(
+                      "%s U=%s V=%s" % (n, u, v) for n, u, v in EXPECTED_SPLITS))
 
-    with _Capture() as cap:
-        p44.VSplits = [0.85]
-        doc.recompute()
-    stored = sorted(float(v) for v in p44.VSplits)
-    checks.append("after moving Patch44's V band width to 0.85 and "
-                  "recomputing, Patch44.VSplits = %s" % _fmt(stored))
-    if stored != [0.85, 0.9]:
-        errors.append("expected the blend to re-assert its 0.9 default, got "
-                      "%s" % _fmt(stored))
-
-    idxs = band_cells(p44, "V1", 1)
-    if len(idxs) != 2:
-        errors.append("fixture did not produce a multi-cell band: %r" % idxs)
-    msg = "\n".join(cap.errors)
-    for label, frag in (("cell count", "covers 2 subgrid cells"),
-                        ("seam", "seam V1 (band at parametric 1)"),
-                        ("re-added default",
-                         "seam-parallel axis VSplits = [0.85, 0.9]"),
-                        ("corner cells", "corner cell(s) [2] excluded"),
-                        ("fix (the split nearest the band's own side, so "
-                         "the user's extra 0.85 is what goes)",
-                         "Patch44.VSplits = [0.9]")):
-        if frag not in msg:
-            errors.append("refusal does not name the %s (%r); got:\n%s"
-                          % (label, frag, msg))
-    checks.append("refusal names the count, the seam, the re-added default, "
-                  "the corner cells and the fix")
-
-    # Graceful, as ever: every ring strip survives with its type.
+    # the two seams meeting at Patch44, as the strips see them
+    sides = []
     for bname, st in model["strips"].items():
-        if getattr(st, "object_type", None) not in ("Blend", "BlendStrip"):
-            errors.append("strip %s lost its type after the refusal (%r)"
-                          % (bname, getattr(st, "object_type", None)))
-    checks.append("refusal is graceful: all 4 ring strips survive")
+        if st.PatchA is not p44 and st.PatchB is not p44:
+            continue
+        other = st.PatchB if st.PatchA is p44 else st.PatchA
+        e, ss = patch_side(p44, other, 0.01)
+        sides.append((bname, other, e, ss))
+    if len(sides) != 2:
+        return {"pass": False,
+                "errors": ["fixture: Patch44 meets %d strips, want 2"
+                           % len(sides)], "checks": checks}
+    axes = {("VSplits" if e[0] == "U" else "USplits") for _, _, e, _ in sides}
+    if len(axes) != 2:
+        return {"pass": False,
+                "errors": ["fixture: both seams of Patch44 use the same band "
+                           "axis %s" % axes], "checks": checks}
+
+    b_target, other_t, e_t, ss_t = sides[0]
+    b_other, other_o, e_o, ss_o = sides[1]
+    prop_t = "VSplits" if e_t[0] == "U" else "USplits"
+    prop_o = "VSplits" if e_o[0] == "U" else "USplits"
+    before_o = sorted(float(v) for v in (getattr(p44, prop_o) or []))
+    cells_before = {bn: band_cells(p44, e, ss) for bn, _, e, ss in sides}
+    strips_before = {bn: [tuple(q) for q in model["strips"][bn].Poles or []]
+                     for bn in model["strips"]}
+    checks.append("Patch44 seams: %s -> %s (side %d), %s -> %s (side %d); "
+                  "band axes %s / %s" % (b_target, e_t, ss_t, b_other, e_o,
+                                         ss_o, prop_t, prop_o))
+
+    user = 0.3 if ss_t == 0 else 0.7
+    with _Capture() as cap:
+        setattr(p44, prop_t, [user])
+        doc.recompute()
+    errors += ["console error: %s" % e for e in cap.errors]
+
+    stored = sorted(float(v) for v in (getattr(p44, prop_t) or []))
+    checks.append("Patch44.%s set to %s and recomputed -> %s"
+                  % (prop_t, _fmt([user]), _fmt(stored)))
+    if stored != [user]:
+        errors.append("Patch44.%s = %s after the width change, want %s "
+                      "(the blend re-asserted its default)"
+                      % (prop_t, _fmt(stored), _fmt([user])))
+
+    # the OTHER seam is untouched, on its own axis
+    if sorted(float(v) for v in (getattr(p44, prop_o) or [])) != before_o:
+        errors.append("Patch44.%s = %s, want %s — the other seam's band axis "
+                      "was disturbed" % (prop_o,
+                                          _fmt(getattr(p44, prop_o)),
+                                          _fmt(before_o)))
+
+    # every strip still resolves to exactly one band cell
+    for bn, other, e, ss in sides:
+        got = band_cells(p44, e, ss)
+        if len(got) != 1:
+            errors.append("%s band on Patch44 covers %r cells, want 1"
+                          % (bn, got))
+        elif got != cells_before[bn]:
+            checks.append("%s band cell %r -> %r (same cell, new width)"
+                          % (bn, cells_before[bn], got))
+    # and the whole ring is still built
+    for bn, st in model["strips"].items():
+        if len(st.Poles or []) != 24:
+            errors.append("%s has %d poles after the width change, want 24"
+                          % (bn, len(st.Poles or [])))
+    checks.append("all 4 ring strips still carry 24 poles (one band cell "
+                  "each on Patch44)")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_default_band_split_decision_is_unchanged(doc):
+    """With no user choice, #64 changes nothing: for every split list the
+    fixtures can produce ({0.1, 0.5, 0.9}, every subset, both axes, both
+    ends) the new end-classification rule writes the default EXACTLY when
+    the old `no split within 1e-9 of 0.1 / 0.9` test did. The default
+    path is therefore byte-identical, and a fresh ring still materializes
+    the documented 0.1 / 0.9 layout."""
+    from SilkMachinery import split_at_end
+
+    errors, checks = [], []
+    subsets = _subsets([0.1, 0.5, 0.9])
+    n = 0
+    for splits in subsets:
+        for ss in (0, 1):
+            default = 0.9 if ss else 0.1
+            new_writes = split_at_end(splits, ss) is None
+            old_writes = all(abs(float(v) - default) > 1e-9 for v in splits)
+            n += 1
+            if new_writes != old_writes:
+                errors.append("splits %s side %d: new rule writes=%r, old "
+                              "rule writes=%r" % (_fmt(splits), ss,
+                                                  new_writes, old_writes))
+    checks.append("%d (splits, end) layouts over every subset of "
+                  "{0.1, 0.5, 0.9}: write-the-default decision identical to "
+                  "the pre-#64 rule" % n)
+
+    # ... and on real geometry, a fresh ring still lands on 0.1 / 0.9.
+    from Tests.test_blend_corner_splits import EXPECTED_SPLITS
+    model = cm.build_corner_model(doc)
+    for name, want_u, want_v in EXPECTED_SPLITS:
+        p = model["patches"][name]
+        got = (sorted(float(v) for v in (p.USplits or [])),
+               sorted(float(v) for v in (p.VSplits or [])))
+        if got != (sorted(want_u), sorted(want_v)):
+            errors.append("default ring: %s splits %s, want %s"
+                          % (name, got, (want_u, want_v)))
+    for bname, st in model["strips"].items():
+        if len(st.Poles or []) != 24:
+            errors.append("default ring: %s has %d poles, want 24"
+                          % (bname, len(st.Poles or [])))
+    checks.append("fresh 2x2 ring still materializes the documented "
+                  "0.1 / 0.9 layout on all 4 patches, 24 poles per strip")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -553,7 +910,11 @@ ALL_TESTS = [
     test_band_cells_identical_to_legacy_on_default_splits,
     test_band_cells_generalizes_user_widths,
     test_corner_model_bands_follow_non_default_widths,
-    test_blend_reasserts_its_default_band_width,
+    test_split_at_end_picks_the_splits_own_end,
+    test_blend_reads_the_user_band_width,
+    test_band_widths_of_both_sides_are_independent,
+    test_corner_patch_band_widths_stay_per_seam,
+    test_default_band_split_decision_is_unchanged,
     test_multi_cell_band_refusal_names_patch_and_values,
     test_splits_normalized_on_set,
 ]

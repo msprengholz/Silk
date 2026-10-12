@@ -156,6 +156,36 @@ def patch_side(pa, pb, tol=0.01):
     return ea, (0 if ea[1] == "0" else 1)
 
 
+def split_at_end(splits, ss):
+    """The split that carves the band at ONE END of an axis, or None.
+
+    A split is not a width marker at a magic number, it is the FAR EDGE
+    of a band at one end of its axis: the lowest split carves [0, s] at
+    the parametric-0 end, the highest carves [s, 1] at the parametric-1
+    end, and a split exactly at 0.5 marks NEITHER end (a plain
+    mid-surface subdivision with no band attached to it). Returns that
+    split's value for the requested end, or None when the end carries
+    none. #64.
+
+    This is the SINGLE end-classification rule, shared on purpose: a
+    band and the corner-cell exclusion that trims it must never disagree
+    about which of a patch's splits is which end's, or the band would
+    measure itself against a cell that was excluded for a different
+    reason (corner_cells drops exactly the interval its end's split
+    carved; SilkBlend reads exactly that split as the band's width).
+
+    With TWO splits on one axis ([0.1, 0.9]) each end gets its own —
+    end 0 takes the lowest, end 1 the highest. That is what lets a
+    four-patch corner carry one split per seam side on the same axis.
+    """
+    s = normalize_splits(list(splits or []))
+    if not s:
+        return None
+    if ss == 0:
+        return s[0] if s[0] < 0.5 else None
+    return s[-1] if s[-1] > 0.5 else None
+
+
 def corner_cells(splits, n_intervals):
     """Interval indices along one axis that are CORNER cells — reserved
     for the four-cell corner blend op (#28) and excluded from a band.
@@ -186,9 +216,9 @@ def corner_cells(splits, n_intervals):
     if not s:
         return set()
     out = set()
-    if s[0] < 0.5:
+    if split_at_end(s, 0) is not None:
         out.add(0)
-    if s[-1] > 0.5:
+    if split_at_end(s, 1) is not None:
         out.add(n_intervals - 1)
     return out
 

@@ -397,8 +397,8 @@ def test_blend_refuses_blend_as_patch(doc):
 def test_blend_pointed_live_update(doc):
     """Mutation/live-update: change a cone's splits -> the blend itself
     recomputes (poles change but stay oracle-green: B1/B2/B3), the
-    auto-hide set converges (no ping-pong over repeated recomputes), and
-    both patches stay green."""
+    auto-hide set converges (no ping-pong over repeated recomputes) and
+    names the CURRENT band, and both patches stay green."""
     errors, checks = [], []
     from SilkWorkflowOps import create_blend
     from SilkChecks import check_blend, check_patch
@@ -414,7 +414,11 @@ def test_blend_pointed_live_update(doc):
 
     # A split on cone A PERPENDICULAR to the seam beyond the blend's own
     # 0.9 narrows the band cell -> the blend must recompute off the
-    # patch's updated subgrids.
+    # patch's updated subgrids. #64: this value is now the band's ACTUAL
+    # width (the blend reads it) rather than being joined by a re-asserted
+    # default, so the band stays the SAME cell at a new width -- the
+    # hidden-cell liveness is asserted against band_cells below, not
+    # against a cell index that no longer has to move.
     pa.VSplits = [0.95]
     doc.recompute()
     doc.recompute()
@@ -449,11 +453,24 @@ def test_blend_pointed_live_update(doc):
     if hidden1 != hidden2:
         errors.append("hidden-cell set ping-pongs: %r vs %r"
                       % (hidden1, hidden2))
-    if hidden1 == hidden_before:
-        errors.append("hidden-cell set did not follow the band move "
-                      "(still %r)" % hidden1)
-    checks.append("hidden set converged after repeated recomputes: "
-                  "%r -> %r" % (hidden_before, hidden1))
+    # The auto-hide set must equal the CURRENT band, re-derived from the
+    # patch's splits (#33). Comparing against the live band_cells is what
+    # makes this a staleness check: a set recorded before the width moved
+    # would no longer name the cell the blend now covers. Before #64 the
+    # band cell index happened to change as a side effect of the blend
+    # re-asserting its default; #64 makes the index stable and the WIDTH
+    # the moving part, so the index comparison no longer proves anything
+    # — the band_cells equality does.
+    from SilkMachinery import band_cells, patch_side
+    e_a, ss_a = patch_side(pa, pb, 0.01)
+    live_band = band_cells(pa, e_a, ss_a)
+    if hidden1 != live_band:
+        errors.append("hidden-cell set %r does not name the current band "
+                      "%r (seam %s side %d)" % (hidden1, live_band, e_a, ss_a))
+    checks.append("hidden set %r == the live band_cells %r for seam %s "
+                  "side %d, converged over repeated recomputes (was %r at "
+                  "the default width)"
+                  % (hidden1, live_band, e_a, ss_a, hidden_before))
     errors += ["console error: %s" % e for e in cap.errors]
     return {"pass": not errors, "errors": errors, "checks": checks}
 

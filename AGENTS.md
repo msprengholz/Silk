@@ -84,14 +84,22 @@ Compare corner[i] vs corner[j] within tolerance 0.01. Collect matching pairs.
 - (3,0) or (0,3) = V0 (U=0, V varies along col 0)
 
 ### Step 3: Ensure the band split on both patches (SilkBlend.ensure_band_split)
-Each strip sets the perpendicular split on its two patches, additively so both
-splits can coexist on a 4-patch corner patch:
-| Shared edge | Split direction | Band location |
+Each strip reads the perpendicular split on its two patches, additively so both
+splits can coexist on a 4-patch corner patch. With no user choice the defaults
+are written; a width the user already set is READ, not overridden (#64):
+| Shared edge | Split direction | Band location (default) |
 |-------------|-----------------|---------------|
-| U0 (row 0)  | VSplits=[0.1]  | U∈[0,0.1] band |
-| U1 (row 3)  | VSplits=[0.9]  | U∈[0.9,1.0] band |
-| V0 (col 0)  | USplits=[0.1]  | U∈[0,0.1] band |
-| V1 (col 3)  | USplits=[0.9]  | U∈[0.9,1.0] band |
+| U0 (row 0)  | VSplits | U∈[0, s] band, s=0.1 default |
+| U1 (row 3)  | VSplits | U∈[s,1.0] band, s=0.9 default |
+| V0 (col 0)  | USplits | U∈[0, s] band, s=0.1 default |
+| V1 (col 3)  | USplits | U∈[s,1.0] band, s=0.9 default |
+
+**The patch owns its splits; the blend consumes them. There is no `Blend`
+property for the band width** (#64). "The split at this seam's end" is
+`SilkMachinery.split_at_end`: the LOWEST split belongs to the parametric-0 end,
+the HIGHEST to the parametric-1 end, one exactly at 0.5 to neither. With two
+splits on ONE axis (`[0.1, 0.9]`) each end gets its own — the rule is per
+(patch, axis, side), so a corner patch's two seams on one axis never collide.
 
 ### Step 3b: Band = subgrid cells, NOT re-segmentation (ticket #33)
 The strip band is taken from the patch's pre-computed subgrid cells
@@ -111,9 +119,11 @@ re-derives the FULL `_HiddenSubgridIdxs` set for each patch from ALL
 linked strips with the current splits (cell indices shift when a later
 strip adds a split).
 
-The width itself is still not the user's to move while a blend exists:
-each seam's band split is written by the blend itself at the fixed
-default width (`ensure_band_split`, 0.1 / 0.9), additively.
+The width IS the user's (#64): `ensure_band_split` writes 0.1 / 0.9 only when
+the seam's end of that axis carries no split at all; otherwise it reads the
+split the patch already has and adds nothing. Because the band and
+`corner_cells` classify ends through the same `split_at_end`, a user width
+excludes its corner cell exactly as the default did.
 
 ### Step 4: Extract rows/columns from strips
 Subgrid flat: `poles[U][V]` = `flat[U*4 + V]` (U is first dimension in FreeCAD)

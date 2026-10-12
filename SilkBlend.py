@@ -33,8 +33,8 @@ import ArachNURBS as AN
 from popup import tipsDialog
 
 from SilkMachinery import patch_side as _patch_side, band_cells, \
-    band_diagnosis, ensure_hidden_idxs_property, shared_seam, _EDGE_OF, \
-    _cyclic_adjacent
+    band_diagnosis, ensure_hidden_idxs_property, shared_seam, \
+    split_at_end, _EDGE_OF, _cyclic_adjacent
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -157,16 +157,31 @@ def run_blend(fp):
     ss_a = 0 if ea[1] == "0" else 1  # split near 0 or near 1 along the perpendicular direction
     ss_b = 0 if eb[1] == "0" else 1
 
-    # Step 4: ensure each patch has the split that isolates its 0.1 band at
-    # the shared edge (perpendicular to the seam, on the seam's side). A
+    # Step 4: each patch carries the split that isolates its band at the
+    # shared edge (perpendicular to the seam, on the seam's side). A
     # corner patch meets two strips, so both USplits and VSplits get set.
+    #
+    # #64: the blend READS that boundary, it does not assert it. The
+    # patch owns its splits; the blend consumes them. If the patch
+    # already carries a split at THIS seam's end of THIS axis, that split
+    # IS the band's far edge — use it and add nothing. Only when the end
+    # carries no split at all does the blend write the default width
+    # (0.1 / 0.9) as before.
+    #
+    # "At this end" is SilkMachinery.split_at_end's classification — the
+    # same rule corner_cells uses to decide which interval is a corner
+    # cell, so the band and its corner exclusion can never disagree
+    # about which split is which end's. It is per (patch, axis, side),
+    # never a single global value: a four-patch corner carries one split
+    # per seam side on each axis, and each strip reads its own.
     def ensure_band_split(p, sd, ss):
         prop = "VSplits" if sd == "V" else "USplits"
-        val = 0.9 if ss else 0.1
         cur = list(getattr(p, prop) or [])
-        if all(abs(v - val) > 1e-9 for v in cur):
-            setattr(p, prop, sorted(cur + [val]))
-            p.recompute()
+        if split_at_end(cur, ss) is not None:
+            return          # the patch's own split defines this band
+        val = 0.9 if ss else 0.1
+        setattr(p, prop, sorted(cur + [val]))
+        p.recompute()
 
     ensure_band_split(pa, sd_a, ss_a)
     ensure_band_split(pb, sd_b, ss_b)
