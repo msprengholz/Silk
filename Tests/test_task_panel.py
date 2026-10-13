@@ -87,6 +87,18 @@ def _open_panel(doc):
 def _close_panel(panel):
     if panel is None:
         return
+    # #72: go through the panel's OWN close path. Calling
+    # Gui.Control.closeDialog() directly tears down the widget but leaves
+    # the Python panel alive, still holding self.doc, _collected and the
+    # two cell-widget registries -- so it pins a CLOSED document's
+    # geometry for the life of the process (~90 MB per test, 3.4 GB over
+    # this module). close_panel() releases those; bypassing it is what
+    # leaked. The old direct teardown stays as the fallback for a panel
+    # whose own close raised.
+    try:
+        panel.close_panel()
+    except Exception:
+        pass
     try:
         Gui.Control.closeDialog()
     except Exception:

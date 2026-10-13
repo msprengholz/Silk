@@ -745,7 +745,34 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         if _open_panel is self:
             _open_panel = None
         self._release_focus()
+        self._release_document_refs()
         Gui.Control.closeDialog()
+
+    def _release_document_refs(self):
+        """Drop every reference this panel holds into the document (#72).
+
+        Closing the widget is NOT enough to let the panel die. It keeps
+        `_collected`, the two cell-widget registries, and `self.doc` --
+        and a closed FreeCAD Document's Python object still owns its
+        Objects and their shapes. So a panel that outlives its document
+        pins that whole document's geometry for the life of the process.
+
+        Measured: the panel tests leaked one such panel per test, ~90 MB
+        each, 3.4 GB across 38 tests -- with the module still reporting
+        "0 orphaned module generations", because nothing here is a
+        module leak at all. It is a plain reference cycle through a
+        deleted Document.
+
+        Called from close_panel, so it covers every exit: manual close,
+        the document-switch hook, and the caller-closed path."""
+        self._collected = {SECTION_EDGE: [], SECTION_PATCH: [],
+                           SECTION_BLEND: []}
+        self._split_widgets = {}
+        self._flag_widgets = {}
+        try:
+            self.doc = None
+        except Exception:
+            pass
 
     def _release_focus(self):
         """Move focus out of the panel before closing it: a focus pointer
