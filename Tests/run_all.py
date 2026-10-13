@@ -329,6 +329,15 @@ def main():
         if arg.startswith("--"):
             continue
         args.append(arg)
+    # FreeCADCmd hands the STARTUP SCRIPT ITSELF to sys.argv, so under a
+    # headless run the first "positional" is this file's own path. It
+    # became a test filter, matched nothing, and the run reported 0/0
+    # with no hint that the filter was nonsense.
+    try:
+        _self = os.path.realpath(__file__)
+        args = [a for a in args if os.path.realpath(a) != _self]
+    except OSError:
+        pass
     test_filter = args[0] if args else None
     inspect = "--inspect" in sys.argv
     save = "--save" in sys.argv
@@ -362,12 +371,21 @@ def main():
                 print("--changed: %s -> running everything" % reason)
 
     try:
+        # ONLY the import decides which mode we are in. The try block used
+        # to wrap _run_in_process() as well, so an ImportError raised
+        # anywhere INSIDE a headless run silently fell through to the RPC
+        # path -- and the run then quietly executed in the human's GUI
+        # process instead. That is how a "headless, 102 MB" measurement
+        # turned out to be a 4.7 GB run against the live GUI: the launcher
+        # printed the fallback's output and nobody could tell.
         import FreeCAD  # noqa: F401
-        return _run_in_process(inspect, save_dir, test_filter, test_modules)
     except ImportError:
-        port = int(os.environ.get("SILK_RPC_PORT", "9875"))
-        return _run_via_rpc(port, inspect, save_dir, test_filter, force_reload,
-                            keep_namespace, test_modules)
+        pass
+    else:
+        return _run_in_process(inspect, save_dir, test_filter, test_modules)
+    port = int(os.environ.get("SILK_RPC_PORT", "9875"))
+    return _run_via_rpc(port, inspect, save_dir, test_filter, force_reload,
+                        keep_namespace, test_modules)
 
 
 # NOTE: called unconditionally -- FreeCAD executes startup scripts with
