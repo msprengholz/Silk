@@ -50,6 +50,10 @@ def collect_tests(test_filter=None, test_modules=None):
                 ):
                     funcs.append(obj)
     if test_modules is not None:
+        # A bare string would iterate CHARACTERS ('test_chain' -> {'t',
+        # 'e', 's', ...}) and silently select nothing. Guard it.
+        if isinstance(test_modules, str):
+            test_modules = [test_modules]
         wanted = set(test_modules)
         funcs = [
             f for f in funcs

@@ -231,10 +231,15 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
     if keep_namespace:
         print("--keep-namespace: leaving stale RPC namespace bindings alone.")
     res = proxy.execute_code(
+        # Order must match _silk_run's signature inside _REMOTE_CODE:
+        # (force, keep_ns, test_filter, close_docs, save_dir, test_modules).
+        # Getting this wrong passes test_modules in save_dir's slot, which
+        # does not crash -- it just runs the whole suite, which is the
+        # worst possible failure for a speed flag.
         _REMOTE_CODE % (_SILK_DIR, str(bool(force_reload)),
                         str(bool(keep_namespace)), test_filter,
-                        repr(list(test_modules) if test_modules else None),
-                        str(not (inspect or save_dir)), save_dir),
+                        str(not (inspect or save_dir)), save_dir,
+                        list(test_modules) if test_modules else None),
         _call_timeout,
     )
     if not isinstance(res, dict) or not res.get("success"):
