@@ -109,7 +109,8 @@ def test_create_blend_ground_truth(doc):
 
 def test_unblend_restores_the_patches(doc):
     """#70: deleting a FRESHLY created Blend must give both patches their
-    band cells back.
+    band cells back -- and #71 extends it to the band's SPLIT, so an
+    unblended patch is a plain patch again.
 
     The hidden-cell set is re-derived by each blend's execute from the
     blends alive at that moment, but a deleted blend touches nothing and
@@ -124,6 +125,12 @@ def test_unblend_restores_the_patches(doc):
     the inherited `onDocumentRestored`. Building the blend fresh -- the
     ordinary path, and the one the panel uses -- is precisely what
     exercises the regression.
+
+    #71 reverses #70 on ONE point: #70 kept the band splits so the user's
+    width would survive a re-blend, and the human asked for the opposite
+    ("unblending does not remove the subgrids, but I think it should do
+    so"). The price is stated plainly: the width is discarded, so
+    re-blending that seam rebuilds at the DEFAULT (0.1 / 0.9).
     """
     from SilkWorkflowOps import create_blend
     from Tests.test_patch_stage import _copy_fixture_edge  # noqa: F401
@@ -160,30 +167,151 @@ def test_unblend_restores_the_patches(doc):
             errors.append("after deleting the blend the patches still hide "
                           "their band cells: %s -- a hole is left behind"
                           % ([hidden(patch_a), hidden(patch_b)],))
-        if sum(after_faces) <= sum(before_faces):
-            errors.append("the band cell did not come back: faces %d -> %d"
-                          % (sum(before_faces), sum(after_faces)))
 
-        # the user's width must survive the unblend (it is the patch's own
-        # split, #64) -- only the *cells* are given back
+        # #71: the SEAM's own band split goes with it. #70 deliberately kept
+        # it to preserve the user's width; the human asked for the opposite
+        # (an unblended patch should look like a plain patch), so the split
+        # is removed -- which is why the cell comes back AND the patch goes
+        # back to one unsplit surface. The width is the price.
         splits_a = (list(patch_a.USplits), list(patch_a.VSplits))
         splits_b = (list(patch_b.USplits), list(patch_b.VSplits))
-        checks.append("splits survive: %s %s" % (splits_a, splits_b))
-        if not (splits_a[0] or splits_a[1] or splits_b[0] or splits_b[1]):
-            errors.append("unblend discarded the band splits -- the user's "
-                          "chosen width would be lost")
+        checks.append("splits removed: %s %s" % (splits_a, splits_b))
+        if splits_a[0] or splits_a[1] or splits_b[0] or splits_b[1]:
+            errors.append("unblend left the band splits behind: %s %s -- the "
+                          "patch still renders subdivided"
+                          % (splits_a, splits_b))
+        cells = (len(patch_a.Proxy._subgrids), len(patch_b.Proxy._subgrids))
+        checks.append("subgrids after unblend: %s" % (cells,))
+        if cells != (0, 0):
+            errors.append("an unblended patch still carries subgrids %s -- it "
+                          "renders as a subdivided surface, not a plain one"
+                          % (cells,))
+        if (len(patch_a.Shape.Faces), len(patch_b.Shape.Faces)) != (1, 1):
+            errors.append("an unblended patch is not one whole surface: faces "
+                          "%s (a subdivided patch with its band given back "
+                          "would show two cells per patch)"
+                          % ([len(patch_a.Shape.Faces),
+                             len(patch_b.Shape.Faces)],))
 
-        # and re-blending on the same seam must still build
+        # and re-blending on the same seam must still build -- at the
+        # DEFAULT width, because the old one was given back
         again = create_blend(patch_a, patch_b, name="BlendAgain")
         doc.recompute()
-        checks.append("re-blend: poles=%d null=%s"
-                      % (len(again.Poles or []), again.Shape.isNull()))
+        from SilkMachinery import split_at_end
+        re_w = (split_at_end(list(patch_a.USplits) or list(patch_a.VSplits), 0),
+                split_at_end(list(patch_a.USplits) or list(patch_a.VSplits), 1))
+        checks.append("re-blend: poles=%d null=%s splits=%s/%s"
+                      % (len(again.Poles or []), again.Shape.isNull(),
+                         list(patch_a.USplits), list(patch_a.VSplits)))
         if not list(again.Poles or []) or again.Shape.isNull():
             errors.append("re-blending after an unblend produced nothing")
+        if re_w[0] is not None and abs(re_w[0] - 0.1) > 1e-9:
+            errors.append("re-blending after an unblend wrote band width %g, "
+                          "expected the default 0.1" % re_w[0])
     finally:
         FreeCAD.closeDocument(fixture.Name)
         FreeCAD.setActiveDocument(doc.Name)
 
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_unblend_removes_only_the_seams_own_split(doc):
+    """#71: on a patch carrying SEVERAL splits, unblending one seam removes
+    that seam's split and NOTHING else.
+
+    A patch can carry up to four splits (one per side) and meet several
+    seams, so "remove the splits" would be wrong -- it would take a
+    surviving seam's band boundary with it and leave that blend feeding
+    cells that no longer exist. The rule is per (patch, boundary side):
+    the dying blend's OWN seam is re-resolved the way run_blend resolved
+    it (pinned Edge, else auto-detect), and exactly the split that seam
+    owned is dropped.
+
+    The tube fixture is the case that makes the rule necessary: two
+    patches sharing TWO edges, so each patch carries two splits from two
+    different seams, and the auto-detect alone cannot say which seam a
+    blend took (it returns the first matching corner pair for both).
+    """
+    from SilkWorkflowOps import create_blend_by_edge
+    from SilkMachinery import patch_side
+    from Tests.test_seam_resolver import _build_tube
+
+    errors, checks = [], []
+    pa, pb, s_left, s_right = _build_tube(doc)
+
+    left = create_blend_by_edge(s_left, name="BlendLeft")
+    doc.recompute()
+    right = create_blend_by_edge(s_right, name="BlendRight")
+    doc.recompute()
+    if not (list(left.Poles or []) and list(right.Poles or [])):
+        return {"pass": False, "checks": checks,
+                "errors": ["fixture: the two-seam pair did not blend "
+                           "(left %d poles, right %d)"
+                           % (len(left.Poles or []), len(right.Poles or []))]}
+    before = {p.Name: (list(p.USplits), list(p.VSplits)) for p in (pa, pb)}
+    checks.append("blended: %s" % before)
+    for p in (pa, pb):
+        if len([v for pair in before[p.Name] for v in pair]) != 2:
+            errors.append("fixture: %s carries %r, expected one split per "
+                          "seam" % (p.Name, before[p.Name]))
+
+    # -- unblend ONE seam: its split goes, the other seam's stays --------
+    right_edge = right.Edge.Name
+    doc.removeObject(right.Name)
+    doc.recompute()
+    after = {p.Name: (list(p.USplits), list(p.VSplits)) for p in (pa, pb)}
+    checks.append("after unblending %s: %s" % (right_edge, after))
+    # the dying seam's band split is the HIGH one on both patches (the
+    # right side is the parametric-1 end of that axis), the left seam's
+    # is the LOW one -- so "the unblend took the wrong seam's split" is
+    # exactly "the wrong one of the two survived"
+    for p in (pa, pb):
+        kept = [v for pair in after[p.Name] for v in pair]
+        if len(kept) != 1:
+            errors.append("unblending one seam left %d split(s) on %s (%r), "
+                          "expected only the other seam's"
+                          % (len(kept), p.Name, after[p.Name]))
+        elif abs(kept[0] - 0.1) > 1e-9:
+            errors.append("the surviving split on %s is %g, expected the LEFT "
+                          "seam's 0.1 -- the unblend took the WRONG seam's "
+                          "split (%r)" % (p.Name, kept[0], after[p.Name]))
+        # the surviving blend is untouched and still hides its own cells
+        hidden = list(getattr(p, "_HiddenSubgridIdxs", []) or [])
+        if not hidden:
+            errors.append("%s hid no cells after the other seam's blend was "
+                          "deleted -- the surviving blend lost its band"
+                          % p.Name)
+    if not list(left.Poles or []):
+        errors.append("the surviving blend lost its poles when the other "
+                      "seam's blend was unblended")
+
+    # -- unblend the last one: no splits, no subgrids, whole surfaces -----
+    doc.removeObject(left.Name)
+    doc.recompute()
+    last = {p.Name: (list(p.USplits), list(p.VSplits)) for p in (pa, pb)}
+    checks.append("after the last unblend: %s" % last)
+    for p in (pa, pb):
+        if any(last[p.Name]):
+            errors.append("%s still carries splits %r after every blend is "
+                          "gone" % (p.Name, last[p.Name]))
+        if p.Proxy._subgrids:
+            errors.append("%s still builds %d subgrids with no splits"
+                          % (p.Name, len(p.Proxy._subgrids)))
+        if list(getattr(p, "_HiddenSubgridIdxs", []) or []):
+            errors.append("%s still hides cells with no blend alive: %r"
+                          % (p.Name, list(p._HiddenSubgridIdxs)))
+
+    # -- and the two-seam pair can be blended again, from the defaults ---
+    again_left = create_blend_by_edge(s_left, name="BlendLeft2")
+    doc.recompute()
+    again_right = create_blend_by_edge(s_right, name="BlendRight2")
+    doc.recompute()
+    checks.append("re-blended both: %d / %d poles"
+                  % (len(again_left.Poles or []), len(again_right.Poles or [])))
+    for name, blend in (("left", again_left), ("right", again_right)):
+        if not list(blend.Poles or []) or blend.Shape.isNull():
+            errors.append("re-blending the %s seam after two unblends built "
+                          "nothing" % name)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -272,6 +400,7 @@ def test_oracle_flags_interior_pole(doc):
 ALL_TESTS = [
     test_create_blend_ground_truth,
     test_unblend_restores_the_patches,
+    test_unblend_removes_only_the_seams_own_split,
     test_oracle_flags_seam_offset,
     test_oracle_flags_tangent_break,
     test_oracle_flags_interior_pole,

@@ -97,6 +97,106 @@ def _seam_from_edge(a_c, b_c, ep0, ep1, tol):
     return None
 
 
+# ---- the seam this blend took, and the band split it owns -----------------
+
+def _resolve_seam(fp, pa, pb, tol):
+    """(ea, eb, pairs) for the seam THIS blend takes, or None.
+
+    Pinned by `fp.Edge`'s endpoint poles when it has one, auto-detected
+    from the two patches' corner poles otherwise -- exactly the two
+    paths run_blend uses, extracted so the delete path can ask the same
+    question and get the same answer.
+
+    That matters because a pair sharing TWO edges (a closed ring) is
+    auto-detected as only ONE of them: SilkMachinery.patch_side returns
+    the first matching corner pair for both patches, so two blends on one
+    pair answer the same question with the same side. A band split
+    removed "by patch_side" would then be the wrong seam's.
+
+    Both paths stay robust against degenerate pointed corners: a pointed
+    patch carries its apex twice in [Poles[0], Poles[3], Poles[15],
+    Poles[12]] (Poles[0] == Poles[12]), which naive corner matching
+    double-counts (#39 criterion 6).
+    """
+    a_c = [pa.Poles[0], pa.Poles[3], pa.Poles[15], pa.Poles[12]]
+    b_c = [pb.Poles[0], pb.Poles[3], pb.Poles[15], pb.Poles[12]]
+    edge = getattr(fp, "Edge", None)
+    if edge is not None:
+        ep = list(getattr(edge, "Poles", []) or [])
+        return _seam_from_edge(a_c, b_c, ep[0], ep[3], tol) if len(ep) >= 4 \
+            else None
+    return shared_seam(a_c, b_c, tol)
+
+
+def _band_split_of(etype):
+    """(property_name, end) of the split that carves the band of
+    boundary side `etype` on its own patch: a seam along U fixes a V
+    interval, so the band lives in VSplits (and vice versa), and the
+    side's 0/1 is the end of that axis. The same two lines
+    run_blend.ensure_band_split uses to write it -- derived once here so
+    the writer and the remover can never disagree about which split is
+    which end's."""
+    return ("VSplits" if etype[0] == "U" else "USplits",
+            0 if etype[1] == "0" else 1)
+
+
+def _survivor_needs(doc, dying, p, etype):
+    """True when a blend OTHER than `dying` still needs `p`'s band split
+    for boundary side `etype` -- or when a corner blend still consumes
+    `dying`'s band (#28).
+
+    The rule is per (patch, boundary side), which is what makes removing
+    one seam's split safe on a patch that carries four: a patch's sides
+    are U0 / U1 / V0 / V1, each with its own split on its own axis and
+    its own end, so no two SEAMS can ever want the same split, and the
+    only thing that can still want it is another blend on the same side.
+    """
+    for o in doc.Objects:
+        if (o is dying
+                or getattr(o, "object_type", "") not in BLEND_TYPES
+                or getattr(getattr(o, "Proxy", None), "_dying", False)
+                or not getattr(o, "PatchA", None)
+                or not getattr(o, "PatchB", None)
+                or not (o.PatchA is p or o.PatchB is p)):
+            continue
+        seam = _resolve_seam(o, o.PatchA, o.PatchB,
+                             getattr(o, "tolerance", 0.01))
+        if seam is None:
+            continue
+        side = seam[0] if o.PatchA is p else seam[1]
+        if side == etype:
+            return True
+    try:
+        from SilkCorner import CornerBlend as _CB
+    except ImportError:
+        return False
+    for ob in doc.Objects:
+        if getattr(ob, "object_type", "") != "CornerBlend":
+            continue
+        if any(s is dying for s in list(getattr(ob, "Strips", []) or [])):
+            return True        # the corner blend still feeds off this band
+    return False
+
+
+def _drop_band_split(doc, dying, p, etype):
+    """Give back the band split this seam owns on patch `p` (#71).
+
+    #70 kept the splits so a re-blend would read the user's width back;
+    the human reversed that (an unblended patch should LOOK like a plain
+    patch), so the split goes -- one value, on one axis, at one end. The
+    width is the price: re-blending this seam rebuilds at the default.
+    """
+    if _survivor_needs(doc, dying, p, etype):
+        return False
+    prop, ss = _band_split_of(etype)
+    cur = list(getattr(p, prop) or [])
+    old = split_at_end(cur, ss)
+    if old is None:
+        return False            # the end carried no split: nothing of ours
+    setattr(p, prop, [v for v in cur if v != old])
+    return True
+
+
 # ---- the blend algorithm (single implementation, #39 decision B) --------
 
 def _linked_band_cells(fp, p):
@@ -182,28 +282,16 @@ def run_blend(fp):
             return
 
     # Steps 1+2: find the shared seam (edge type U0/U1/V0/V1 per patch +
-    # the two matched corner pairs). With an explicit Edge the seam is
-    # pinned from its endpoint poles; otherwise it is auto-detected.
-    # Both paths are robust against degenerate pointed corners: a
-    # pointed patch carries its apex twice in [Poles[0], Poles[3],
-    # Poles[15], Poles[12]] (Poles[0] == Poles[12]), which naive
-    # corner matching double-counts (#39 criterion 6).
-    a_c = [pa.Poles[0], pa.Poles[3], pa.Poles[15], pa.Poles[12]]
-    b_c = [pb.Poles[0], pb.Poles[3], pb.Poles[15], pb.Poles[12]]
-    edge = getattr(fp, "Edge", None)
-    if edge is not None:
-        ep = list(getattr(edge, "Poles", []) or [])
-        seam = _seam_from_edge(a_c, b_c, ep[0], ep[3], tol) if len(ep) >= 4 \
-            else None
-        if seam is None:
+    # the two matched corner pairs). Resolved by the shared _resolve_seam
+    # -- the Edge property pins it, otherwise it is auto-detected -- so
+    # the delete path can identify the SAME seam later (#71).
+    seam = _resolve_seam(fp, pa, pb, tol)
+    if seam is None:
+        if getattr(fp, "Edge", None) is not None:
             _refuse(fp, "edge %s is not a shared boundary of both "
-                         "patches (endpoint poles must sit on a corner "
-                         "pair of each)" % getattr(edge, "Name", "?"))
-            return
-    else:
-        seam = shared_seam(a_c, b_c, tol)
-        if seam is None:
-            return
+                        "patches (endpoint poles must sit on a corner "
+                        "pair of each)" % getattr(fp.Edge, "Name", "?"))
+        return
     ea, eb, pairs = seam
 
     # Step 3: set split direction and side
@@ -419,24 +507,35 @@ def _on_changed(fp, prop):
 
 
 def _on_delete(fp):
-    """Unblend (#70): a dying blend's band must come BACK on both patches.
+    """Unblend: a dying blend gives its band back on both patches.
 
-    The hidden-cell set is re-derived by each blend's execute from the
-    strips alive at that moment -- but a DELETED blend touches nothing,
-    and recompute() only walks touched objects, so without this both
-    patches would keep the band hole forever. The tree-delete path has
-    the same defect; this is a document hook, not a panel path, so it
-    covers every delete with or without the panel open.
+    Two things are given back, and the ORDER matters:
 
-    Each fed patch's set is re-derived from the blends that REMAIN
+      1. the band's SPLIT -- the value this seam owned on each patch
+         (#71). #70 deliberately kept it, to preserve the user's width
+         (#64); the human reversed that, because an unblended patch that
+         still renders subdivided does not LOOK unblended. So the width
+         is discarded and re-blending this seam rebuilds at the default.
+         Only the split this seam owned goes: one axis, one end, the
+         side _resolve_seam says this blend took -- never a split another
+         seam still feeds on (a patch carries up to four, one per side).
+      2. the band CELLS -- the hidden-cell set is re-derived by each
+         blend's execute from the strips alive at that moment, but a
+         DELETED blend touches nothing and recompute() only walks touched
+         objects, so without this both patches would keep the band hole
+         forever. The tree-delete path has the same defect; this is a
+         document hook, not a panel path, so it covers every delete with
+         or without the panel open.
+
+    Splits FIRST: band_cells is computed from the split lists, so the
+    surviving blends' cell indices are only right once the layout is the
+    one the patches will actually render.
+
+    Each fed patch's set is then re-derived from the blends that REMAIN
     linked (the shared _linked_band_cells derivation, which skips the
-    dying blend), the write fires Patch.onChanged's display rebuild,
-    and the patches are touched so the surviving strips re-derive
-    against them on the next recompute.
-
-    The band splits the blend wrote are the user's chosen width (#64)
-    and are deliberately LEFT ALONE: re-blending reads them back, so
-    removing them would silently discard the user's widths.
+    dying blend), the write fires Patch.onChanged's display rebuild, and
+    the patches are touched so the surviving strips re-derive against
+    them on the next recompute.
     """
     proxy = fp.Proxy
     if getattr(proxy, "_dying", False):
@@ -446,6 +545,17 @@ def _on_delete(fp):
         doc = getattr(fp, "Document", None)
         if doc is None or "Restore" in getattr(fp, "State", []):
             return False
+        pa, pb = getattr(fp, "PatchA", None), getattr(fp, "PatchB", None)
+        # (1) this seam's own split, on each patch it feeds
+        if pa is not None and pb is not None and pa is not pb:
+            seam = _resolve_seam(fp, pa, pb, getattr(fp, "tolerance", 0.01))
+            for p, etype in ((pa, seam[0]), (pb, seam[1])) if seam else ():
+                if getattr(p, "object_type", None) in PATCH_TYPES:
+                    try:
+                        _drop_band_split(doc, fp, p, etype)
+                    except Exception:
+                        pass
+        # (2) the band cells, from the blends that remain
         seen = []
         for role in ("PatchA", "PatchB"):
             p = getattr(fp, role, None)
@@ -598,30 +708,17 @@ class Blend(BlendStrip):
         self._install_delete_watcher(obj)
 
     def onDelete(self, fp):
-        """Derive the patches' hidden band cells from the remaining blends.
+        """The unblend. Delegates to the shared _on_delete -- the one
+        place that knows the whole rule (#71: the band CELLS come back
+        AND the band's SPLIT goes, so an unblended patch is a plain
+        patch again).
 
-        Called when this blend is deleted (#70). Removes the blend from
-        the patches' linked lists, re-derives each patch's hidden set from
-        the surviving blends, and clears _HiddenSubgridIdxs so both patches
-        re-render their full surface. The band splits (USplits/VSplits) are
-        deliberately left alone — they carry the user's chosen width and
-        re-blending reads them back."""
-        # find the patches linked to this blend
-        patch_a = fp.PatchA
-        patch_b = fp.PatchB
-        # re-derive each patch from the remaining blends
-        for p in (patch_a, patch_b):
-            if p is None:
-                continue
-            # clear any stale hidden cells so the full surface shows
-            if hasattr(p, "_HiddenSubgridIdxs"):
-                p._HiddenSubgridIdxs = set()
-            # touch the patch so its execute() re-builds subgrids/
-            # display without the now-deleted blend's band cells
-            try:
-                p.touch()
-            except Exception:
-                pass
+        Like BlendStrip.onDelete this is never actually called -- FreeCAD
+        1.1.3 has no DocumentObjectPy::onDelete, and the _DeleteWatcher
+        observer is the live trigger (#70). It is kept so the rule has a
+        home on the class and so a future FreeCAD that does invoke
+        onDelete gets the SAME rule rather than a second, weaker copy."""
+        return _on_delete(fp)
 
 
 class BlendStripViewProvider:
