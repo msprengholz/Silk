@@ -4,3 +4,6 @@ __pycache__/
 .agents/
 .pi/
 Resources/Test_files/_inspect/
+
+# local tooling config for the agent harness, not project content
+opencode.json
