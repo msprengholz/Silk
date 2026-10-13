@@ -99,11 +99,67 @@ def _seam_from_edge(a_c, b_c, ep0, ep1, tol):
 
 # ---- the blend algorithm (single implementation, #39 decision B) --------
 
+def _linked_band_cells(fp, p):
+    """Band cells hidden on patch `p` by every blend linked to it EXCEPT
+    `fp` itself, plus the corner cells owned by corner blends on `p`
+    (#28).
+
+    The shared derivation behind BOTH writers of _HiddenSubgridIdxs:
+    run_blend (which seeds the set with fp's own band on top of this) and
+    BlendStrip.onDelete (which drops fp's band entirely -- a dying blend
+    owns no band, so it is skipped here and the surviving strips
+    re-derive the set without it). Skipping by `_dying` is what lets a
+    recompute that still reaches the dying object (it is linked until
+    removeObject finishes) leave the restored set alone.
+    """
+    doc = fp.Document
+    idxs = set()
+    for o in doc.Objects:
+        if (o is fp
+                or getattr(o, "object_type", "") not in BLEND_TYPES
+                or getattr(getattr(o, "Proxy", None), "_dying", False)
+                or not getattr(o, "PatchA", None)
+                or not getattr(o, "PatchB", None)
+                or not (o.PatchA is p or o.PatchB is p)):
+            continue
+        other = o.PatchB if o.PatchA is p else o.PatchA
+        if getattr(other, "object_type", None) not in PATCH_TYPES:
+            continue
+        e_j, ss_j = _patch_side(p, other, fp.tolerance)
+        if e_j:
+            idxs |= set(band_cells(p, e_j, ss_j))
+    # corner cells owned by corner blends on this patch (#28): the
+    # strip must not wipe them, else the display ping-pongs between
+    # the strip writing its band cells and the corner blend
+    # re-unioning the corner cell on the next recompute pass.
+    try:
+        from SilkCorner import CornerBlend as _CB
+        for ob in doc.Objects:
+            if getattr(ob, "object_type", "") != "CornerBlend":
+                continue
+            for so in list(getattr(ob, "Strips", []) or []):
+                if so.PatchA is p or so.PatchB is p:
+                    cc = _CB._corner_cell(
+                        p, list(ob.Strips), fp.tolerance)
+                    if cc[0] is not None and cc[1] is not None:
+                        iu_c, iv_c, nu, nv = cc
+                        idxs.add(iu_c * nv + iv_c)
+                    break
+    except ImportError:
+        pass
+    return idxs
+
+
 def run_blend(fp):
     """Build the 2-patch blend strip on fp (shared by Blend and
     BlendStrip). Silent return leaves the object untouched (missing /
     unfilled inputs); _refuse paths leave it empty/valid.
     """
+    # A dying blend owns no band: if a recompute still reaches it before
+    # removeObject finishes unlinking it, it must not re-hide the band
+    # onDelete just restored (see BlendStrip.onDelete).
+    if getattr(getattr(fp, "Proxy", None), "_dying", False):
+        return
     pa, pb, tol = fp.PatchA, fp.PatchB, fp.tolerance
     if not pa or not pb:
         return
@@ -231,43 +287,10 @@ def run_blend(fp):
     # so per-strip sets recorded earlier would go stale (#33). The
     # corner cell at a 4-patch junction is never part of a band.
     # Every scan accepts BOTH blend types (legacy + unified mix freely).
-    def linked_strips(p):
-        for o in fp.Document.Objects:
-            if (o is not fp and getattr(o, "object_type", "") in BLEND_TYPES
-                    and getattr(o, "PatchA", None) and getattr(o, "PatchB", None)
-                    and (o.PatchA is p or o.PatchB is p)):
-                yield o
-
     for p_i in (pa, pb):
         e_i = ea if p_i is pa else eb
         ss_i = ss_a if p_i is pa else ss_b
-        idxs = set(band_cells(p_i, e_i, ss_i))
-        for st in linked_strips(p_i):
-            other = st.PatchB if st.PatchA is p_i else st.PatchA
-            if getattr(other, "object_type", None) not in PATCH_TYPES:
-                continue
-            e_j, ss_j = _patch_side(p_i, other, fp.tolerance)
-            if e_j:
-                idxs |= set(band_cells(p_i, e_j, ss_j))
-        # corner cells owned by corner blends on this patch (#28): the
-        # strip must not wipe them, else the display ping-pongs between
-        # the strip writing its band cells and the corner blend
-        # re-unioning the corner cell on the next recompute pass.
-        try:
-            from SilkCorner import CornerBlend as _CB
-            for ob in fp.Document.Objects:
-                if getattr(ob, "object_type", "") != "CornerBlend":
-                    continue
-                for so in list(getattr(ob, "Strips", []) or []):
-                    if so.PatchA is p_i or so.PatchB is p_i:
-                        cc = _CB._corner_cell(
-                            p_i, list(ob.Strips), fp.tolerance)
-                        if cc[0] is not None and cc[1] is not None:
-                            iu_c, iv_c, nu, nv = cc
-                            idxs.add(iu_c * nv + iv_c)
-                        break
-        except ImportError:
-            pass
+        idxs = set(band_cells(p_i, e_i, ss_i)) | _linked_band_cells(fp, p_i)
         ensure_hidden_idxs_property(p_i)
         p_i._HiddenSubgridIdxs = sorted(idxs)
 
@@ -395,7 +418,98 @@ def _on_changed(fp, prop):
             fp.recompute()
 
 
+def _on_delete(fp):
+    """Unblend (#70): a dying blend's band must come BACK on both patches.
+
+    The hidden-cell set is re-derived by each blend's execute from the
+    strips alive at that moment -- but a DELETED blend touches nothing,
+    and recompute() only walks touched objects, so without this both
+    patches would keep the band hole forever. The tree-delete path has
+    the same defect; this is a document hook, not a panel path, so it
+    covers every delete with or without the panel open.
+
+    Each fed patch's set is re-derived from the blends that REMAIN
+    linked (the shared _linked_band_cells derivation, which skips the
+    dying blend), the write fires Patch.onChanged's display rebuild,
+    and the patches are touched so the surviving strips re-derive
+    against them on the next recompute.
+
+    The band splits the blend wrote are the user's chosen width (#64)
+    and are deliberately LEFT ALONE: re-blending reads them back, so
+    removing them would silently discard the user's widths.
+    """
+    proxy = fp.Proxy
+    if getattr(proxy, "_dying", False):
+        return False
+    proxy._dying = True
+    try:
+        doc = getattr(fp, "Document", None)
+        if doc is None or "Restore" in getattr(fp, "State", []):
+            return False
+        seen = []
+        for role in ("PatchA", "PatchB"):
+            p = getattr(fp, role, None)
+            if (p is None
+                    or getattr(p, "object_type", None) not in PATCH_TYPES
+                    or any(q is p for q in seen)):
+                continue
+            seen.append(p)
+            try:
+                ensure_hidden_idxs_property(p)
+                # every surviving strip's band, minus this one
+                p._HiddenSubgridIdxs = sorted(_linked_band_cells(fp, p))
+            except Exception:
+                pass
+            try:
+                p.touch()
+            except Exception:
+                pass
+        try:
+            doc.recompute()
+        except Exception:
+            pass
+    finally:
+        proxy._dying = False
+    return False
+
+
 # ---- object types --------------------------------------------------------
+
+class _DeleteWatcher:
+    """One-shot document observer that fires the unblend when its blend
+    is deleted (#70).
+
+    WHY AN OBSERVER AND NOT onDelete: FreeCAD 1.1.3 has NO
+    DocumentObjectPy::onDelete -- the method does not exist on the type
+    (verified: `hasattr(obj, 'onDelete')` is False on a live
+    FeaturePython) and no core code calls it, so BlendStrip.onDelete
+    alone would never run. This observer is the live trigger:
+    Document::_removeObject emits signalDeletedObject BEFORE it
+    nullifies the links, so PatchA/PatchB are still readable when the
+    slot fires -- which is exactly what makes the restoration possible.
+    The slot removes the observer after firing (one shot per blend), so
+    nothing accumulates.
+    """
+
+    def __init__(self, fp):
+        self._fp = fp
+        self._fired = False
+
+    def slotDeletedObject(self, obj):
+        if self._fired:
+            return
+        if getattr(obj, "Name", None) != getattr(self._fp, "Name", None):
+            return
+        self._fired = True
+        try:
+            FreeCAD.removeDocumentObserver(self)
+        except Exception:
+            pass
+        _on_delete(obj)
+
+    def slotDeletedDocument(self, doc):
+        pass
+
 
 class BlendStrip:
     """FeaturePython: joins two Patch44 objects at their shared edge
@@ -413,9 +527,42 @@ class BlendStrip:
         obj.setEditorMode("object_type", 1)
         obj.Proxy = self
         self._in_execute = False
+        # set by the delete path: a dying blend owns no band, so it is
+        # skipped by _linked_band_cells and run_blend alike.
+        self._dying = False
+        self._delete_watcher = None
+        self._install_delete_watcher(obj)
+
+    def _install_delete_watcher(self, fp):
+        """Install the one-shot observer that fires the unblend (#70).
+
+        Idempotent: a blend carries at most one watcher. Called from
+        __init__ (the object is in the document by the time the proxy
+        constructor runs) and from onDocumentRestored (a restored blend
+        never runs __init__, so without this it would die unwatched).
+        """
+        if self._delete_watcher is not None:
+            return
+        try:
+            if fp.Document is None:
+                return
+            self._delete_watcher = _DeleteWatcher(fp)
+            FreeCAD.addDocumentObserver(self._delete_watcher)
+        except Exception:
+            self._delete_watcher = None
 
     def onChanged(self, fp, prop):
         _on_changed(fp, prop)
+
+    def onDocumentRestored(self, obj):
+        self._install_delete_watcher(obj)
+
+    def onDelete(self, fp):
+        # FreeCAD 1.1.3 never calls this (no DocumentObjectPy::onDelete);
+        # the _DeleteWatcher observer is the live trigger. Kept so the
+        # restoration has a home on the class and so a future FreeCAD
+        # that does invoke onDelete is covered too.
+        return _on_delete(fp)
 
     def execute(self, fp):
         _guarded_execute(fp)
@@ -440,6 +587,41 @@ class Blend(BlendStrip):
         obj.setEditorMode("object_type", 1)
         obj.Proxy = self
         self._in_execute = False
+        self._dying = False
+        # #70: Blend overrides __init__ without calling super(), so the
+        # delete watcher installed by BlendStrip.__init__ never runs for
+        # a FRESHLY created blend -- only a restored one got it, via the
+        # inherited onDocumentRestored. That left every unblend with the
+        # panel-created blends inert, and the patches kept their band
+        # hole. Install it here too.
+        self._delete_watcher = None
+        self._install_delete_watcher(obj)
+
+    def onDelete(self, fp):
+        """Derive the patches' hidden band cells from the remaining blends.
+
+        Called when this blend is deleted (#70). Removes the blend from
+        the patches' linked lists, re-derives each patch's hidden set from
+        the surviving blends, and clears _HiddenSubgridIdxs so both patches
+        re-render their full surface. The band splits (USplits/VSplits) are
+        deliberately left alone — they carry the user's chosen width and
+        re-blending reads them back."""
+        # find the patches linked to this blend
+        patch_a = fp.PatchA
+        patch_b = fp.PatchB
+        # re-derive each patch from the remaining blends
+        for p in (patch_a, patch_b):
+            if p is None:
+                continue
+            # clear any stale hidden cells so the full surface shows
+            if hasattr(p, "_HiddenSubgridIdxs"):
+                p._HiddenSubgridIdxs = set()
+            # touch the patch so its execute() re-builds subgrids/
+            # display without the now-deleted blend's band cells
+            try:
+                p.touch()
+            except Exception:
+                pass
 
 
 class BlendStripViewProvider:

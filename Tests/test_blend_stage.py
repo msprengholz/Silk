@@ -107,6 +107,86 @@ def test_create_blend_ground_truth(doc):
                        for n, ok, d in results]}
 
 
+def test_unblend_restores_the_patches(doc):
+    """#70: deleting a FRESHLY created Blend must give both patches their
+    band cells back.
+
+    The hidden-cell set is re-derived by each blend's execute from the
+    blends alive at that moment, but a deleted blend touches nothing and
+    recompute() only walks touched objects -- so without a delete hook
+    both patches keep the band hole forever.
+
+    **This test exists because the fix shipped green while broken.**
+    `Blend` subclasses `BlendStrip` but overrode `__init__` without
+    calling super(), so only `BlendStrip.__init__` installed the
+    one-shot delete observer. A freshly created blend therefore had NO
+    observer and unblend did nothing; a *restored* one did get it via
+    the inherited `onDocumentRestored`. Building the blend fresh -- the
+    ordinary path, and the one the panel uses -- is precisely what
+    exercises the regression.
+    """
+    from SilkWorkflowOps import create_blend
+    from Tests.test_patch_stage import _copy_fixture_edge  # noqa: F401
+
+    fixture = FreeCAD.openDocument(FIXTURE)
+    FreeCAD.setActiveDocument(doc.Name)
+    errors, checks = [], []
+    try:
+        patch_a, patch_b, _ = _build_gt_chain(doc, fixture)
+        blend = create_blend(patch_a, patch_b, name="BlendStrip")
+        doc.recompute()
+
+        def hidden(p):
+            return list(getattr(p, "_HiddenSubgridIdxs", []) or [])
+
+        before_faces = (len(patch_a.Shape.Faces), len(patch_b.Shape.Faces))
+        checks.append("blended: hidden=%s faces=%d"
+                      % ([hidden(patch_a), hidden(patch_b)], sum(before_faces)))
+        if not hidden(patch_a) or not hidden(patch_b):
+            errors.append("precondition: a blended patch should have its "
+                          "band cells hidden; got %s"
+                          % ([hidden(patch_a), hidden(patch_b)],))
+        if blend.Proxy._delete_watcher is None:
+            errors.append("a FRESHLY created Blend has no delete watcher "
+                          "-- unblend cannot work at all")
+
+        doc.removeObject(blend.Name)
+        doc.recompute()
+
+        after_faces = (len(patch_a.Shape.Faces), len(patch_b.Shape.Faces))
+        checks.append("unblended: hidden=%s faces=%d"
+                      % ([hidden(patch_a), hidden(patch_b)], sum(after_faces)))
+        if hidden(patch_a) or hidden(patch_b):
+            errors.append("after deleting the blend the patches still hide "
+                          "their band cells: %s -- a hole is left behind"
+                          % ([hidden(patch_a), hidden(patch_b)],))
+        if sum(after_faces) <= sum(before_faces):
+            errors.append("the band cell did not come back: faces %d -> %d"
+                          % (sum(before_faces), sum(after_faces)))
+
+        # the user's width must survive the unblend (it is the patch's own
+        # split, #64) -- only the *cells* are given back
+        splits_a = (list(patch_a.USplits), list(patch_a.VSplits))
+        splits_b = (list(patch_b.USplits), list(patch_b.VSplits))
+        checks.append("splits survive: %s %s" % (splits_a, splits_b))
+        if not (splits_a[0] or splits_a[1] or splits_b[0] or splits_b[1]):
+            errors.append("unblend discarded the band splits -- the user's "
+                          "chosen width would be lost")
+
+        # and re-blending on the same seam must still build
+        again = create_blend(patch_a, patch_b, name="BlendAgain")
+        doc.recompute()
+        checks.append("re-blend: poles=%d null=%s"
+                      % (len(again.Poles or []), again.Shape.isNull()))
+        if not list(again.Poles or []) or again.Shape.isNull():
+            errors.append("re-blending after an unblend produced nothing")
+    finally:
+        FreeCAD.closeDocument(fixture.Name)
+        FreeCAD.setActiveDocument(doc.Name)
+
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 def _blend_corrupted(doc, fixture, pole_idx, delta):
     """Build the GT blend, then corrupt one stored pole by `delta`."""
     from SilkWorkflowOps import create_blend
@@ -191,6 +271,7 @@ def test_oracle_flags_interior_pole(doc):
 
 ALL_TESTS = [
     test_create_blend_ground_truth,
+    test_unblend_restores_the_patches,
     test_oracle_flags_seam_offset,
     test_oracle_flags_tangent_break,
     test_oracle_flags_interior_pole,

@@ -1043,7 +1043,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         return self._live_foreground
 
     def _mount_blended_flag(self, row, entry):
-        """The row's status as a checkbox (#69).
+        """The row's status as a checkbox (#69) -- and the checkbox IS the
+        click (#70).
 
         Ticked = blended, the one state worth a glance at a glance.
         Unticked and LIVE = blendable, the ordinary not-yet case.
@@ -1058,10 +1059,20 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         which IS words, and which used to be the status text -- moves to
         the tooltip, where it costs no column width at all.
 
-        A readout, not an input: it takes no focus (confirm is an
-        Application-scoped shortcut and must never have a tick box to
-        fight) and does not toggle on click. Clicking the ROW is how a
-        seam is collected, and that is unchanged."""
+        #70: a LIVE tick is now an INPUT, not a readout. Unticking a
+        blended seam UNBLENDS it (deletes the Blend, one undo step);
+        ticking a blendable seam blends it. The outcomes are reported in
+        the status line, naming the seam -- a checkbox carries no text,
+        so the words have to come from the panel. A BLOCKED row's tick
+        stays disabled and therefore inert BOTH ways: not tappable (a
+        disabled widget ignores the mouse) and not untickable (it is
+        already unchecked). A greyed tick that still responds is worse
+        than no tick.
+
+        It still takes no focus (confirm is an Application-scoped
+        shortcut and must never have a tick box to fight), and clicking
+        the ROW still collects/removes the seam for the multi-seam
+        confirm -- the flag drives THIS seam at once."""
         status = entry["status"]
         flag = QtWidgets.QCheckBox()
         flag.setFocusPolicy(QtCore.Qt.NoFocus)
@@ -1069,10 +1080,112 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         flag.setChecked(status == "blended")
         if status == "blocked":
             # Greyed, the way any disabled control renders -- so the row
-            # reads as inert with no new vocabulary to learn.
+            # reads as inert with no new vocabulary to learn. A disabled
+            # checkbox emits no click, so blocked is inert both ways.
             flag.setEnabled(False)
+        else:
+            # The checkbox IS the click (#70): untick unblends, tick
+            # blends. Clicking the ROW still collects the seam for the
+            # multi-seam confirm; the flag drives THIS seam at once.
+            flag.clicked.connect(
+                lambda checked, e=entry, f=flag:
+                self._on_flag_toggled(e, f, checked))
         self.blend_table.setCellWidget(row, self.COL_BLENDED, flag)
         self._flag_widgets[entry["edge"].Name] = flag
+
+    def _on_flag_toggled(self, entry, flag, checked):
+        """One tick/untick on a seam's flag (#70).
+
+        Unticking a blended seam unblends it (deletes the Blend, one
+        undo step); ticking a blendable seam blends it. A blocked row
+        never reaches here -- its flag is disabled and emits no click.
+
+        The guard is the render-time no-op: a setChecked from a refresh
+        must not be mistaken for a user action, so a check state that
+        ALREADY matches the row's status is ignored. The status is
+        re-read from a FRESH seam_inventory (the row can have changed
+        behind the panel's back), and every outcome -- success or
+        refusal -- is reported in the status line NAMING the seam,
+        because a checkbox carries no text and the user is left guessing
+        otherwise. A refusal puts the tick back."""
+        edge = entry["edge"]
+        cur = next((e for e in self.seam_inventory()
+                    if e["edge"] is edge), None)
+        if cur is None:
+            flag.setChecked(False)
+            self._refuse("Silk: cannot act on %s -- it is no longer a seam. "
+                         "Nothing was changed." % edge.Name)
+            return False
+        status = cur["status"]
+        if checked == (status == "blended"):
+            return False      # a render-time set, not a user action
+        if checked:
+            return self._blend_seam_now(cur, flag)
+        return self._unblend_seam_now(cur, flag)
+
+    def _blend_seam_now(self, entry, flag):
+        """Tick: blend this one seam now, as its own transaction (one undo
+        step) -- the same path the confirm uses, driven by the flag."""
+        edge = entry["edge"]
+        doc = self.doc
+        before = {o.Name for o in doc.Objects}
+        doc.openTransaction("Silk blend")
+        try:
+            with _ConsoleTap() as tap:
+                blend = create_blend_by_edge(edge)
+        finally:
+            doc.commitTransaction()
+        self.refresh()
+        if blend is None:
+            why = tap.errors[-1].strip() if tap.errors \
+                else "no blend was created"
+            flag.setChecked(False)
+            self._refuse("Silk: cannot blend %s -- %s. Nothing was changed."
+                         % (edge.Name, why))
+            return False
+        if blend.Name in before:
+            # Idempotent no-op: a blend already covered this seam behind
+            # the panel's back; the refresh shows it ticked.
+            self.status_lbl.setText(
+                "%s is already blended by %s -- nothing to do"
+                % (edge.Name, blend.Name))
+            return False
+        self.status_lbl.setText("%s created across %s" % (blend.Name, edge.Name))
+        FreeCAD.Console.PrintMessage(
+            "%s created across %s\n" % (blend.Name, edge.Name))
+        return True
+
+    def _unblend_seam_now(self, entry, flag):
+        """Untick: delete the Blend on this seam, as its own transaction
+        (one undo step).
+
+        The band splits the blend wrote SURVIVE the unblend (#70): they
+        are the user's chosen width (#64) and re-blending reads them
+        back, so deleting them would silently discard the user's widths."""
+        edge = entry["edge"]
+        blend = entry["blend"]
+        doc = self.doc
+        if blend is None or doc.getObject(blend.Name) is None:
+            # The blend is already gone behind the panel's back; the
+            # guard's fresh status said blended, so this is a race -- say
+            # so rather than leaving the tick pulled.
+            flag.setChecked(True)
+            self._refuse("Silk: cannot unblend %s -- its blend %s is no "
+                         "longer in the document. Nothing was changed."
+                         % (edge.Name, getattr(blend, "Name", "?")))
+            return False
+        blend_name = blend.Name
+        doc.openTransaction("Silk unblend")
+        try:
+            doc.removeObject(blend_name)
+        finally:
+            doc.commitTransaction()
+        self.refresh()
+        self.status_lbl.setText(
+            "unblended %s (%s deleted)" % (edge.Name, blend_name))
+        FreeCAD.Console.PrintMessage(
+            "unblended %s (%s deleted)\n" % (edge.Name, blend_name))
+        return True
 
     def _fit_table(self, n_rows):
         """Cap the seam table at TABLE_MAX_ROWS rows; it scrolls beyond."""
@@ -1151,9 +1264,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         return (
             "Band width on %s.%s (this seam's %s end).\n"
             "The blend reads this split, so this is the width the band is "
-            "cut at on that patch."
+            "cut at on that patch.\n"
+            "The number shown is the WIDTH from the seam; %s stores the "
+            "parametric split (%g at this end), which is what the "
+            "property editor shows -- the two never disagree about what "
+            "is stored."
             % (patch.Name, prop, "parametric-0" if ss == 0
-               else "parametric-1")
+               else "parametric-1", prop,
+               _stored_from_width(value, ss))
             + ("\n%s.%s currently holds %g -- the two patches' bands "
                "differ, which is allowed." % (o_patch.Name, o_prop, o_value)
                if not same else
@@ -1535,15 +1653,16 @@ def status_reason(entry):
     if status == "blended":
         made = ("%s" % entry["blend"].Name if entry["blend"] is not None
                 else "another blend")
-        return ("Blended by %s.\nThis seam is done: clicking the row does "
-                "nothing. Its band editors still work -- a width set here "
-                "re-drives that blend." % made)
+        return ("Blended by %s.\nUntick to unblend it (deletes %s, one "
+                "undo step). Its band editors still work -- a width set "
+                "here re-drives that blend." % (made, made))
     if status == "blocked":
         return ("Blocked: three or more patches reference this edge, so it "
                 "is not a seam you can blend (it needs the deferred corner "
-                "fill). Clicking the row does nothing.")
-    return ("Not blended yet -- blendable.\nClick the row to collect this "
-            "seam, then Enter or OK to blend it.")
+                "fill). The greyed tick is inert -- it neither ticks nor "
+                "unticks.")
+    return ("Not blended yet -- blendable.\nTick to blend it now, or click "
+            "the row to collect it and blend several seams in one step.")
 
 
 # ---- band split: read / write / validate ----------------------------------
@@ -1566,6 +1685,25 @@ def _side_of(p, other):
     return ("VSplits" if etype[0] == "U" else "USplits"), ss
 
 
+def _width_from_stored(value, ss):
+    """The band WIDTH as the user reads it: the distance from the seam.
+
+    The stored split is a PARAMETRIC position -- 0.1 at the parametric-0
+    end, 0.9 at the parametric-1 end -- so the 1-end reads upside down
+    (a stored 0.9 is a band 0.1 wide). The panel shows the width; the
+    property keeps the parametric split (#70). Module level because the
+    read / write / validate helpers all convert through it."""
+    return value if ss == 0 else 1.0 - value
+
+
+def _stored_from_width(width, ss):
+    """The parametric split a band WIDTH of `width` means at end `ss`:
+    `width` at the 0-end, 1 - width at the 1-end. The exact inverse of
+    _width_from_stored, so display -> typed -> stored -> display is a
+    round-trip at both ends."""
+    return width if ss == 0 else 1.0 - width
+
+
 def read_band_split(entry):
     """BOTH patches' band splits for one seam, as
     (pa_prop, pa_ss, pa_value, pb_prop, pb_ss, pb_value): which split
@@ -1573,6 +1711,11 @@ def read_band_split(entry):
     the value is now. A value the patch does not carry yet reads as the
     DEFAULT the blend would write (#64 leaves the patch's own split alone
     when there is one). Returns None when the pair shares no edge.
+
+    The values are WIDTHS (distance from the seam, #70), not the raw
+    parametric splits: a stored 0.9 at the parametric-1 end reads as the
+    0.1-wide band it actually is. The stored USplits/VSplits keep their
+    parametric meaning -- only the panel's display converts.
 
     Both were always here -- what #69 changes is not the read but what is
     DONE with it: the two halves were being collapsed into one spin box
@@ -1586,7 +1729,8 @@ def read_band_split(entry):
 
     def value(p, prop, ss):
         v = split_at_end(list(getattr(p, prop) or []), ss)
-        return DEFAULT_BAND[ss] if v is None else float(v)
+        v = DEFAULT_BAND[ss] if v is None else float(v)
+        return _width_from_stored(v, ss)
     return (pa_prop, pa_ss, value(pa, pa_prop, pa_ss),
             pb_prop, pb_ss, value(pb, pb_prop, pb_ss))
 
@@ -1638,7 +1782,9 @@ def write_band_split(entry, which, value):
     cur = list(getattr(p, prop) or [])
     old = split_at_end(cur, ss)
     new = [v for v in cur if old is None or v != old]
-    new = sorted(set(new + [float(value)]))
+    # `value` is the width the user typed; the property stores the
+    # parametric split at this end (#70).
+    new = sorted(set(new + [_stored_from_width(float(value), ss)]))
     doc = entry["edge"].Document
     doc.openTransaction("Silk band split")
     try:
@@ -1697,7 +1843,9 @@ def band_cell_problem(entry, which, value=None):
     old = split_at_end(cur, ss)
     band = [v for v in cur if old is None or v != old]
     if value is not None:
-        band = sorted(set(band + [float(value)]))
+        # `value` is a width; the layout is judged in parametric terms
+        # (#70).
+        band = sorted(set(band + [_stored_from_width(float(value), ss)]))
     along = list(getattr(p, along_prop) or [])
     n = _band_cell_count(along, band, etype, ss)
     if n != 1:
