@@ -379,6 +379,57 @@ class _DocumentHook:
         self.panel.on_document_activated(doc)
 
 
+class _BandEditorFilter(QtCore.QObject if QtCore else object):
+    """Enter typed in ONE band editor means "commit that editor, then
+    confirm" (#71).
+
+    The human asked whether this conflicts with the 3D-view Enter, and it
+    does not: the application shortcut confirms the COLLECTION, while a
+    band editor's Enter commits its own VALUE. Two different subjects, so
+    both can happen -- but exactly once each, and in that order.
+
+    Two events, two jobs:
+
+      * KeyPress Return/Enter -> the panel commits THIS editor and then
+        confirms, and the event is CONSUMED. Consumed, because a
+        QDoubleSpinBox's own Enter handling emits a second
+        editingFinished, and because confirming rebuilds every row -- a
+        commit arriving after that would be writing to a detached widget.
+
+      * ShortcutOverride for the same key -> ACCEPTED. That is what stops
+        the ApplicationShortcut confirm from ALSO firing on one
+        keystroke: Qt skips shortcut processing when the override is
+        accepted. Without it, one Enter would confirm twice and try to
+        blend the same collected seams twice. Nothing else is
+        intercepted, so Enter everywhere else in FreeCAD -- including the
+        3D view -- still reaches the confirm shortcut untouched.
+    """
+
+    def __init__(self, panel, entry, which, spin):
+        try:
+            super().__init__(spin)
+        except TypeError:      # Qt-less console build
+            pass
+        self.panel = panel
+        self.entry = entry
+        self.which = which
+        self.spin = spin
+
+    @staticmethod
+    def _is_enter(event):
+        return event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter)
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind == QtCore.QEvent.ShortcutOverride and self._is_enter(event):
+            event.accept()          # no second confirm on one keystroke
+            return True
+        if kind == QtCore.QEvent.KeyPress and self._is_enter(event):
+            self.panel.band_editor_enter(self.entry, self.which, self.spin)
+            return True
+        return False
+
+
 # ---- one collected entry ----------------------------------------------------
 
 class _Collected:
@@ -466,6 +517,15 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self._split_widgets = {}
         # seam edge Name -> QCheckBox for the row's blended flag.
         self._flag_widgets = {}
+        # seam edge Name -> {BAND_A: entry, BAND_B: entry}: which seam
+        # each mounted editor belongs to (#71). _split_widgets says what
+        # is on screen; this says what it is FOR, which is what lets a
+        # refresh tell a held edit from a written one.
+        self._split_meta = {}
+        # the event filters installed on those editors, kept alive here:
+        # a Qt parent owns the filter, but holding it costs nothing and
+        # makes 'the filters are cleared with the rows' obvious.
+        self._split_filters = []
         # the row brush for a row that is NOT blocked; see _live_brush
         self._live_foreground = None
 
@@ -768,6 +828,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self._collected = {SECTION_EDGE: [], SECTION_PATCH: [],
                            SECTION_BLEND: []}
         self._split_widgets = {}
+        self._split_meta = {}
+        self._split_filters = []
         self._flag_widgets = {}
         try:
             self.doc = None
@@ -922,6 +984,11 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
     def refresh(self):
         """Re-derive EVERYTHING from the document. The one refresh path:
         nothing here reads a stored stage."""
+        # #71: a refresh re-mounts every row, so an editor still holding
+        # an unwritten width is about to be detached. Commit it first, or
+        # the value the user typed is lost without a word -- which is what
+        # made it look like the edit "worked on the second try".
+        self._commit_in_flight_edits()
         if self.doc is None or self.doc.Name not in FreeCAD.listDocuments():
             return
         state = compute_guide_state(self.doc)
@@ -984,6 +1051,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         # Drop every mounted editor first; the rows below re-mount the
         # ones that are still needed.
         self._split_widgets = {}
+        self._split_meta = {}
+        self._split_filters = []
         self._flag_widgets = {}
         for row, entry in enumerate(seams):
             texts = (entry["edge"].Name,
@@ -1275,6 +1344,20 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             self.blend_table.setCellWidget(row, col[which], spin)
             spins[which] = spin
         self._split_widgets[entry["edge"].Name] = spins
+        # #71: remember which seam each mounted editor belongs to, so a
+        # refresh can tell an edit that is merely HELD from one that is
+        # already written. The registry is keyed by edge name exactly like
+        # _split_widgets, and both are cleared together on re-render.
+        meta = self._split_meta.setdefault(entry["edge"].Name, {})
+        for which2 in (BAND_A, BAND_B):
+            spin2 = spins.get(which2)
+            if spin2 is None:
+                continue
+            meta[which2] = entry
+            # Enter in an editor commits it and then confirms (#71).
+            filt = _BandEditorFilter(self, entry, which2, spin2)
+            self._split_filters.append(filt)   # keep it alive
+            spin2.installEventFilter(filt)
 
     @staticmethod
     def _band_tooltip(entry, which, read):
@@ -1454,7 +1537,13 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
     # ---- confirm ---------------------------------------------------------
 
     def panel_confirm(self):
-        """The ONE confirm path, whatever fired it (Enter or OK)."""
+        """The ONE confirm path, whatever fired it (Enter, the band
+        editors' Enter, or the native OK button)."""
+        # #71: an Enter typed into a band editor reaches here through
+        # band_editor_enter, which has ALREADY committed that editor. Any
+        # OTHER editor still holding an unwritten width is committed here,
+        # before the confirm rebuilds the rows and detaches it.
+        self._commit_in_flight_edits()
         if not self.can_confirm():
             return False
         section = self.open_section()
@@ -1653,6 +1742,102 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         every seam row, blocked ones included (that is where the grey
         lives)."""
         return self._flag_widgets.get(edge.Name)
+
+    # ---- Enter, and edits in flight (#71) -------------------------------
+
+    def _commit_spin(self, spin, entry, which):
+        """Turn the editor's typed text into its value and write it ONCE.
+
+        `interpretText()` is what a QDoubleSpinBox does on Enter -- and it
+        emits `editingFinished` when the value moved, which is the
+        ordinary commit path. It is muted here so the commit goes through
+        `_on_split_edited` exactly once: two commits would be two
+        transactions and two undo steps for one keystroke. Clicking away
+        from the editor still takes the ordinary path -- same writer, one
+        call.
+        """
+        blocked = spin.blockSignals(True)
+        try:
+            spin.interpretText()
+        finally:
+            spin.blockSignals(blocked)
+        return self._on_split_edited(entry, which, spin)
+
+    def band_editor_enter(self, entry, which, spin):
+        """Enter in a band editor: COMMIT this editor's value, THEN
+        confirm the open section.
+
+        The order is the whole subtlety and it is not cosmetic. Confirming
+        ends in `refresh()`, which tears down every row and re-mounts its
+        editors; a commit arriving after that would be writing to a
+        DETACHED widget, and the #69 guard would rightly drop it -- so the
+        number just typed would silently never be written. Commit first,
+        confirm second, and the value is on the patch before the blend is
+        built.
+
+        A REFUSED commit does not confirm. The refusal says why (the width
+        would not leave one band cell on its own patch) and puts the editor
+        back; confirming on top would blend the OLD width while the user
+        is looking at a refused edit, which is the surprise the refusals
+        exist to prevent.
+        """
+        if self.split_editor(entry["edge"], which) is not spin:
+            return False      # detached by a refresh; the live editor stands
+        if not self._commit_spin(spin, entry, which):
+            return False
+        return self.panel_confirm()
+
+    def _editor_is_pending(self, entry, which, spin):
+        """True when this editor holds a value its patch does NOT store.
+
+        That is the honest reading of "an edit is in flight", and it is
+        deliberately NOT a reading of the line edit's TEXT: a
+        QDoubleSpinBox parses as you type, so a valid width is already in
+        `value()` while the SPLIT is still unwritten -- and it is the
+        split the blend is built from. So the test is panel-versus-patch:
+        an editor disagreeing with its own patch is an edit nobody has
+        written yet.
+        """
+        read = read_band_split(entry)
+        if read is None:
+            return False
+        stored = band_side(entry, which, read)[3]
+        if stored is None:
+            return True
+        return abs(float(spin.value()) - float(stored)) > 1e-12
+
+    def _commit_in_flight_edits(self):
+        """Commit every band edit that is typed but not yet committed.
+
+        A refresh rebuilds every row, so an editor holding an unsaved
+        value is about to be detached -- and a detached editor's later
+        editingFinished hits the #69 guard, which correctly declines to act
+        on it. That is how a typed width used to vanish without a message,
+        and why the human saw it work "on the second try": by then the
+        text was gone too and the editor held the stored value.
+
+        Called from `refresh()` (before the rows are dropped) and from
+        `panel_confirm()` (before anything is applied), so an in-progress
+        edit is either committed or refused in its own words, never
+        silently dropped. Each commit is its own transaction, so an
+        unrelated refresh never merges somebody's width into its own undo
+        step; and an editor that was merely refused has already been put
+        back to the stored value, so it is not pending a second time.
+        """
+        committed = False
+        for name, spins in list(self._split_widgets.items()):
+            meta = self._split_meta.get(name) or {}
+            for which, spin in list(spins.items()):
+                entry = meta.get(which)
+                if entry is None:
+                    continue
+                try:
+                    pending = self._editor_is_pending(entry, which, spin)
+                except RuntimeError:
+                    continue        # the widget is already gone
+                if pending and self._commit_spin(spin, entry, which):
+                    committed = True
+        return committed
 
     def split_editor(self, edge, which=BAND_A):
         """The mounted QDoubleSpinBox for ONE patch of a seam row's band,

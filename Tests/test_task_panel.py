@@ -2752,6 +2752,255 @@ def test_no_production_module_knows_the_panel(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+
+# ---- Enter in a band editor, and edits in flight (#71) ----
+def _enter_key(widget, kind=None):
+    """Deliver a REAL Return/Enter key event to `widget`, the way the
+    platform delivers it to the focus widget: an event filter installed
+    on the widget sees it before the widget's own keyPressEvent, which is
+    exactly the path #71's band-editor handling hooks.
+
+    (The APPLICATION shortcut map cannot be exercised this way -- Qt only
+    consults it on the platform key path -- so what is asserted here is
+    the filter's own work: the commit, the confirm, and the
+    ShortcutOverride that keeps the application shortcut from firing a
+    second confirm on the same keystroke.)
+    """
+    from PySide import QtCore, QtGui, QtWidgets
+    kind = kind or QtCore.QEvent.KeyPress
+    event = QtGui.QKeyEvent(kind, QtCore.Qt.Key_Return,
+                            QtCore.Qt.NoModifier)
+    QtWidgets.QApplication.sendEvent(widget, event)
+    return event
+
+
+
+def _type_width(spin, value):
+    """Type `value` into a band editor the way THIS session spells it.
+
+    A QDoubleSpinBox parses what is typed against the session locale, and
+    this one separates the decimals with a comma: setValue is not a
+    shortcut here, because it goes through no parsing at all and would not
+    be the in-progress edit #71 is about. Returns the string typed.
+    """
+    from PySide import QtCore
+    text = QtCore.QLocale().toString(float(value), 'f', spin.decimals())
+    spin.lineEdit().setText(text)
+    return text
+
+
+
+def _row_of(panel, edge):
+    """Index of `edge`'s seam row in the blend table."""
+    for r in range(panel.blend_table.rowCount()):
+        if panel.blend_table.item(r, panel.COL_EDGE) is not None \
+                and panel.blend_table.item(r, panel.COL_EDGE).text() == edge.Name:
+            return r
+    return -1
+
+
+def test_enter_in_a_band_editor_commits_then_confirms(doc):
+    """#71: Enter inside a band editor commits THAT editor's value and
+    then confirms -- commit strictly FIRST, because confirming ends in a
+    refresh that rebuilds every row.
+
+    The human's question was whether this conflicts with the 3D-view
+    Enter, and it does not: the application shortcut confirms the
+    COLLECTION, a band editor's Enter commits its own VALUE. What must
+    not happen is the same keystroke confirming twice (the collect would
+    be blended twice), which is why the editor accepts the
+    ShortcutOverride for that one key -- asserted below on both the
+    editor (accepted) and an ordinary widget (NOT accepted, so the 3D
+    view's Enter is untouched).
+
+    Order is asserted, not assumed: the undo names must read
+    ["Silk band split", "Silk blend"], and the blend's own band must
+    already carry the typed width when it is built.
+    """
+    errors, checks = [], []
+    from PySide import QtCore
+    from SilkMachinery import split_at_end
+    from SilkTaskPanel import BAND_A, _side_of
+    from Tests.test_seam_resolver import _square_patch, _patch_sharing
+
+    a = _square_patch(doc, "A")
+    b = _patch_sharing(doc, a.Edges[0], "B")
+    edge = a.Edges[0]
+    doc.recompute()
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.toolbox.setCurrentIndex(2)   # the Blend section                    # the Blend section
+        row = _row_of(panel, edge)
+        check(row >= 0, "the seam has no row", errors)
+        panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
+        check(edge in panel.collected(),
+              "the row click did not collect the seam: %r"
+              % panel.collected(), errors)
+        spin = panel.split_editor(edge, BAND_A)
+        if not check(spin is not None, "no Band A editor on the row", errors):
+            return {"pass": False, "errors": errors, "checks": checks}
+
+        # the ShortcutOverride: accepted for the editor, not for anything
+        # else -- so the application confirm fires ONCE, not twice
+        over_editor = _enter_key(spin, QtCore.QEvent.ShortcutOverride)
+        check(over_editor.isAccepted(),
+              "the band editor did not accept the Enter ShortcutOverride -- "
+              "the application shortcut would confirm on top of this one",
+              errors)
+        over_other = _enter_key(panel.blend_table, QtCore.QEvent.ShortcutOverride)
+        check(not over_other.isAccepted(),
+              "a widget that is NOT a band editor accepted the Enter "
+              "ShortcutOverride -- the 3D-view Enter would stop working",
+              errors)
+
+        # type a width the way a user does, then press Enter
+        typed = _type_width(spin, 0.2)
+        check(abs(spin.value() - 0.2) < 1e-9,
+              "typing %r into the editor left the value at %g -- the test "
+              "fixture never set up an edit" % (typed, spin.value()), errors)
+        names_before = list(doc.UndoNames)
+        undo_before = _undo_count(doc)
+        _enter_key(spin.lineEdit())                # the editor owns the focus
+        doc.recompute()
+
+        # UndoNames reads top-of-stack first, so the blend (committed
+        # second) is index 0 -- which is exactly the ORDERING #71 is
+        # about: had the confirm come first, it would rebuild every row
+        # and the value typed a moment earlier would have nowhere to go.
+        added = list(doc.UndoNames[:len(doc.UndoNames)
+                                    - len(names_before)])
+        check([str(n) for n in added] == ["Silk blend", "Silk band split"],
+              "Enter produced the transactions %r (newest first) -- expected "
+              "the split commit FIRST and the blend confirm second"
+              % added, errors)
+        check(_undo_count(doc) - undo_before == 2,
+              "one Enter moved the undo stack by %d steps (expected 2: one "
+              "commit, one confirm)"
+              % (_undo_count(doc) - undo_before), errors)
+
+        a_prop, a_ss = _side_of(a, b)
+        stored = split_at_end(list(getattr(a, a_prop) or []), a_ss)
+        check(stored is not None and abs(stored - 0.2) < 1e-9,
+              "the typed width was not committed to %s.%s (%r) -- the confirm "
+              "rebuilt the row before the value was written"
+              % (a.Name, a_prop, list(getattr(a, a_prop) or [])), errors)
+
+        blends = _blend_objects(doc)
+        check(len(blends) == 1,
+              "Enter created %d blend(s), expected 1 -- the same collection "
+              "was confirmed twice" % len(blends), errors)
+        if blends:
+            check(len(blends[0].Poles or []) == 24
+                  and not blends[0].Shape.isNull(),
+                  "the confirmed blend did not build (%d poles, null=%s)"
+                  % (len(blends[0].Poles or []), blends[0].Shape.isNull()),
+                  errors)
+        check(not panel.collected(),
+              "the collection survived the confirm: %r" % panel.collected(),
+              errors)
+        # the value survives the rebuild, read back off the live editor
+        live = panel.split_editor(edge, BAND_A)
+        check(live is not None and abs(live.value() - 0.2) < 1e-9,
+              "after the confirm the re-mounted editor shows %s, expected "
+              "the typed 0.2" % (live.value() if live else None), errors)
+        checks.append("Enter in a band editor: 0.2 committed (1 undo step) "
+                      "then confirmed (1 more), one blend at 24 poles")
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+
+def test_in_progress_band_edit_is_committed_not_dropped_by_a_refresh(doc):
+    """#71: an edit in flight is never silently dropped by a refresh.
+
+    The human reported it as flaky -- "i have to click outside the list
+    though for the blend to update" / "nope, on second try i can". The
+    mechanism: a QDoubleSpinBox holds typed text until something
+    interprets it, and a refresh rebuilds every row, so the widget the
+    text lived on is DETACHED. Its later editingFinished then hits the
+    #69 detached-widget guard, which correctly declines to act -- so the
+    value was neither written nor reported, and it vanished. Which is why
+    it worked on the second try: by then the text was gone too.
+
+    So an in-progress edit is committed BEFORE the rows are torn down.
+    """
+    errors, checks = [], []
+    from SilkMachinery import split_at_end
+    from SilkTaskPanel import BAND_A, _side_of
+    from Tests.test_seam_resolver import _square_patch, _patch_sharing
+
+    a = _square_patch(doc, "A")
+    b = _patch_sharing(doc, a.Edges[0], "B")
+    edge = a.Edges[0]
+    doc.recompute()
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.toolbox.setCurrentIndex(2)   # the Blend section
+        row = _row_of(panel, edge)
+        check(row >= 0, "the seam has no row", errors)
+        panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
+        spin = panel.split_editor(edge, BAND_A)
+        if not check(spin is not None, "no Band A editor on the row", errors):
+            return {"pass": False, "errors": errors, "checks": checks}
+        a_prop, a_ss = _side_of(a, b)
+
+        # typed but NOT committed: the editor holds a width its patch does
+        # not store -- the panel is asked to refresh anyway
+        typed = _type_width(spin, 0.25)
+        check(abs(spin.value() - 0.25) < 1e-9,
+              "typing %r left the editor at %g -- the fixture never set up "
+              "an in-flight edit" % (typed, spin.value()), errors)
+        check(not list(getattr(a, a_prop) or []),
+              "the typed value was already written before the refresh "
+              "(%r)" % list(getattr(a, a_prop) or []), errors)
+
+        # a plain refresh -- what a selection change or the confirm's own
+        # teardown does
+        panel.refresh()
+        doc.recompute()
+
+        stored = split_at_end(list(getattr(a, a_prop) or []), a_ss)
+        check(stored is not None and abs(stored - 0.25) < 1e-9,
+              "the refresh dropped the in-progress edit: %s.%s = %r, "
+              "expected 0.25"
+              % (a.Name, a_prop, list(getattr(a, a_prop) or []),), errors)
+        live = panel.split_editor(edge, BAND_A)
+        check(live is not None and live is not spin,
+              "the refresh did not rebuild the row", errors)
+        check(live is not None and abs(live.value() - 0.25) < 1e-9,
+              "the re-mounted editor shows %s, expected the committed 0.25"
+              % (live.value() if live else None), errors)
+
+        # and the confirm path commits an in-flight edit too, rather than
+        # blending at the width still stored
+        _type_width(live, 0.3)
+        panel.panel_confirm()
+        doc.recompute()
+        stored = split_at_end(list(getattr(a, a_prop) or []), a_ss)
+        check(stored is not None and abs(stored - 0.3) < 1e-9,
+              "the confirm applied without committing the in-flight edit: "
+              "%s.%s = %r" % (a.Name, a_prop, list(getattr(a, a_prop) or [])),
+              errors)
+        blends = _blend_objects(doc)
+        check(len(blends) == 1 and len(blends[0].Poles or []) == 24,
+              "the blend did not build after the in-flight commit (%d blend(s))"
+              % len(blends), errors)
+        checks.append("in-flight 0.25 committed by a refresh, 0.3 by the "
+                      "confirm; nothing silently dropped")
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_panel_lands_in_the_native_task_panel,
     test_toolbox_is_a_three_section_accordion,
@@ -2792,5 +3041,7 @@ ALL_TESTS = [
     test_split_warning_only_fires_on_a_wholesale_discard,
     test_hint_is_out_of_the_way_and_still_reachable,
     test_panel_fits_a_narrow_dock_and_lists_stay_small,
+    test_enter_in_a_band_editor_commits_then_confirms,
+    test_in_progress_band_edit_is_committed_not_dropped_by_a_refresh,
     test_no_production_module_knows_the_panel,
 ]
