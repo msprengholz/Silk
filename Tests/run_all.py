@@ -79,7 +79,8 @@ _REMOTE_CODE = """
 import sys, os, importlib
 sys.path.insert(0, %r)
 
-def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir):
+def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir,
+              test_modules=None):
     \"\"\"Everything in one function, so nothing this run binds survives it.
 
     The execute_code namespace is persistent by design, and a name left
@@ -99,7 +100,7 @@ def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir):
         pass
     from Tests import suite
     from Tests.mcp_harness import run_tests
-    funcs = suite.collect_tests(test_filter)
+    funcs = suite.collect_tests(test_filter, test_modules)
     if funcs:
         run_tests(*funcs, close_docs=close_docs)
     else:
@@ -135,7 +136,7 @@ def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir):
               "after %%.1f MB (delta %%.1f MB)"
               %% (os.getpid(), rss_before, rss_after, rss_after - rss_before))
 
-_silk_run(%s, %s, %r, %s, %r)
+_silk_run(%s, %s, %r, %s, %r, %r)
 """
 
 
@@ -159,7 +160,7 @@ def _save_inspect_docs(save_dir):
     return saved
 
 
-def _run_in_process(inspect, save_dir, test_filter):
+def _run_in_process(inspect, save_dir, test_filter, test_modules=None):
     """Inside a FreeCAD process (freecad startup-script mode)."""
     import Tests.silk_reload as silk_reload
     rss_before = silk_reload.rss_mb()
@@ -170,9 +171,10 @@ def _run_in_process(inspect, save_dir, test_filter):
         print("Warning: could not activate Silk workbench: " + str(e))
     from Tests import suite
     from Tests.mcp_harness import run_tests
-    funcs = suite.collect_tests(test_filter)
+    funcs = suite.collect_tests(test_filter, test_modules)
     if not funcs:
-        print("No tests match %r in %s" % (test_filter, os.path.join(_SILK_DIR, "Tests")))
+        print("No tests match %r / %r in %s"
+              % (test_filter, test_modules, os.path.join(_SILK_DIR, "Tests")))
         print("Available: " + str([f.__name__ for f in suite.collect_tests()]))
         return 1
     print("Running {} Silk tests (in-process runner)".format(len(funcs)))
@@ -188,7 +190,7 @@ def _run_in_process(inspect, save_dir, test_filter):
 
 
 def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
-                 keep_namespace=False):
+                 keep_namespace=False, test_modules=None):
     """Attach to a running FreeCAD GUI through its XML-RPC server."""
     import http.client
     import json
@@ -231,6 +233,7 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
     res = proxy.execute_code(
         _REMOTE_CODE % (_SILK_DIR, str(bool(force_reload)),
                         str(bool(keep_namespace)), test_filter,
+                        repr(list(test_modules) if test_modules else None),
                         str(not (inspect or save_dir)), save_dir),
         _call_timeout,
     )
@@ -256,6 +259,22 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
         "\n%d/%d passed, %d failed (in running FreeCAD)"
         % (summary["passed"], summary["total"], summary["failed"])
     )
+    # Slowest tests, from the summary (#72). FreeCAD's own console output
+    # for this never reached stdout, so it is recomputed here from the
+    # timings the harness now records. This is what turned "the suite is
+    # slow" into two named tests -- and disproved the module-level guess
+    # everyone agreed on.
+    timings = summary.get("timings") or []
+    if timings and sum(t["seconds"] for t in timings) >= 5.0:
+        ranked = sorted(timings, key=lambda t: -t["seconds"])
+        total_s = sum(t["seconds"] for t in timings)
+        top = [t for t in ranked[:8] if t["seconds"] >= 0.2]
+        if top:
+            print("[slowest] %.1fs total across %d tests" % (total_s, len(timings)))
+            for t in top:
+                print("   %6.2fs  %s" % (t["seconds"], t["name"]))
+            print("   -> these %d are %.0f%% of the run"
+                  % (len(top), sum(t["seconds"] for t in top) / total_s * 100))
     if inspect or save_dir:
         for line in out.splitlines():
             if "[inspect]" in line or "[saved]" in line or (line.startswith("  - ") and ("_mcp_test_" in line or "_inspect" in line)):
@@ -302,13 +321,39 @@ def main():
     force_reload = "--force-reload" in sys.argv
     keep_namespace = "--keep-namespace" in sys.argv
     save_dir = _INSPECT_SAVE_DIR if save else None
+
+    # --changed [ref]: run only the test modules a changed file can break
+    # (#72). The full suite is ~6.5 minutes and most edits cannot touch
+    # most of it; a SilkPatch.py change needs 10 seconds. Falls back to
+    # the whole suite whenever the mapping is not confident, because a
+    # partial run that is wrong in the direction of running TOO LITTLE is
+    # how a break ships, while running too much only costs time.
+    test_modules = None
+    if "--changed" in sys.argv:
+        rest = sys.argv[sys.argv.index("--changed"):]
+        ref = None
+        if len(rest) > 1 and not rest[1].startswith("--"):
+            ref = rest[1]
+        from Tests import deps
+        paths = deps.changed_files(ref)
+        if paths is None:
+            print("--changed: git unavailable or not a repo; running everything")
+        else:
+            mods, reason = deps.modules_for_paths(paths)
+            if mods:
+                test_modules = mods
+                print("--changed: %s" % reason)
+                print("           %s" % ", ".join(mods))
+            else:
+                print("--changed: %s -> running everything" % reason)
+
     try:
         import FreeCAD  # noqa: F401
-        return _run_in_process(inspect, save_dir, test_filter)
+        return _run_in_process(inspect, save_dir, test_filter, test_modules)
     except ImportError:
         port = int(os.environ.get("SILK_RPC_PORT", "9875"))
         return _run_via_rpc(port, inspect, save_dir, test_filter, force_reload,
-                            keep_namespace)
+                            keep_namespace, test_modules)
 
 
 # NOTE: called unconditionally -- FreeCAD executes startup scripts with

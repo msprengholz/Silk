@@ -9,6 +9,7 @@ The harness collects results and prints a JSON summary line the agent can parse.
 import FreeCAD
 import json
 import sys
+import time
 
 
 def _quiet_dialog(label, msg):
@@ -54,6 +55,11 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
 
     Prints a single JSON line "RESULT:<json>" at the end for agent parsing.
 
+    Each test is TIMED, and the slowest are reported at the end (#72).
+    "The suite is slow" is otherwise unanswerable without a module-level
+    guess, and the guess was wrong: the reload machinery everyone
+    suspected cost 4.6s, while a four-test module cost 22s.
+
     #72: this frame can outlive the run -- FreeCAD keeps the traceback of
     an exception raised inside a document-closing slot, and a traceback
     keeps every frame. A retained run_tests frame holds test_funcs (so
@@ -66,11 +72,13 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
     """
     results = []
     open_docs = []
+    timings = []
     saved = _patch_dialogs()
     func = doc = outcome = None
     try:
         for func in test_funcs:
             doc = None
+            _t0 = time.time()
             try:
                 doc_name = "_mcp_test_" + func.__name__
                 doc = FreeCAD.newDocument(doc_name)
@@ -92,6 +100,7 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
                     "traceback": traceback.format_exc()
                 })
             finally:
+                timings.append((func.__name__, time.time() - _t0))
                 if doc is not None:
                     if close_docs:
                         try:
@@ -122,7 +131,10 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
         "total": len(results),
         "passed": passed,
         "failed": failed,
-        "results": results
+        "results": results,
+        # names + seconds only: no module references, so this cannot pin a
+        # generation the way a traceback frame does (#72).
+        "timings": [{"name": n, "seconds": round(s, 3)} for n, s in timings],
     }
 
     if verbose:
@@ -133,6 +145,23 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
                 print(f"    ERROR: {err}")
 
         print(f"\n{passed}/{len(results)} passed, {failed} failed")
+
+        # Slowest tests, so "the suite is slow" has an answer (#72).
+        # Module totals were the wrong unit: a 7-test module everyone
+        # suspected cost 4.6s, and a 4-test module nobody suspected cost
+        # 22s. Per test is where the cost actually is.
+        ranked = sorted(timings, key=lambda kv: -kv[1])
+        total_s = sum(s for _, s in timings)
+        if ranked and total_s >= 5.0:
+            top = [t for t in ranked[:10] if t[1] >= 0.2]
+            if top:
+                print("\n[slowest] (total %.1fs across %d tests)"
+                      % (total_s, len(timings)))
+                for name, secs in top:
+                    print("   %6.2fs  %s" % (secs, name))
+                share = sum(s for _, s in top) / total_s * 100
+                print("   -> these %d tests are %.0f%% of the run"
+                      % (len(top), share))
 
         if not close_docs:
             print("\n[inspect] documents left open for manual inspection:")

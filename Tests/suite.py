@@ -16,12 +16,18 @@ import os
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def collect_tests(test_filter=None):
+def collect_tests(test_filter=None, test_modules=None):
     """Collect test functions from every test_*.py module in Tests/.
 
     test_filter: optional substring matched against the test function
     name or its module name (e.g. 'edge_stage' runs only Tests/
     test_edge_stage.py). Lets a developer run one stage at a time.
+
+    test_modules: optional iterable of test module BASENAMES ('test_chain')
+    to run, selecting whole modules rather than a substring. This is what
+    `run_all.py --changed` uses: one source edit maps to SEVERAL modules
+    at once, which a single substring cannot express (#72). Intersected
+    with test_filter when both are given.
     """
     funcs = []
     # Ticket #26: the chain gate is the acceptance gate and always runs
@@ -43,6 +49,12 @@ def collect_tests(test_filter=None):
                     and len(inspect.signature(obj).parameters) == 1
                 ):
                     funcs.append(obj)
+    if test_modules is not None:
+        wanted = set(test_modules)
+        funcs = [
+            f for f in funcs
+            if (f.__module__ or "").split(".")[-1] in wanted
+        ]
     if test_filter is not None:
         funcs = [
             f for f in funcs

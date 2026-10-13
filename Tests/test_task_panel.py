@@ -1670,14 +1670,19 @@ def test_band_cell_mirror_agrees_with_the_real_band_cells(doc):
     layouts = [[], [0.1], [0.9], [0.5], [0.1, 0.9], [0.2, 0.85],
                [0.3, 0.5, 0.7]]
     compared = 0
+    # #72: the patches are built ONCE, not per iteration. The geometry is
+    # the same square every time -- only the SPLITS vary, and splits are a
+    # property assignment plus a recompute. Rebuilding them per iteration
+    # made this test 116s and left 2,352 objects in the document, which
+    # also made the NEXT test 73s (measured) and fed the retention the
+    # RSS report was flagging. Same coverage: 147 (layout, layout, band)
+    # combinations, compared against the same `band_cells`.
+    a = _square_patch(doc, "MirrorA")
+    b = _patch_sharing(doc, a.Edges[0], "MirrorB")
     for along_a in layouts:
         for band_a in layouts:
             for along_b, band_b in ((along_a, band_a), ([], [0.2]),
                                     ([0.5], [])):
-                a = _square_patch(doc, "A_%s_%s" % (
-                    "_".join(map(str, along_a)) or "n",
-                    "_".join(map(str, band_a)) or "n"))
-                b = _patch_sharing(doc, a.Edges[0], "B")
                 a.USplits = list(along_a)
                 a.VSplits = list(band_a)
                 b.USplits = list(along_b)
