@@ -108,6 +108,13 @@ iconPath = path_Silk_icons + "/Silk.svg"
 
 SECTION_EDGE, SECTION_PATCH, SECTION_BLEND = 0, 1, 2
 SECTION_TITLES = ("Edge", "Patch", "Blend")
+# #71: every section folded. A QToolBox cannot express this -- it refuses
+# setCurrentIndex(-1) and snaps back to the last valid index -- so folding
+# the open section left it in a state the panel could not describe. The
+# header/content stack below has a real value for it, and every reader of
+# `open_section()` handles it explicitly rather than treating -1 as a
+# section.
+SECTION_NONE = -1
 
 # Per-stage collection bounds. Edge: 1 or 2 sketches (1 -> 3L, 2 -> 2N).
 # Patch: 3 or 4 edges (3 -> pointed, 4 -> quad). Blend: 1..N seams.
@@ -192,6 +199,150 @@ HINT_TOOLTIP = (
     "editor per patch (Band A / Band B) -- they start equal, and setting "
     "them apart is deliberate.")
 
+
+# ---- the section container (header / content pairs, #71) ------------------
+
+class SectionStack(QtWidgets.QWidget if QtWidgets else object):
+    """The three stages as one header line each, in fixed order, with the
+    open section's page directly under ITS OWN header.
+
+    What it replaces: a stock `QToolBox`. That is a QToolBox LIMITATION,
+    not our logic. A QToolBox keeps every handle in one stack at the top
+    and parks the open page BELOW that stack, so a folded section can
+    never occupy the slot directly under the section above it -- the
+    handles are what move things, and the content is always last. And
+    `setCurrentIndex(-1)` is refused (Qt snaps back to the last valid
+    index), so "fold everything" is not expressible at all.
+
+    Here each section is a header / content PAIR in a plain vertical
+    layout: Edge, then (while Edge is open) the Edge page, then Patch,
+    then (while open) the Patch page, then Blend. So:
+
+      * the headers are in a fixed order and never move -- folding a
+        section collapses it to its header line, in place;
+      * opening a section changes only that one section's page: the
+        others stay collapsed, exactly where they were.
+
+    Deliberately NOT a redesign: the pages are the same widgets the
+    `_build_*_page` methods have always built, the stages still work one
+    at a time, and the headers are plain checkable tool buttons, so the
+    panel still reads as the accordion it replaces.
+    """
+
+    currentChanged = QtCore.Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # NoFocus, as the QToolBox had: the 3D view keeps focus, which is
+        # why confirm cannot be a keyPressEvent and why no header steals
+        # it either.
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.setToolTip(HINT_TOOLTIP)
+        self._headers = []
+        self._pages = []
+        self._index = SECTION_NONE
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        # The trailing stretch belongs to the STACK, so each page's own
+        # trailing stretch keeps a capped list or table from growing to
+        # fill the panel (the #62 rule, unchanged).
+        lay.addStretch(1)
+
+    # ---- building ---------------------------------------------------
+
+    def add_section(self, title, page):
+        """Append one header / content pair; returns its index."""
+        index = len(self._headers)
+        header = QtWidgets.QToolButton(self)
+        header.setText(title)
+        header.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        header.setArrowType(QtCore.Qt.RightArrow)
+        header.setCheckable(True)
+        header.setAutoRaise(False)
+        header.setFocusPolicy(QtCore.Qt.NoFocus)
+        header.setToolTip(HINT_TOOLTIP)
+        header.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                             QtWidgets.QSizePolicy.Fixed)
+        header.clicked.connect(
+            lambda _checked=False, i=index: self.toggle(i))
+        self._headers.append(header)
+        self._pages.append(page)
+        lay = self.layout()
+        # always ABOVE the trailing stretch, so the section order in the
+        # layout is the section order on screen, whatever is added when
+        lay.insertWidget(lay.count() - 1, header)
+        lay.insertWidget(lay.count() - 1, page)
+        page.setToolTip(HINT_TOOLTIP)
+        page.setVisible(False)        # folded until opened
+        return index
+
+    # ---- reading ----------------------------------------------------
+
+    def count(self):
+        return len(self._headers)
+
+    def header(self, index):
+        """The section's header button, or None."""
+        if 0 <= index < len(self._headers):
+            return self._headers[index]
+        return None
+
+    def header_titles(self):
+        """The header labels, in layout order -- the fixed order."""
+        return [h.text() for h in self._headers]
+
+    def page(self, index):
+        """The section's page widget, or None."""
+        if 0 <= index < len(self._pages):
+            return self._pages[index]
+        return None
+
+    def current_index(self):
+        """The open section, or SECTION_NONE when all are folded."""
+        return self._index
+
+    def is_open(self, index=None):
+        """Whether `index` (default: any) is the open one."""
+        return self._index == (self._index if index is None else index)
+
+    # ---- opening / folding ------------------------------------------
+
+    def toggle(self, index):
+        """A header click: open this section, or fold it if it is the one
+        already open. Either way only THIS section changes."""
+        if index == self._index:
+            return self.fold_all()
+        return self.open(index)
+
+    def open(self, index):
+        """Open section `index` and fold the others. Returns True when
+        something changed."""
+        if index == self._index or not 0 <= index < len(self._pages):
+            return False
+        for i, page in enumerate(self._pages):
+            on = i == index
+            page.setVisible(on)
+            self._headers[i].setChecked(on)
+            self._headers[i].setArrowType(
+                QtCore.Qt.DownArrow if on else QtCore.Qt.RightArrow)
+        self._index = index
+        self.currentChanged.emit(index)
+        return True
+
+    def fold_all(self):
+        """Collapse every section to its header line, in place -- the
+        state a QToolBox could not be put into at all."""
+        if self._index == SECTION_NONE and not any(
+                p.isVisible() for p in self._pages):
+            return False
+        for i, page in enumerate(self._pages):
+            page.setVisible(False)
+            self._headers[i].setChecked(False)
+            self._headers[i].setArrowType(QtCore.Qt.RightArrow)
+        self._index = SECTION_NONE
+        self.currentChanged.emit(SECTION_NONE)
+        return True
 
 # ---- the open panel --------------------------------------------------------
 
@@ -542,12 +693,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         form.setSpacing(4)
 
         # --- the three-stage accordion -------------------------------
-        self.toolbox = QtWidgets.QToolBox(self)
+        self.sections = SectionStack(self)
         # focusPolicy 0 (NoFocus): the 3D view keeps focus, which is why
         # confirm cannot be a keyPressEvent.
-        self.toolbox.setFocusPolicy(QtCore.Qt.NoFocus)
-        self.toolbox.currentChanged.connect(self._on_section_changed)
-        form.addWidget(self.toolbox)
+        # (#71: was `self.toolbox = QToolBox(...)` + setFocusPolicy. The
+        # focus policy now lives on SectionStack itself, because it
+        # applied to the container AND its headers, not just a page.)
+        self.sections.currentChanged.connect(self._on_section_changed)
+        form.addWidget(self.sections)
 
         self._build_edge_page()
         self._build_patch_page()
@@ -570,7 +723,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self.hint_lbl.setToolTip(HINT_TOOLTIP)
         form.addWidget(self.hint_lbl)
         self.setToolTip(HINT_TOOLTIP)
-        self.toolbox.setToolTip(HINT_TOOLTIP)
+        self.sections.setToolTip(HINT_TOOLTIP)
 
         # --- the status line: the last action's outcome --------------
         self.status_lbl = QtWidgets.QLabel("")
@@ -656,7 +809,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         lay.addLayout(row)
         # The slack belongs to the PAGE, not to an empty list box.
         lay.addStretch(1)
-        self.toolbox.addItem(page, SECTION_TITLES[SECTION_EDGE])
+        self.sections.add_section(SECTION_TITLES[SECTION_EDGE], page)
 
     def _build_patch_page(self):
         page = QtWidgets.QWidget()
@@ -682,7 +835,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         lay.addLayout(row)
         # The slack belongs to the PAGE, not to an empty list box.
         lay.addStretch(1)
-        self.toolbox.addItem(page, SECTION_TITLES[SECTION_PATCH])
+        self.sections.add_section(SECTION_TITLES[SECTION_PATCH], page)
 
     def _build_blend_page(self):
         page = QtWidgets.QWidget()
@@ -734,7 +887,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         # the full panel height is empty chrome. The page's trailing
         # stretch takes the slack instead.
         lay.addStretch(1)
-        self.toolbox.addItem(page, SECTION_TITLES[SECTION_BLEND])
+        self.sections.add_section(SECTION_TITLES[SECTION_BLEND], page)
+
+        # #71: open the FIRST section, exactly as the QToolBox did. The
+        # stack starts fully folded because that is now a reachable state
+        # at all -- but a panel that opens showing three bare headers and
+        # nothing else is the "empty panel" the human reported back in
+        # #65, so the default is unchanged on purpose.
+        self.sections.open(SECTION_EDGE)
 
     def _install_shortcuts(self):
         """Confirm via Enter, as a QShortcut with Qt.ApplicationShortcut.
@@ -884,7 +1044,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
     # ---- sections ----------------------------------------------------
 
     def open_section(self):
-        return self.toolbox.currentIndex()
+        return self.sections.current_index()
 
     def section_limit(self, section):
         return {SECTION_EDGE: EDGE_MAX, SECTION_PATCH: PATCH_MAX,
@@ -893,6 +1053,16 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
     def accepts(self, section, obj):
         """What the open section collects. A wrong type is IGNORED, never
         refused -- the panel says nothing at all about it."""
+        if section == SECTION_NONE:
+            # #71: with every section folded there is no section to
+            # collect into. Falling through would compare -1 against the
+            # named cases and land in the Blend branch -- and
+            # `self._collected[-1]` is NOT an error in Python, it is the
+            # LAST key, i.e. the Blend collection. Silently collecting a
+            # seam into the Blend section because the user folded the
+            # accordion shut is precisely the sort of thing that has to be
+            # impossible rather than unlikely.
+            return False
         if section == SECTION_EDGE:
             return self.is_sketch(obj)
         if section == SECTION_PATCH:
@@ -930,9 +1100,10 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
 
     def collected(self, section=None):
         """The collected objects of a section (the open one by default)."""
-        return [i.obj for i in
-                self._collected[self.open_section()
-                                if section is None else section]]
+        which = self.open_section() if section is None else section
+        if which == SECTION_NONE:
+            return []          # see accepts(): -1 would index the Blend list
+        return [i.obj for i in self._collected[which]]
 
     def _on_section_changed(self, _index):
         self.sync_ok_enabled()
@@ -942,6 +1113,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
 
     def _remove_selected(self):
         section = self.open_section()
+        if section == SECTION_NONE:
+            return
         widget = (self.edge_list if section == SECTION_EDGE
                   else self.patch_list)
         row = widget.currentRow()
@@ -1447,6 +1620,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
 
     def can_confirm(self):
         section = self.open_section()
+        if section == SECTION_NONE:
+            return False       # everything folded: nothing to apply
         n = len(self._collected[section])
         if section == SECTION_EDGE:
             return EDGE_MIN <= n <= EDGE_MAX
@@ -1474,6 +1649,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         a quad fill into the pointed fill behind the user's back.
         """
         section = self.open_section()
+        if section == SECTION_NONE:
+            return []
         bad = []
         for item in self._collected[section]:
             obj = item.obj

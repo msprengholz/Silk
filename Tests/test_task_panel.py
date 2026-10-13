@@ -219,23 +219,34 @@ def test_toolbox_is_a_three_section_accordion(doc):
     keyPressEvent."""
     errors, checks = [], []
     from PySide import QtCore
-    from SilkTaskPanel import SECTION_TITLES
+    from SilkTaskPanel import SECTION_EDGE, SECTION_TITLES
 
     panel = _open_panel(doc)
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        tb = panel.toolbox
-        check(tb.count() == 3, "toolbox has %d pages, expected 3" % tb.count(),
+        # #71: the container is a header/content stack, not a QToolBox.
+        # The structural properties this test cared about -- three
+        # sections, the right titles, no focus stolen from the 3D view --
+        # are unchanged; only the widget behind them moved. The folding
+        # behaviour a QToolBox could not express is asserted by
+        # test_sections_are_header_content_pairs_not_a_toolbox.
+        tb = panel.sections
+        check(tb.count() == 3, "stack has %d sections, expected 3" % tb.count(),
               errors)
-        titles = [tb.itemText(i) for i in range(tb.count())]
+        titles = tb.header_titles()
         check(titles == list(SECTION_TITLES),
-              "toolbox titles %r != %r" % (titles, list(SECTION_TITLES)),
+              "section titles %r != %r" % (titles, list(SECTION_TITLES)),
               errors)
         check(tb.focusPolicy() == QtCore.Qt.NoFocus,
-              "the toolbox takes focus (policy %r) -- it must leave the 3D "
-              "view's focus alone" % tb.focusPolicy(), errors)
-        checks.append("accordion sections: %s (NoFocus)" % ", ".join(titles))
+              "the section stack takes focus (policy %r) -- it must leave "
+              "the 3D view's focus alone" % tb.focusPolicy(), errors)
+        check(tb.current_index() == SECTION_EDGE,
+              "the panel opens with no section expanded (%r) -- it should "
+              "open on Edge, as the QToolBox did" % tb.current_index(),
+              errors)
+        checks.append("accordion sections: %s (NoFocus), Edge open"
+                      % ", ".join(titles))
     finally:
         _close_panel(panel)
     return {"pass": not errors, "errors": errors, "checks": checks}
@@ -417,7 +428,7 @@ def test_patch_stage_collect_four_edges_then_confirm(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(1)          # the Patch section
+        panel.sections.open(1)          # the Patch section
         for e in edges:
             _click(e)
         check(len(panel.collected()) == 4,
@@ -466,7 +477,7 @@ def test_patch_stage_three_edges_give_the_pointed_fill(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(1)
+        panel.sections.open(1)
         for e in edges:
             _click(e)
         check(panel.patch_count_lbl.text() == "3/4",
@@ -520,7 +531,7 @@ def test_patch_section_reports_success_only_for_a_patch_that_built(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(1)          # the Patch section
+        panel.sections.open(1)          # the Patch section
 
         # (1) an awkward CLICK order: e2, e0, e3, e1 -- three of the four
         # rotations of the cycle are wrong, so pre-#66 this produced an
@@ -648,7 +659,7 @@ def test_every_patch_the_panel_hands_back_is_oracle_green(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(1)          # the Patch section
+        panel.sections.open(1)          # the Patch section
         for label, perm in orders:
             sel = [edges[i] for i in perm]
             for e in sel:
@@ -752,7 +763,7 @@ def test_wrong_type_clicks_are_silently_ignored(doc):
         ]
         with _Capture() as cap:
             for section, obj, label in cases:
-                panel.toolbox.setCurrentIndex(section)
+                panel.sections.open(section)
                 _click(obj)
                 check(panel.collected() == [],
                       "%s collected %r" % (label, panel.collected()), errors)
@@ -810,7 +821,7 @@ def test_ok_disabled_until_the_open_section_is_valid(doc):
               "a third click pushed the collection to %d"
               % len(panel.collected()), errors)
         # -- Patch
-        panel.toolbox.setCurrentIndex(1)
+        panel.sections.open(1)
         for n in range(4):
             _click(loop[n])
             want = n >= 2
@@ -818,7 +829,7 @@ def test_ok_disabled_until_the_open_section_is_valid(doc):
                   "after %d edge click(s) OK is %r, expected %r"
                   % (n + 1, panel.ok_enabled(), want), errors)
         # -- Blend
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         check(panel.ok_enabled() is False,
               "OK is enabled in the Blend section with nothing collected",
               errors)
@@ -849,7 +860,7 @@ def test_one_confirm_is_one_undo_step(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(1)
+        panel.sections.open(1)
         for e in loop:
             _click(e)
         before = _undo_count(doc)
@@ -885,7 +896,7 @@ def test_multi_seam_blend_is_still_one_undo_step(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         for e in (s_left, s_right):
             row = panel.seam_row_index(e)
             check(row >= 0, "seam %s has no row" % e.Name, errors)
@@ -931,7 +942,7 @@ def test_stale_entry_refuses_loudly_naming_it(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(1)
+        panel.sections.open(1)
         for e in loop:
             _click(e)
         check(len(panel.collected()) == 4, "did not collect 4 edges", errors)
@@ -985,7 +996,7 @@ def test_stale_blend_seam_refuses_naming_it(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         row = panel.seam_row_index(s_left)
         check(row >= 0, "the already-blended seam has no row", errors)
         flag = panel.blend_flag(s_left)
@@ -1120,7 +1131,7 @@ def test_close_then_reopen_rebuilds_fresh(doc):
                  errors):
         return {"pass": False, "errors": errors, "checks": checks}
     adapter_form = panel1
-    panel1.toolbox.setCurrentIndex(1)
+    panel1.sections.open(1)
     _click(loop[0])
     check(len(panel1.collected()) == 1, "nothing collected before close",
           errors)
@@ -1143,9 +1154,9 @@ def test_close_then_reopen_rebuilds_fresh(doc):
         check(panel2.collected() == [],
               "the old collection survived the close: %r" % panel2.collected(),
               errors)
-        check(panel2.toolbox.currentIndex() == 0,
+        check(panel2.sections.current_index() == 0,
               "the reopened panel kept the old open section (%d)"
-              % panel2.toolbox.currentIndex(), errors)
+              % panel2.sections.current_index(), errors)
         check(panel2._hook_installed and panel2._doc_hook_installed,
               "the reopened panel did not install its hooks", errors)
         checks.append("close -> widget deleted + form nulled; reopen is fresh")
@@ -1200,7 +1211,7 @@ def test_closes_on_document_switch(doc):
         if not check(panel is not None, "Activated left no panel open",
                      errors):
             return {"pass": False, "errors": errors, "checks": checks}
-        panel.toolbox.setCurrentIndex(1)
+        panel.sections.open(1)
         _click(loop[0])
         check(panel._doc_hook_installed,
               "the panel installed no document observer", errors)
@@ -1244,7 +1255,7 @@ def test_blend_table_merges_every_seam_with_its_flag(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         inv = seam_inventory(doc)
         statuses = [e["status"] for e in inv]
         check("blocked" in statuses and "blended" in statuses,
@@ -1319,7 +1330,7 @@ def test_blend_collect_highlight_and_remove(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         good = panel.seam_row_index(other)
         bad = panel.seam_row_index(ea)
         check(good >= 0 and bad >= 0, "the seam rows are missing", errors)
@@ -1369,7 +1380,7 @@ def test_blend_confirm_matches_the_resolver(doc):
         if not check(panel is not None, "Activated left no panel open",
                      errors):
             return {"pass": False, "errors": errors, "checks": checks}
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         try:
             e_shr = g["E_Shr"]
             row = panel.seam_row_index(e_shr)
@@ -1449,7 +1460,7 @@ def test_band_split_editor_reads_and_writes_the_patch_split(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         row = panel.seam_row_index(a.Edges[0])
         check(row >= 0, "the seam has no row", errors)
         panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
@@ -1527,7 +1538,7 @@ def test_user_band_split_is_honoured_by_the_blend(doc):
         if not check(panel is not None, "Activated left no panel open",
                      errors):
             return {"pass": False, "errors": errors, "checks": checks}
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         row = panel.seam_row_index(g["E_Shr"])
         check(row >= 0, "the shared edge is not a row", errors)
         panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
@@ -1611,7 +1622,7 @@ def test_band_split_multi_cell_is_refused_naming_patch_and_values(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         edge = a.Edges[0]
         row = panel.seam_row_index(edge)
         check(row >= 0, "the seam has no row", errors)
@@ -1745,7 +1756,7 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
                      errors):
             return {"pass": False, "errors": errors, "checks": checks}
         try:
-            panel.toolbox.setCurrentIndex(2)
+            panel.sections.open(2)
             row = panel.seam_row_index(edge)
             check(row >= 0, "%s has no row" % edge.Name, errors)
             panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
@@ -1904,7 +1915,7 @@ def test_unresolvable_seam_row_does_not_abandon_the_table(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         raised = None
         try:
             panel._render_table([good, ghost, good],
@@ -1962,7 +1973,7 @@ def test_post_blend_width_that_would_break_the_band_is_refused(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         spin = panel.split_editor(edge, BAND_A)
         if not check(spin is not None, "the blended row has no Band A editor",
                      errors):
@@ -2037,7 +2048,7 @@ def test_two_band_editors_start_equal_and_name_their_own_patch(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         edge = a.Edges[0]
         row = panel.seam_row_index(edge)
         check(row >= 0, "the seam has no row", errors)
@@ -2148,7 +2159,7 @@ def test_band_edit_validation_is_per_patch(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         spin_a = panel.split_editor(edge, BAND_A)
         spin_b = panel.split_editor(edge, BAND_B)
         if not check(spin_a is not None and spin_b is not None,
@@ -2233,7 +2244,7 @@ def test_asymmetric_band_widths_blend_green_and_differ_from_symmetric(doc):
                      errors):
             return {"pass": False, "errors": errors, "checks": checks}
         try:
-            panel.toolbox.setCurrentIndex(2)
+            panel.sections.open(2)
             edge = g["E_Shr"]
             row = panel.seam_row_index(edge)
             check(row >= 0, "%s is not a row" % edge.Name, errors)
@@ -2356,7 +2367,7 @@ def test_setting_both_editors_to_the_same_value_writes_both(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         sa = panel.split_editor(edge, BAND_A)
         sb = panel.split_editor(edge, BAND_B)
         if not check(sa is not None and sb is not None,
@@ -2414,7 +2425,7 @@ def test_blocked_row_is_not_actionable_and_has_no_editor(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)
+        panel.sections.open(2)
         row = panel.seam_row_index(blocked)
         check(row >= 0, "the blocked seam has no row", errors)
         flag = panel.blend_flag(blocked)
@@ -2577,7 +2588,7 @@ def test_hint_is_out_of_the_way_and_still_reachable(doc):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
         Gui.updateGui()
-        hint, toolbox = panel.hint_lbl, panel.toolbox
+        hint, toolbox = panel.hint_lbl, panel.sections
         check(hint.isVisible(), "the next-step hint is not visible at all",
               errors)
         check(hint.y() > toolbox.y(),
@@ -2832,7 +2843,7 @@ def test_enter_in_a_band_editor_commits_then_confirms(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)   # the Blend section                    # the Blend section
+        panel.sections.open(2)   # the Blend section                    # the Blend section
         row = _row_of(panel, edge)
         check(row >= 0, "the seam has no row", errors)
         panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
@@ -2943,7 +2954,7 @@ def test_in_progress_band_edit_is_committed_not_dropped_by_a_refresh(doc):
     if not check(panel is not None, "Activated left no panel open", errors):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
-        panel.toolbox.setCurrentIndex(2)   # the Blend section
+        panel.sections.open(2)   # the Blend section
         row = _row_of(panel, edge)
         check(row >= 0, "the seam has no row", errors)
         panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
@@ -3001,6 +3012,144 @@ def test_in_progress_band_edit_is_committed_not_dropped_by_a_refresh(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+
+def test_sections_are_header_content_pairs_not_a_toolbox(doc):
+    """#71: the section container is no longer a QToolBox, and the three
+    sections are header / content PAIRS in a fixed order.
+
+    The QToolBox it replaces stacked all three handles at the top and
+    parked the open page below the stack, so a folded section could never
+    sit directly under the section above it -- and `setCurrentIndex(-1)`
+    was refused, so folding everything was not expressible at all. Both
+    are asserted here as the reason the container changed:
+
+      * the container is NOT a QToolBox (and the fold-everything state is
+        reachable);
+      * the headers keep their ORDER always;
+      * opening a section pushes only the headers BELOW it down -- every
+        header above it stays exactly where it was, which is what "in
+        place" means, and is the difference from a QToolBox where the
+        open page is always parked under the whole stack of handles;
+      * the open section's page sits directly under ITS OWN header and
+        above the next header;
+      * folding the open section (a second click on its header) returns
+        every header to the all-folded geometry;
+      * no header takes focus (confirm is an ApplicationShortcut and
+        must never have a button in its way).
+
+    Geometry is read after Gui.updateGui(), so the layout has actually
+    run -- these are positions, not intentions.
+    """
+    errors, checks = [], []
+    from PySide import QtCore, QtWidgets
+    from SilkTaskPanel import SECTION_BLEND, SECTION_EDGE, SECTION_NONE, \
+        SECTION_TITLES
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        sections = panel.sections
+        check(not isinstance(sections, QtWidgets.QToolBox),
+              "the section container is still a QToolBox -- a folded section "
+              "cannot sit under the section above it there", errors)
+        check(not [w for w in panel.findChildren(QtWidgets.QToolBox)],
+              "a QToolBox survives somewhere in the panel", errors)
+        check(sections.count() == 3,
+              "the stack has %d sections, expected 3" % sections.count(),
+              errors)
+        check(sections.header_titles() == list(SECTION_TITLES),
+              "header titles %r != %r" % (sections.header_titles(),
+                                          list(SECTION_TITLES)), errors)
+        check(sections.focusPolicy() == QtCore.Qt.NoFocus,
+              "the section stack takes focus (policy %r)"
+              % sections.focusPolicy(), errors)
+        for i in range(sections.count()):
+            check(sections.header(i).focusPolicy() == QtCore.Qt.NoFocus,
+                  "the %s header takes focus" % SECTION_TITLES[i], errors)
+
+        Gui.updateGui()
+
+        def header_ys():
+            return {i: sections.header(i).mapTo(panel, QtCore.QPoint(0, 0)).y()
+                    for i in range(sections.count())}
+
+        # -- the folded geometry is the baseline -------------------------
+        # A QToolBox could not be put into this state at all
+        # (setCurrentIndex(-1) is refused), which is why the baseline is
+        # measured here and every other state is compared against it.
+        check(sections.fold_all(), "fold_all() reported no change", errors)
+        Gui.updateGui()
+        folded = header_ys()
+        check(sections.current_index() == SECTION_NONE,
+              "folding everything left %r open" % sections.current_index(),
+              errors)
+        check(not any(sections.page(i).isVisible() for i in range(3)),
+              "a page is still visible with every section folded", errors)
+        check(list(folded.values()) == sorted(folded.values()),
+              "the headers are not in order on screen: %s" % folded, errors)
+        check(panel.open_section() == SECTION_NONE,
+              "the open section is %r with everything folded"
+              % panel.open_section(), errors)
+        check(not panel.can_confirm(),
+              "an all-folded panel can confirm", errors)
+
+        for opened in range(sections.count()):
+            # -- open one section: its page lands under ITS header ------
+            sections.open(opened)
+            Gui.updateGui()
+            ys = header_ys()
+            check(sections.header_titles() == list(SECTION_TITLES),
+                  "opening %s changed the header order: %r"
+                  % (SECTION_TITLES[opened], sections.header_titles()),
+                  errors)
+            check(list(ys.values()) == sorted(ys.values()),
+                  "opening %s put the headers out of order: %s"
+                  % (SECTION_TITLES[opened], ys), errors)
+            for i in range(opened + 1):
+                check(ys[i] == folded[i],
+                      "opening %s moved the %s header above it (%s, folded it "
+                      "was %s)" % (SECTION_TITLES[opened], SECTION_TITLES[i],
+                                   ys[i], folded[i]), errors)
+            page_y = sections.page(opened).mapTo(panel,
+                                                 QtCore.QPoint(0, 0)).y()
+            check(page_y > ys[opened],
+                  "the open %s page does not sit under its own header (%r vs "
+                  "%r)" % (SECTION_TITLES[opened], page_y, ys[opened]),
+                  errors)
+            if opened + 1 < sections.count():
+                check(page_y < ys[opened + 1],
+                      "the %s page runs over the %s header (%r vs %r)"
+                      % (SECTION_TITLES[opened], SECTION_TITLES[opened + 1],
+                         page_y, ys[opened + 1]), errors)
+            check(all(not sections.page(i).isVisible()
+                      for i in range(sections.count()) if i != opened),
+                  "opening %s left another section open too"
+                  % SECTION_TITLES[opened], errors)
+            # -- folding it again puts every header back ---------------
+            sections.toggle(opened)          # a second click on the header
+            Gui.updateGui()
+            check(sections.current_index() == SECTION_NONE,
+                  "clicking the open header did not fold %s"
+                  % SECTION_TITLES[opened], errors)
+            check(header_ys() == folded,
+                  "folding %s left the headers somewhere else: %s (folded "
+                  "baseline %s)" % (SECTION_TITLES[opened], header_ys(),
+                                     folded), errors)
+
+        sections.open(SECTION_EDGE)          # as the panel opens
+        Gui.updateGui()
+        check(panel.open_section() == SECTION_EDGE,
+              "the panel does not open on the Edge section (%r)"
+              % panel.open_section(), errors)
+        checks.append("header/content pairs: %s in fixed order, each page "
+                      "under its own header, folding is in place, all-folded "
+                      "is a real state" % " / ".join(sections.header_titles()))
+    finally:
+        _close_panel(panel)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_panel_lands_in_the_native_task_panel,
     test_toolbox_is_a_three_section_accordion,
@@ -3041,6 +3190,7 @@ ALL_TESTS = [
     test_split_warning_only_fires_on_a_wholesale_discard,
     test_hint_is_out_of_the_way_and_still_reachable,
     test_panel_fits_a_narrow_dock_and_lists_stay_small,
+    test_sections_are_header_content_pairs_not_a_toolbox,
     test_enter_in_a_band_editor_commits_then_confirms,
     test_in_progress_band_edit_is_committed_not_dropped_by_a_refresh,
     test_no_production_module_knows_the_panel,
