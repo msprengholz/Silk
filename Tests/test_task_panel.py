@@ -39,12 +39,20 @@ What is asserted here:
      space above the accordion but still reachable;
   12. #73: no "chain complete" notification -- the footer hint label is
       hidden on a fully blended document, and visible with its pinned
-      wording while a seam is still blendable.
+      wording while a seam is still blendable;
+  13. #75: a band width at or past the middle of the patch is not a
+      width the panel can store and read back, so neither the write path
+      nor either editor offers it -- closed at BOTH ends of the axis and
+      by BOTH ways of reaching the midpoint (typing it, arrow-stepping
+      onto it).
 
 Fixture helpers are imported, not refactored: the square / sharing /
 stray builders and the console capture from Tests.test_seam_resolver,
 the ground-truth chain from Tests.test_blend_stage, the loop/triangle
-edge builders from Tests.test_patch_gui_command.
+edge builders from Tests.test_patch_gui_command. The one local builder
+is `_stacked_pair`: #75 has to reach the parametric-0 and the
+parametric-1 end in ONE row, and `_patch_sharing` resolves its shared
+edge to the 0-end on both of its patches.
 """
 import os
 
@@ -2222,6 +2230,303 @@ def test_band_edit_validation_is_per_patch(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def _stacked_pair(doc):
+    """Two patches stacked so they share ONE edge without overlapping.
+
+    `_patch_sharing` (test_seam_resolver) builds the second patch from the
+    other three sides of the SAME square, so both patches occupy the same
+    space and every corner matches every corner -- `patch_side` then
+    resolves the shared edge to whichever corner pair it meets first,
+    which for that fixture pair is the parametric-0 end on BOTH patches.
+    #75 needs both ends in one row: a width is stored as itself at the
+    0-end and as 1 - width at the 1-end, so the midpoint only looks
+    representable if an editor at each end is watched.
+
+    This fixture is a square with a second square standing on its top
+    edge: they touch along that one edge and nowhere else, so the shared
+    edge is A's parametric-1 END and B's parametric-0 end.
+    """
+    from Tests.test_seam_resolver import _line_sketch, _square_patch
+    from SilkWorkflowOps import create_edge, create_patch
+    a = _square_patch(doc, "A")
+    shared = next(e for e in a.Edges
+                  if abs(e.Poles[0][1] - 50.0) < 1e-9
+                  and abs(e.Poles[3][1] - 50.0) < 1e-9)
+    b_edges = [
+        shared,
+        create_edge(_line_sketch(
+            doc, "B_up_sk",
+            [(0, 50, 0), (0, 66.7, 0), (0, 83.3, 0), (0, 100, 0)]),
+            name="B_up"),
+        create_edge(_line_sketch(
+            doc, "B_top_sk",
+            [(0, 100, 0), (16.7, 100, 0), (33.3, 100, 0),
+             (50, 100, 0)]),
+            name="B_top"),
+        create_edge(_line_sketch(
+            doc, "B_down_sk",
+            [(50, 100, 0), (50, 83.3, 0), (50, 66.7, 0),
+             (50, 50, 0)]),
+            name="B_down"),
+    ]
+    b = create_patch(b_edges, name="B")
+    if b is None:
+        raise AssertionError("the stacked-pair fixture did not build")
+    doc.recompute()
+    return a, b, shared
+
+
+def test_band_width_at_the_middle_is_not_stored_even_at_the_1_end(doc):
+    """#75: a width at or past the middle of the patch has NO end of the
+    axis to be stored at, and the panel's own write path must not store
+    one as if it did.
+
+    Driven through `write_band_split` -- the same call the editor makes,
+    not a hand-built split list -- and asserted as a ROUND TRIP: what
+    `band_side` reports after the write is what the editor is seeded
+    from and what the user sees. Before the fix, a written 0.5 stayed on
+    the patch and read back as the 0.1 DEFAULT, so the panel showed a
+    number nobody typed.
+
+    BOTH ends, which is the point of `_stacked_pair`: patch A shares the
+    seam at its parametric-1 end (a width is stored as 1 - width) and
+    patch B at its parametric-0 end (stored as the width), and 0.5 is the
+    identity of that mapping at either end -- so one value that looks
+    perfectly ordinary reaches both editors. `split_at_end` is NOT
+    touched: the midpoint really belongs to neither end, so the write side
+    adapts to it.
+    """
+    errors, checks = [], []
+    from SilkTaskPanel import BAND_A, BAND_B, band_side, band_width_problem, \
+        write_band_split, _side_of
+    from Tests.test_seam_resolver import _Capture
+
+    a, b, shared = _stacked_pair(doc)
+    a_prop, a_ss = _side_of(a, b)          # A: the parametric-1 end
+    b_prop, b_ss = _side_of(b, a)          # B: the parametric-0 end
+    check((a_ss, b_ss) == (1, 0),
+          "the stacked fixture gives ends (ss A=%r, ss B=%r); both are "
+          "needed for #75" % (a_ss, b_ss), errors)
+    entry = {"edge": shared, "patch_a": a, "patch_b": b,
+             "status": "blendable", "blend": None}
+    sides = ((BAND_A, a, a_prop, a_ss), (BAND_B, b, b_prop, b_ss))
+
+    # -- control: an ordinary width IS written and read back at both ends
+    for which, p, prop, ss in sides:
+        stored = 1.0 - 0.45 if ss else 0.45
+        check(write_band_split(entry, which, 0.45),
+              "%s: the panel refused its own seeding width 0.45" % which,
+              errors)
+        check(list(getattr(p, prop)) == [stored],
+              "%s: writing 0.45 stored %r on %s.%s (ss=%d), expected [%g]"
+              % (which, list(getattr(p, prop)), p.Name, prop, ss, stored),
+              errors)
+        check(abs(band_side(entry, which)[3] - 0.45) < 1e-9,
+              "%s: a stored 0.45-wide band reads back as %g -- the reader "
+              "is not merely broken in general, only at the middle"
+              % (which, band_side(entry, which)[3]), errors)
+
+    # -- the midpoint, then the half above it: nothing is stored, and the
+    #    refusal is not silent.
+    for which, p, prop, _ss in sides:
+        before = list(getattr(p, prop))
+        for width in (0.5, 0.55, 0.9):
+            with _Capture() as cap:
+                wrote = write_band_split(entry, which, width)
+            msgs = "".join(cap.errors)
+            check(not wrote,
+                  "%s: write_band_split(0.5) wrote it anyway (%r)"
+                  % (which, list(getattr(p, prop))), errors)
+            check("%g" % width in msgs,
+                  "%s: the refusal for %g does not name the number it "
+                  "refused: %r" % (which, width, msgs), errors)
+            check(list(getattr(p, prop)) == before,
+                  "%s: the refused width %g still moved %s.%s (%r)"
+                  % (which, width, p.Name, prop, list(getattr(p, prop))),
+                  errors)
+        check(abs(band_side(entry, which)[3] - 0.45) < 1e-9,
+              "%s: after the refused write the panel would show %g, not "
+              "the 0.45 the patch holds -- the #75 display bug"
+              % (which, band_side(entry, which)[3]), errors)
+
+    # -- the rule itself, at both ends: 0.5 and everything wider
+    for ss in (0, 1):
+        for width in (0.5, 0.55, 0.9):
+            check(band_width_problem(width, ss) is not None,
+                  "ss=%d: a width of %g is accepted as storable at that end"
+                  % (ss, width), errors)
+        check(band_width_problem(0.45, ss) is None,
+              "ss=%d: a width of 0.45 is refused" % ss, errors)
+    checks.append("0.45 written and read back at both ends; 0.5 / 0.55 / "
+                  "0.9 refused loudly at both ends, patch untouched, "
+                  "round trip intact")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_band_editor_offers_no_width_the_panel_cannot_read_back(doc):
+    """#75, the half the user actually touches: the EDITOR.
+
+    Two reachable paths to the midpoint, both closed by the editor's own
+    domain rather than by a refusal after the fact:
+
+      * TYPING 0.5 (or anything wider) -- an out-of-range number is not
+        accepted at all; the editor keeps showing the width its patch
+        stores, so the display and the property still agree.
+      * ARROW-STEPPING up to it -- the single step is 0.05, so from 0.45
+        the next step lands exactly on 0.50. The range stops below the
+        middle, so the step is clamped at the widest usable width instead
+        of resting on one nothing can read back.
+
+    Asserted on BOTH editors of the row (`_stacked_pair`), i.e. at both
+    ends of the axis, and as a ROUND TRIP through the panel: the value
+    the editor lands on is committed, then read back off the patch.
+    """
+    errors, checks = [], []
+    from SilkTaskPanel import BAND_A, BAND_B, band_label, band_side, \
+        write_band_split, _side_of
+    from Tests.test_seam_resolver import _Capture
+
+    a, b, shared = _stacked_pair(doc)
+    a_prop, a_ss = _side_of(a, b)
+    b_prop, b_ss = _side_of(b, a)
+    entry = {"edge": shared, "patch_a": a, "patch_b": b,
+             "status": "blendable", "blend": None}
+    sides = ((BAND_A, a, a_prop, a_ss), (BAND_B, b, b_prop, b_ss))
+
+    # Seed BOTH patches through the panel's own write path BEFORE the
+    # panel is opened, so the editors mount already holding a width they
+    # can read back -- and assert the probe starts from nothing, since a
+    # leftover split would answer these questions by itself.
+    for which, p, prop, ss in sides:
+        check(not (list(getattr(p, prop) or [])),
+              "%s: the probe does not start clean -- %s.%s already holds %r"
+              % (band_label(which), p.Name, prop,
+                 list(getattr(p, prop) or [])), errors)
+        with _Capture() as cap:
+            seeded = write_band_split(entry, which, 0.45)
+        check(seeded and not cap.errors,
+              "%s: the panel refused its own seeding width 0.45 (%r)"
+              % (band_label(which), cap.errors), errors)
+    doc.recompute()
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.sections.open(2)
+        check(panel.seam_row_index(shared) >= 0,
+              "the shared edge is not a row in the table", errors)
+        for which, p, prop, ss in sides:
+            what = "%s (patch %s.%s, end %d)" % (band_label(which),
+                                                 p.Name, prop, ss)
+            spin = panel.split_editor(shared, which)
+            if not check(spin is not None,
+                         "%s: no band editor mounted" % what, errors):
+                continue
+            # -- state is clean before anything is touched ----------------
+            if not check(abs(spin.value() - 0.45) < 1e-9,
+                         "%s: the editor opens on %g with the patch at %r"
+                         % (what, spin.value(), list(getattr(p, prop))),
+                         errors):
+                continue
+
+            # -- the domain: nothing at or past the middle is on offer --
+            check(spin.maximum() < 0.5,
+                  "%s: the editor offers up to %g, which no end of the "
+                  "axis can store (#75)"
+                  % (what, spin.maximum()), errors)
+            check(spin.minimum() > 0.0,
+                  "%s: the editor offers %g, a zero-width band"
+                  % (what, spin.minimum()), errors)
+
+            # -- TYPED: an ordinary width, first, as the CONTROL ---------
+            # If the keystroke path were not live, the midpoint case
+            # below would "pass" because nothing was ever committed.
+            _type_width(spin, 0.2)
+            with _Capture() as cap:
+                _enter_key(spin.lineEdit())
+            doc.recompute()
+            check(abs(spin.value() - 0.2) < 1e-9
+                  and abs(band_side(entry, which)[3] - 0.2) < 1e-9
+                  and not cap.errors,
+                  "%s: typing 0.2 and pressing Enter did not round-trip "
+                  "(editor %g, read back %g, console %r) -- the keystroke "
+                  "path the midpoint case relies on is not live"
+                  % (what, spin.value(), band_side(entry, which)[3],
+                     cap.errors), errors)
+
+            # -- TYPED: 0.5, then wider ---------------------------------
+            for typed in (0.5, 0.9):
+                # the REAL keystroke path again: type it, press Enter,
+                # which is the editor's own commit (`_commit_spin`, so
+                # the typed text is interpreted exactly once) and then
+                # the confirm.
+                _type_width(spin, typed)
+                before = list(getattr(p, prop) or [])
+                with _Capture() as cap:
+                    _enter_key(spin.lineEdit())
+                doc.recompute()
+                check(abs(spin.value() - 0.2) < 1e-9,
+                      "%s: typing %g left the editor showing %g, which is "
+                      "neither what was typed nor the 0.2 the patch holds"
+                      % (what, typed, spin.value()), errors)
+                check(list(getattr(p, prop) or []) == before,
+                      "%s: typing %g was written to %s.%s anyway: %r"
+                      % (what, typed, p.Name, prop,
+                         list(getattr(p, prop))), errors)
+
+            # -- ARROWS: the step that lands on the midpoint -------------
+            stepped = []
+            spin.setValue(0.45)
+            for _ in range(8):
+                spin.stepBy(1)
+                stepped.append(spin.value())
+            for _ in range(8):
+                spin.stepBy(-1)
+                stepped.append(spin.value())
+            bad = sorted(set(v for v in stepped if v >= 0.5 - 1e-12))
+            check(not bad,
+                  "%s: stepping rested on a width the panel cannot read "
+                  "back: %r" % (what, bad), errors)
+            check(any(abs(v - spin.maximum()) < 1e-9 for v in stepped),
+                  "%s: stepping up never reached the top of the range (%g) "
+                  "-- the arrow path was not really exercised"
+                  % (what, spin.maximum()), errors)
+
+            # -- and what the arrows leave behind survives a refresh ----
+            # A step moves the EDITOR only (no editingFinished comes with
+            # it): it becomes the patch's width when something commits the
+            # edit in flight -- a refresh, or the OK button. So the round
+            # trip is re-read AFTER one, off the re-mounted editor.
+            spin.setValue(0.45)
+            spin.stepBy(1)
+            landed = spin.value()
+            check(abs(landed - spin.maximum()) < 1e-9,
+                  "%s: one step up from 0.45 landed on %g, not the top of "
+                  "the range (%g) -- the arrow path was not exercised"
+                  % (what, landed, spin.maximum()), errors)
+            panel.refresh()
+            remounted = panel.split_editor(shared, which)
+            check(remounted is not None
+                  and abs(remounted.value() - landed) < 1e-9,
+                  "%s: after the step's commit the editor shows %r, not "
+                  "the %g the patch was left with"
+                  % (what, None if remounted is None else remounted.value(),
+                     landed), errors)
+            check(abs(band_side(entry, which)[3] - landed) < 1e-9,
+                  "%s: the arrow's %g reads back as %g off %s.%s"
+                  % (what, landed, band_side(entry, which)[3], p.Name, prop),
+                  errors)
+        checks.append("both editors typed 0.5 / 0.9 (not accepted, patch "
+                      "and panel in agreement) and stepped through the "
+                      "midpoint without resting on it; the top of the "
+                      "range round-trips at both ends")
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 def test_asymmetric_band_widths_blend_green_and_differ_from_symmetric(doc):
     """A != B is reachable now, and it has to WORK (#69).
 
@@ -3278,6 +3583,9 @@ ALL_TESTS = [
     # #69
     test_two_band_editors_start_equal_and_name_their_own_patch,
     test_band_edit_validation_is_per_patch,
+    # #75
+    test_band_width_at_the_middle_is_not_stored_even_at_the_1_end,
+    test_band_editor_offers_no_width_the_panel_cannot_read_back,
     test_asymmetric_band_widths_blend_green_and_differ_from_symmetric,
     test_setting_both_editors_to_the_same_value_writes_both,
     test_blocked_row_is_not_actionable_and_has_no_editor,
