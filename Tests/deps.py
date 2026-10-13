@@ -131,7 +131,12 @@ def changed_files(ref=None):
     """Files changed relative to `ref` (default: the working tree vs HEAD).
 
     Staged, unstaged and brand-new-untracked all count, because all three
-    can break a test."""
+    can break a test -- with ONE exception: an untracked file that is not
+    Python cannot break a test module's imports, and treating a stray
+    `opencode.json` or editor backup as an unmappable change would make
+    `--changed` fall back to the whole suite on every ordinary run, which
+    is the same as not having the flag.
+    """
     try:
         out = subprocess.run(["git", "diff", "--name-only", ref or "HEAD"],
                              cwd=MOD_DIR, capture_output=True, text=True,
@@ -139,10 +144,11 @@ def changed_files(ref=None):
         out += subprocess.run(["git", "diff", "--name-only", "--cached"],
                               cwd=MOD_DIR, capture_output=True, text=True,
                               timeout=30).stdout.split()
-        out += subprocess.run(["git", "ls-files", "--others",
-                               "--exclude-standard"],
-                              cwd=MOD_DIR, capture_output=True, text=True,
-                              timeout=30).stdout.split()
+        untracked = subprocess.run(["git", "ls-files", "--others",
+                                    "--exclude-standard"],
+                                   cwd=MOD_DIR, capture_output=True,
+                                   text=True, timeout=30).stdout.split()
+        out += [p for p in untracked if p.endswith(".py")]
     except (OSError, subprocess.SubprocessError):
         return None
     return sorted(set(out))

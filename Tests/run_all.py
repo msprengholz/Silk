@@ -306,9 +306,18 @@ def main():
     # Positional args are test filters; a flag's value is not one.
     skip = {"--rss-warn"}
     args = []
+    # --changed's ref is OPTIONAL. It has to be consumed explicitly: a
+    # bare `--changed` is skipped by the startswith("--") rule below, but
+    # its VALUE is not, so `run_all.py --changed HEAD~1` passed "HEAD~1"
+    # through as a test filter, matched no test, and reported 0/0 without
+    # ever saying anything had gone wrong.
     rest = sys.argv[1:]
     while rest:
         arg = rest.pop(0)
+        if arg == "--changed":
+            if rest and not rest[0].startswith("--"):
+                rest.pop(0)
+            continue
         if arg in skip:
             rest.pop(0)  # drop the flag's value
             continue
