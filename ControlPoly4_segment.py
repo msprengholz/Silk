@@ -125,4 +125,10 @@ class ControlPoly4_segment():
 	  			'MenuText': 'ControlPoly4_segment',
 				'ToolTip': tooltip}
 
-Gui.addCommand('ControlPoly4_segment', ControlPoly4_segment())
+# #72: the `Gui.addCommand(...)` this module used to run at IMPORT time
+# is gone. FreeCAD keeps one Python instance per registered command, and
+# that instance pins this module's globals -- which pin ArachNURBS -- for
+# the life of the process. Re-importing on every reload therefore minted a
+# fresh ArachNURBS per run that could never be freed (~600 MB per run,
+# measured). The command is retired (#50: LEGACY_NAMES 'none may reappear');
+# old documents restore from the CLASS below, which is untouched.

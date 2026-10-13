@@ -41,4 +41,10 @@ class CubicNStarSurface_NStar66():
 	def GetResources(self):
 		return {'Pixmap' :  path_Silk_icons + '/CubicNStarSurface_NStar66.svg', 'MenuText': 'CubicNStarSurface_NStar66', 'ToolTip': 'Creates a CubicNStar_66 from ControlGridNStar66. \n Select one ControlGridNStar66. \n    \n • Used for filling the corner of blended Silk surfaces'}
 
-Gui.addCommand('CubicNStarSurface_NStar66', CubicNStarSurface_NStar66())
+# #72: the `Gui.addCommand(...)` this module used to run at IMPORT time
+# is gone. FreeCAD keeps one Python instance per registered command, and
+# that instance pins this module's globals -- which pin ArachNURBS -- for
+# the life of the process. Re-importing on every reload therefore minted a
+# fresh ArachNURBS per run that could never be freed (~600 MB per run,
+# measured). The command is retired (#50: LEGACY_NAMES 'none may reappear');
+# old documents restore from the CLASS below, which is untouched.

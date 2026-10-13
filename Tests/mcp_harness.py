@@ -53,10 +53,21 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
     inspection) and prints the list of open documents at the end.
 
     Prints a single JSON line "RESULT:<json>" at the end for agent parsing.
+
+    #72: this frame can outlive the run -- FreeCAD keeps the traceback of
+    an exception raised inside a document-closing slot, and a traceback
+    keeps every frame. A retained run_tests frame holds test_funcs (so
+    the whole Tests module generation) and _patch_dialogs' `saved` list
+    of (module, popup.tipsDialog) pairs, which pins every Silk module it
+    ran against. Purging sys.modules cannot free any of that, which is
+    how whole module generations stayed alive as orphans. Dropping the
+    references when the work is done costs nothing and keeps the
+    generation collectable no matter who holds the frame.
     """
     results = []
     open_docs = []
     saved = _patch_dialogs()
+    func = doc = outcome = None
     try:
         for func in test_funcs:
             doc = None
@@ -93,7 +104,16 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
                         except Exception:
                             pass  # the test closed its own document
     finally:
-        _restore_dialogs(saved)
+        try:
+            _restore_dialogs(saved)
+        finally:
+            # Nothing below may reference the modules this run loaded.
+            saved = None
+            func = None
+            doc = None
+            outcome = None
+            test_funcs = ()
+            del saved, func, doc, outcome, test_funcs
 
     passed = sum(1 for r in results if r.get("pass"))
     failed = len(results) - passed

@@ -43,4 +43,10 @@ class StarTrim_CubicNStar():
 	  			'MenuText': 'StarTrim_CubicNStar', 
 				'ToolTip': 'Create a StarTrim_CubicNStar object from a CubicNStarSurface_NStar66 object. \n Select one CubicNStarSurface_NStar66. \n \n • Useful for eliminating pinch in poor corner geometry, and can be patched with \n   a standard Filling Surface'}
 
-Gui.addCommand('StarTrim_CubicNStar', StarTrim_CubicNStar())
+# #72: the `Gui.addCommand(...)` this module used to run at IMPORT time
+# is gone. FreeCAD keeps one Python instance per registered command, and
+# that instance pins this module's globals -- which pin ArachNURBS -- for
+# the life of the process. Re-importing on every reload therefore minted a
+# fresh ArachNURBS per run that could never be freed (~600 MB per run,
+# measured). The command is retired (#50: LEGACY_NAMES 'none may reappear');
+# old documents restore from the CLASS below, which is untouched.
