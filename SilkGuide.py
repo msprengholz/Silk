@@ -33,7 +33,18 @@ from SilkBlend import PATCH_TYPES, BLEND_TYPES
 HINT_CREATE_EDGE = "select sketches and create edges (Silk_CreateEdge)"
 HINT_CREATE_PATCH = "create patches from 3-4 edges (Silk_CreatePatch)"
 HINT_BLEND = "select a blendable seam to blend"
-HINT_COMPLETE = "chain complete (%d edges, %d patches, %d blends)"
+#    #73 DELETED a fourth constant, HINT_COMPLETE ("chain complete (N
+#    edges, M patches, K blends)"). It was the only one of these that was
+#    not an ACTION: it named a property of the document, announced a
+#    terminal state, and so implied that every seam ought to be blended.
+#    That is not true -- blending is the user's choice per seam, and a
+#    corner box legitimately has seams they intend to leave alone -- so
+#    the report asked for no notification at all. Case 3 therefore
+#    returns the EMPTY hint and the panel hides its footer line. Nothing
+#    replaced it: falling through to HINT_CREATE_PATCH would be a
+#    different nag, not the absence of one. The `complete` FLAG survives
+#    the string -- it is data, and "no blendable seam left" is a real
+#    distinction the tests read.
 
 
 def _count(doc, types):
@@ -54,6 +65,7 @@ def compute_guide_state(doc=None):
 
       {
         "hint":       "<one-line next action>",   # see HINT_* above
+                     #   or "" when there is nothing to ask for (#73)
         "counts":     {"edges": N, "patches": N, "blends": N},
         "seams":      [ ... #44 seam_inventory entries, unchanged ... ],
         "seam_counts":{"total": N, "blendable": N, "blended": N,
@@ -69,12 +81,26 @@ def compute_guide_state(doc=None):
     can show "N of M seams blended" without re-walking the list; it
     carries no information the entries do not.
 
-    Hint precedence (most useful next action first -- the pinned four):
+    Hint precedence (most useful next action first -- the pinned three,
+    plus the empty case):
       1. no Edges at all                       -> HINT_CREATE_EDGE
       2. at least one `blendable` seam        -> HINT_BLEND
-      3. no blendable seam left AND >= 1 blend-> "chain complete (...)"
+      3. no blendable seam left AND >= 1 blend-> "" (nothing to ask for)
                                                 and complete=True
       4. otherwise                            -> HINT_CREATE_PATCH
+
+    Case 3 returns the EMPTY string, not a fourth pinned hint (#73). The
+    footer used to announce "chain complete (N edges, M patches, K
+    blends)" here, and that was the only one of the four that was not an
+    ACTION: it named a property of the document and announced a terminal
+    state, implying the chain is supposed to end there. It is not --
+    blending is optional per seam, so a user who deliberately leaves a
+    seam open is not "incomplete" and must not be told they are done.
+    Hence no notification, and specifically NOT a fall-through to
+    HINT_CREATE_PATCH either: the human asked for silence, not a
+    different nag (a document of 3 patches and 2 blends needs no further
+    patch). A caller rendering `hint` must treat "" as "show nothing" --
+    an empty QLabel in a layout still occupies a line of height.
 
     Consequence of that ordering, stated so it is not a surprise: a
     document that already holds blends but has just gained a fresh
@@ -86,13 +112,15 @@ def compute_guide_state(doc=None):
     still the only action that can ever produce a seam.
 
     `complete` means: "no blendable seam is left and at least one blend
-    exists". A BLOCKED seam (three or more patches referencing one edge
-    -- non-manifold, waiting on the deferred corner fill) does NOT
-    prevent completion: it is not blendable, so it is not outstanding
-    work, and refusing to call the chain complete would leave the panel
-    hinting at an action that has no implementation. Blocked seams stay
-    visible through the "seams" pass-through and the seam_counts roll-up,
-    so a panel can still surface them.
+    exists". #73 kept this flag and deleted only the string: the fact is
+    data and the wording was a judgement call. A BLOCKED seam (three or
+    more patches referencing one edge -- non-manifold, waiting on the
+    deferred corner fill) does NOT prevent completion: it is not
+    blendable, so it is not outstanding work, and refusing to call the
+    chain complete would leave the panel hinting at an action that has
+    no implementation. Blocked seams stay visible through the "seams"
+    pass-through and the seam_counts roll-up, so a panel can still
+    surface them.
     """
     doc = doc if doc is not None else FreeCAD.ActiveDocument
     counts = {
@@ -111,8 +139,11 @@ def compute_guide_state(doc=None):
     elif by_status["blendable"]:
         hint = HINT_BLEND
     elif counts["blends"] >= 1:
-        hint = HINT_COMPLETE % (counts["edges"], counts["patches"],
-                                counts["blends"])
+        # #73: nothing left to ask for. The empty hint, NOT the pinned
+        # "chain complete (...)" and NOT a fall-through to
+        # HINT_CREATE_PATCH -- the user may never wish to blend every
+        # seam, so a terminal state is not a thing to announce.
+        hint = ""
         complete = True
     else:
         hint = HINT_CREATE_PATCH

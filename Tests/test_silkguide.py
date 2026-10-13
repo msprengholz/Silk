@@ -15,11 +15,21 @@ Pinned hint semantics (all four asserted verbatim below):
   no edges                 -> "select sketches and create edges ..."
   edges, nothing blendable -> "create patches from 3-4 edges ..."
   a blendable seam exists  -> "select a blendable seam to blend"
-  none left + a blend      -> "chain complete (N edges, M patches, K blends)"
+  none left + a blend      -> "" (no hint at all -- see below)
+
+#73 removed the fourth string, "chain complete (N edges, M patches, K
+blends)". It was the only one of the four that was not an ACTION: it
+announced a terminal state, which implies every seam ought to be blended.
+It is not -- blending is optional per seam, so a user who deliberately
+leaves a seam open should never be told they are "done". Case 3 now
+returns an EMPTY hint and the panel hides the footer line when the hint
+is empty. `complete` STAYS a flag on the returned dict: the hint went, the
+fact stayed. The other three hints are untouched -- pinned wording, they
+name an action, and they were not reported.
 
 Documented decisions pinned by tests here:
   * a document with blends but a FRESH unblended seam is NOT complete
-    (the blend hint outranks the complete hint);
+    (the blend hint outranks the empty hint);
   * a BLOCKED (non-manifold) seam does NOT prevent `complete`: it is not
     blendable, so it is not outstanding blend work, and no action exists
     for it until the deferred corner fill lands;
@@ -37,9 +47,10 @@ from Tests.test_seam_resolver import (
     _Capture, _square_patch, _patch_sharing, _stray_edge,
 )
 
+import SilkGuide
 from SilkGuide import (
     compute_guide_state, HINT_CREATE_EDGE,
-    HINT_CREATE_PATCH, HINT_BLEND, HINT_COMPLETE,
+    HINT_CREATE_PATCH, HINT_BLEND,
 )
 
 
@@ -155,7 +166,14 @@ def test_guide_state_blendable_seam(doc):
 
 def test_guide_state_chain_complete(doc):
     """Blend the one seam -> no blendable seam left and a blend exists ->
-    the complete hint with the real counts, complete=True."""
+    NO hint at all (#73) and complete=True.
+
+    The hint goes, the fact stays: `complete` is data and is asserted
+    here, while the hint is the empty string the panel must render as no
+    footer line. The old "chain complete (N edges, M patches, K blends)"
+    is pinned dead -- it is the only one of the four that was not an
+    action, and it told the user they were done when blending every seam
+    is their choice, not the workflow's goal."""
     errors, checks = [], []
     import SilkWorkflowOps as ops
 
@@ -170,19 +188,26 @@ def test_guide_state_chain_complete(doc):
         return {"pass": False, "errors": errors, "checks": checks}
 
     state = compute_guide_state(doc)
-    want = HINT_COMPLETE % (state["counts"]["edges"],
-                           state["counts"]["patches"],
-                           state["counts"]["blends"])
-    if state["hint"] != want:
-        errors.append("complete hint is %r, want %r"
-                      % (state["hint"], want))
-    checks.append("hint: %r" % state["hint"])
+    if state["hint"] != "":
+        errors.append("a fully blended document still hints %r -- #73: the "
+                      "chain-complete case announces a terminal state and "
+                      "the user may never wish to blend every seam, so the "
+                      "hint must be empty"
+                      % (state["hint"],))
+    checks.append("hint: %r (empty, #73)" % state["hint"])
     if not state["complete"]:
         errors.append("fully blended document reports complete=False")
     if state["seam_counts"] != {"total": 1, "blendable": 0, "blended": 1,
                                 "blocked": 0}:
         errors.append("seam_counts after blending is %r"
                       % (state["seam_counts"],))
+    # The word is gone from the module, not just from this fixture: no
+    # constant, and no fallback nag behind the empty hint.
+    if hasattr(SilkGuide, "HINT_COMPLETE"):
+        errors.append("SilkGuide still exports HINT_COMPLETE=%r -- #73 "
+                      "deleted it with the string"
+                      % SilkGuide.HINT_COMPLETE)
+    checks.append("HINT_COMPLETE is gone; the hint is the empty string")
     checks.append("complete=%s seam_counts=%r"
                   % (state["complete"], state["seam_counts"]))
     return {"pass": not errors, "errors": errors, "checks": checks}
@@ -247,10 +272,9 @@ def test_guide_state_scales_to_many_patches(doc):
         return {"pass": False, "errors": errors, "checks": checks}
 
     state = compute_guide_state(doc)
-    want = HINT_COMPLETE % (10, 3, 2)
-    if state["hint"] != want:
-        errors.append("completed chain hint is %r, want %r"
-                      % (state["hint"], want))
+    if state["hint"] != "":
+        errors.append("completed chain hint is %r, want the empty hint "
+                      "(#73)" % (state["hint"],))
     if not state["complete"]:
         errors.append("fully blended 3-patch chain reports complete=False")
     if state["counts"] != {"edges": 10, "patches": 3, "blends": 2}:
@@ -322,10 +346,8 @@ def test_guide_state_blocked_seam_does_not_block_completion(doc):
         errors.append("a document whose only remaining seam is BLOCKED "
                       "reports complete=False -- blocked seams must not "
                       "prevent completion (documented decision)")
-    if state["hint"] != HINT_COMPLETE % (state["counts"]["edges"],
-                                         state["counts"]["patches"],
-                                         state["counts"]["blends"]):
-        errors.append("blocked-only hint is %r, want the complete hint"
+    if state["hint"] != "":
+        errors.append("blocked-only hint is %r, want the empty hint (#73)"
                       % state["hint"])
     if state["seam_counts"]["blocked"] != 1:
         errors.append("the blocked seam disappeared from the roll-up: %r"

@@ -36,7 +36,10 @@ What is asserted here:
      property editor's transient `0` on the way to `0.2` is silent;
  11. the panel's own layout: no width floor, capped collection lists with
      a greyed placeholder, and the next-step guidance out of the prime
-     space above the accordion but still reachable.
+     space above the accordion but still reachable;
+  12. #73: no "chain complete" notification -- the footer hint label is
+      hidden on a fully blended document, and visible with its pinned
+      wording while a seam is still blendable.
 
 Fixture helpers are imported, not refactored: the square / sharing /
 stray builders and the console capture from Tests.test_seam_resolver,
@@ -2623,6 +2626,97 @@ def test_hint_is_out_of_the_way_and_still_reachable(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_complete_chain_hides_the_footer_hint(doc):
+    """#73: there is no "chain complete" notification.
+
+    Two halves, and both matter. The footer label must be INVISIBLE (not
+    merely empty -- an empty QLabel in a QVBoxLayout keeps a line of
+    height, which is the dead space the report is about) once no blendable
+    seam is left and a blend exists. And it must be visible with its
+    pinned wording one seam earlier, so this is a hide-when-empty rule
+    and not a footer that never renders."""
+    errors, checks = [], []
+    from SilkGuide import HINT_BLEND
+    from Tests.test_seam_resolver import _Capture, _build_tube
+
+    # Two patches sharing TWO seams: blending the first leaves one seam
+    # blendable (the hint must show), blending the second leaves none
+    # (the footer must disappear). Driven through the panel's own table
+    # row and confirm, so the real render path runs.
+    pa, pb, s_left, s_right = _build_tube(doc)
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.sections.open(2)
+        Gui.updateGui()
+        hint = panel.hint_lbl
+        check(hint.isVisible(),
+              "with a blendable seam the footer hint is not visible at all",
+              errors)
+        check(panel.hint_text() == HINT_BLEND,
+              "with a blendable seam the hint reads %r, want the pinned "
+              "blend hint %r" % (panel.hint_text(), HINT_BLEND), errors)
+        checks.append("one seam open: hint visible and reads %r"
+                      % panel.hint_text())
+
+        # -- blend the first seam through the panel ---------------------
+        row = panel.seam_row_index(s_left)
+        check(row >= 0, "seam %s has no row" % s_left.Name, errors)
+        panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
+        with _Capture() as cap:
+            panel.panel_confirm()
+        doc.recompute()
+        errors += ["console error: %s" % e for e in cap.errors]
+        Gui.updateGui()
+        check(len(_blend_objects(doc)) == 1,
+              "the first confirm created %d blend(s), expected 1"
+              % len(_blend_objects(doc)), errors)
+        check(hint.isVisible(),
+              "with one seam still blendable the footer hint went hidden",
+              errors)
+        check(panel.hint_text() == HINT_BLEND,
+              "after the first blend the hint reads %r, want %r"
+              % (panel.hint_text(), HINT_BLEND), errors)
+        checks.append("one blend, one seam open: hint still visible (%r)"
+                      % panel.hint_text())
+
+        # -- blend the second: the chain is complete, the footer goes ---
+        panel.refresh()
+        Gui.updateGui()
+        row = panel.seam_row_index(s_right)
+        check(row >= 0, "seam %s has no row after the first blend"
+              % s_right.Name, errors)
+        panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
+        with _Capture() as cap:
+            panel.panel_confirm()
+        doc.recompute()
+        errors += ["console error: %s" % e for e in cap.errors]
+        Gui.updateGui()
+        check(len(_blend_objects(doc)) == 2,
+              "the second confirm created %d blend(s), expected 2"
+              % len(_blend_objects(doc)), errors)
+
+        from SilkGuide import compute_guide_state
+        state = compute_guide_state(doc)
+        check(state["complete"] and state["hint"] == "",
+              "the fully blended document is not (complete=%r, hint=%r)"
+              % (state["complete"], state["hint"]), errors)
+        check(hint.text() == "",
+              "the footer label still reads %r on a complete chain -- the "
+              "notification is gone, not re-worded" % hint.text(), errors)
+        check(not hint.isVisible(),
+              "the footer hint label is still VISIBLE (text %r) on a fully "
+              "blended document -- an empty QLabel keeps a line of height, "
+              "so it must be hidden" % hint.text(), errors)
+        checks.append("fully blended: hint %r and the footer label is hidden"
+                      % hint.text())
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 def test_panel_fits_a_narrow_dock_and_lists_stay_small(doc):
     """The layout facts that #62's geometry numbers got wrong.
 
@@ -3189,6 +3283,8 @@ ALL_TESTS = [
     test_blocked_row_is_not_actionable_and_has_no_editor,
     test_split_warning_only_fires_on_a_wholesale_discard,
     test_hint_is_out_of_the_way_and_still_reachable,
+    # #73
+    test_complete_chain_hides_the_footer_hint,
     test_panel_fits_a_narrow_dock_and_lists_stay_small,
     test_sections_are_header_content_pairs_not_a_toolbox,
     test_enter_in_a_band_editor_commits_then_confirms,

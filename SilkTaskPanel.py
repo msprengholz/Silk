@@ -720,6 +720,10 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         f.setItalic(True)
         self.hint_lbl.setFont(f)
         self.hint_lbl.setEnabled(False)      # muted: not an input
+        # #73: it starts with no text, so it starts hidden -- an empty
+        # label still occupies a line of footer height until the first
+        # refresh decides there is something to say.
+        self.hint_lbl.setVisible(False)
         self.hint_lbl.setToolTip(HINT_TOOLTIP)
         form.addWidget(self.hint_lbl)
         self.setToolTip(HINT_TOOLTIP)
@@ -1154,6 +1158,20 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
 
     # ---- refresh (panel-side only, settled Q16b) -----------------------
 
+    def _set_hint(self, text):
+        """Render the next-step hint in the footer -- THE one place that
+        does, so text and visibility can never disagree.
+
+        #73: `text` may be EMPTY, because the guide has one case with no
+        hint (nothing left to ask for -- the user need never blend every
+        seam). An empty QLabel is NOT zero-height in a QVBoxLayout: left
+        visible it would sit there as a dead line of footer height, which
+        is the space the report was about. So empty hides, non-empty
+        shows, and the flag follows the text rather than the panel's
+        state."""
+        self.hint_lbl.setText(text)
+        self.hint_lbl.setVisible(bool(text))
+
     def refresh(self):
         """Re-derive EVERYTHING from the document. The one refresh path:
         nothing here reads a stored stage."""
@@ -1165,7 +1183,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         if self.doc is None or self.doc.Name not in FreeCAD.listDocuments():
             return
         state = compute_guide_state(self.doc)
-        self.hint_lbl.setText(state["hint"])
+        self._set_hint(state["hint"])
         self._render_lists()
         self._render_table(state["seams"], state["seam_counts"])
         self.sync_ok_enabled()
