@@ -387,55 +387,51 @@ def split_at_end(splits, ss):
 def split_limit_problem(values):
     """Why `values` may not be STORED as one axis' splits, or None. #76.
 
-    THE RULE: an axis carries at most ONE split below the middle and at
-    most ONE above it. Finer than "at most two", and it has to be -- each
-    split is the far edge of ONE band's interval, and an axis has one
-    interval per end that a band may carve, so `[0.2, 0.8]` is two bands
-    (one per end, legal) while `[0.2, 0.3]` is two bands that both want to
-    be at the SAME end and only the outermost of which any reader could
-    ever find (`split_at_end` reads the lowest / the highest and no
-    other). The midpoint 0.5 belongs to neither end and is never counted,
-    so `[0.1, 0.5, 0.9]` -- three splits, and what `ensure_band_split`
-    writes onto an axis that already carried a plain mid-surface
-    subdivision -- stays legal.
+    THE RULE: at most TWO splits on one axis.
 
-    Why it matters, and why a silent correction is not good enough: past
-    the limit the result is not wrong so much as INVISIBLE. An extra
-    split on the band axis is absorbed without a word and the corner
-    blend quietly picks a different subgrid cell; an extra split on the
-    seam-parallel axis makes the band span cells the blend refuses, and
-    the refusal leaves the Blend's Poles byte-identical to the previous
-    run while the Patch reports itself Up-to-date and Valid. So this is a
-    REFUSAL (SilkPatch puts the axis back and flags the object), not a
-    truncation: which of two same-side splits to keep is a guess, and it
-    is a guess about a band WIDTH.
+    It was first written FINER -- one below 0.5 and one above -- and the
+    human hit it within minutes, because it refused `[0.2, 0.4]`, two
+    ordinary subdivision values they were simply trying to store. There
+    was no principle behind that refusal. A split list is ordered surface
+    subdivisions, `0 < u1 < u2 < 1`, and `normalize_splits` already
+    enforces range, order and duplicates. `[0.2, 0.4]` is legal, and a
+    regression that rejects ordinary input is worse than the silent case
+    it was meant to prevent.
 
-    Per VALUE, through `split_end` -- the same classification the band,
-    the corner-cell exclusion and the panel use, so this limit can never
-    disagree with them about which end a split belongs to.
+    Why there is a limit at all: past two, results are invisible rather
+    than wrong. An extra split on the band axis is absorbed without a word
+    and `SilkCorner._corner_cell` quietly starts picking a different
+    subgrid cell; on the seam-parallel axis it makes the band span cells
+    the blend refuses, and that refusal leaves the Blend's Poles
+    byte-identical while the Patch reports itself Up-to-date and Valid --
+    no tree marker, no stale flag. Hence a REFUSAL (SilkPatch puts the
+    axis back and flags the object) rather than a truncation: with three
+    values there is no principled one to drop, and silently dropping one
+    changes the geometry while saying nothing.
+
+    KNOWN GAP -- a full axis cannot gain a band split. `ensure_band_split`
+    writes only where `split_at_end` returns None, and `split_at_end`
+    classifies by VALUE (below 0.5 -> end 0, above -> end 1, exactly 0.5
+    -> neither). So on `[0.2, 0.4]` it reports NO band at the 1 end, even
+    though 0.4 is plainly the far edge of the [0.4, 1.0] band, and the
+    blend then tries to write a third split -- which this rule refuses, and
+    the patch goes Invalid. Tracked as #81: the fix is to make
+    `split_at_end` POSITIONAL for two splits (lower is the 0 end's, upper
+    is the 1 end's, which is what the human's own reading is), but that
+    changes band geometry for every layout containing 0.5 and needs its
+    own review rather than a drive-by fix here.
     """
     s = normalize_splits(list(values))
-    over = [(ss, [v for v in s if split_end(v) == ss]) for ss in (0, 1)]
-    over = [(ss, mine) for ss, mine in over if len(mine) > 1]
-    if not over:
+    if len(s) <= 2:
         return None
-    why = "; ".join("%s of them (%s) sit %s the middle"
-                    % (len(mine), ", ".join("%g" % v for v in mine),
-                       "below" if ss == 0 else "above")
-                    for ss, mine in over)
-    return ("%s -- one axis carries at most one split below 0.5 and one "
-            "above it: %s. Each split is the far edge of one band, and an "
-            "axis has one band per end, so a second split at the same end "
-            "is a width no reader could find (`split_at_end` reads the "
-            "lowest split at the 0 end and the highest at the 1 end). "
-            "Past the limit the result is invisible -- the corner blend "
-            "picks a different cell, or a band spans cells the blend "
-            "silently refuses -- so the list was not stored and the axis "
-            "keeps what it had. The midpoint 0.5 belongs to neither end "
-            "and is fine alongside either."
-            % (_splits_str(s), why))
-
-
+    return ("%s -- an axis carries at most two splits (0 < u1 < u2 < 1). "
+            "Past two the result is invisible rather than wrong: the corner "
+            "blend picks a different subgrid cell, or the band spans cells "
+            "the blend refuses while this patch still reports itself "
+            "Up-to-date and Valid. With three values there is no principled "
+            "one to drop, so the list was not stored and the axis keeps "
+            "what it had."
+            % ("[%s]" % ", ".join("%g" % v for v in s)))
 def corner_cells(splits, n_intervals):
     """Interval indices along one axis that are CORNER cells — reserved
     for the four-cell corner blend op (#28) and excluded from a band.

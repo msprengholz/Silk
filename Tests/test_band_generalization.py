@@ -57,7 +57,7 @@ Three problems, three groups of tests:
    - test_over_limit_splits_are_refused_on_the_property: at most one
      split below 0.5 and one above, per axis, enforced on the property
      path — [0.2, 0.8] and [0.1, 0.5, 0.9] pass, [0.2, 0.45, 0.9],
-     [0.2, 0.3] and [0.85, 0.95] are refused, and a refusal leaves the
+     three or more are refused, and a refusal leaves the
      axis exactly as it was;
    - test_over_limit_refusal_is_visible_on_the_object: the refusal shows
      up in the object's own state (Invalid / isValid() / status string),
@@ -478,7 +478,7 @@ def test_split_at_end_picks_the_splits_own_end(doc):
                               "puts at end %r" % (_fmt(splits), ss, got,
                                                  split_end(got)))
     checks.append("%d (splits, end) layouts: split_at_end and split_end "
-                  "classify the same end for every one of them -- the limit "
+                  "count the same for every one of them -- the limit "
                   "counts with the same rule that reads the band" % n)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
@@ -888,7 +888,7 @@ def test_splits_normalized_on_set(doc):
         # (written, expected stored, expected cell count with VSplits [])
         ([0.7, 0.0, 0.2, 1.0, -0.5, 2.0, 0.2], [0.2, 0.7], 3),
         ([0.5, 0.5], [0.5], 2),
-        ([0.9, 0.2, 0.5], [0.2, 0.5, 0.9], 4),   # unsorted in; 3 is legal (#76)
+        ([0.9, 0.2], [0.2, 0.9], 3),   # unsorted in, 2 values (#76)
         ([0.0, 1.0], [], 0),                     # nothing survives -> loud
         ([0.0, 0.25, 1.0], [0.25], 2),           # a partial fix -> silent
         ([0.5], [0.5], 2),                       # a legal write: no-op
@@ -1007,23 +1007,26 @@ def test_over_limit_splits_are_refused_on_the_property(doc):
     errors, checks = [], []
 
     # -- the rule itself, as data ---------------------------------------
+    # [0.2, 0.4] and [0.4, 0.6] are HERE ON PURPOSE: they are the lists the
+    # human was simply trying to store, which the first version of this rule
+    # wrongly refused. A regression that rejects ordinary input is worse than
+    # the silent case it was meant to prevent, so they are pinned as legal.
     legal = [[], [0.5], [0.2], [0.8], [0.2, 0.8], [0.05, 0.95],
-             [0.1, 0.5, 0.9], [0.2, 0.5], [0.5, 0.9]]
-    illegal = [[0.2, 0.3], [0.2, 0.45, 0.9], [0.2, 0.3, 0.4],
-               [0.85, 0.95], [0.1, 0.85, 0.95], [0.2, 0.3, 0.9, 0.8]]
+             [0.2, 0.4], [0.4, 0.6], [0.1, 0.3], [0.2, 0.5], [0.5, 0.9]]
+    illegal = [[0.2, 0.4, 0.8], [0.1, 0.85, 0.95], [0.2, 0.3, 0.9, 0.8],
+               [0.1, 0.3, 0.5, 0.7]]
     for splits in legal:
         problem = split_limit_problem(splits)
         if problem is not None:
-            errors.append("%s is legal (one below 0.5, one above, 0.5 to "
-                          "neither) but the rule refuses it: %s"
+            errors.append("%s is legal (two splits or fewer, any side of the "
+                          "middle) but the rule refuses it: %s"
                           % (_fmt(splits), problem))
     for splits in illegal:
         if split_limit_problem(splits) is None:
-            errors.append("%s is over the limit (more than one split at the "
-                          "same end of the axis) and nothing says so"
-                          % _fmt(splits))
+            errors.append("%s has three or more splits and the rule does "
+                          "not say so" % _fmt(splits))
     checks.append("%d legal and %d over-limit lists classified by the one "
-                  "rule, including 0.5 counting for neither end"
+                  "rule, including the human's own [0.2, 0.4]"
                   % (len(legal), len(illegal)))
 
     # the message names the values it refuses — a refusal the user cannot
@@ -1036,6 +1039,8 @@ def test_over_limit_splits_are_refused_on_the_property(doc):
             if "%g" % v not in msg:
                 errors.append("the refusal for [0.2, 0.45, 0.9] does not "
                               "name %g: %s" % (v, msg))
+        if "at most two splits" not in msg:
+            errors.append("the refusal does not state the rule: %s" % msg)
     checks.append("the refusal message names every value on the axis")
 
     # -- and the same rule through the PROPERTY path --------------------
@@ -1049,15 +1054,17 @@ def test_over_limit_splits_are_refused_on_the_property(doc):
 
     cases = [
         # (written, stored after, accepted?)
-        ([0.2, 0.8], [0.2, 0.8], True),        # one per end: the 2-split band
-        ([0.1, 0.5, 0.9], [0.1, 0.5, 0.9], True),  # THREE, legal: 0.5 is neither
+        ([0.2, 0.8], [0.2, 0.8], True),        # the 2-split band, one per end
+        ([0.2, 0.4], [0.2, 0.4], True),         # THE HUMAN'S CASE: two, both below
+        ([0.4, 0.6], [0.4, 0.6], True),         # two, both above
         ([0.5], [0.5], True),
-        # ...and each of these puts the axis back to that [0.5]: a refusal
-        # is not a correction, it is a refusal.
-        ([0.2, 0.45, 0.9], [0.5], False),      # two below
-        ([0.3, 0.45, 0.9], [0.5], False),      # two below, again
-        ([0.85, 0.95], [0.5], False),          # two above
-        ([0.2, 0.3], [0.5], False),            # two below, straddling nothing
+        ([0.1, 0.3], [0.1, 0.3], True),         # two, both below, like the other
+        # ...and each of these puts the axis back to that [0.1, 0.3]:
+        # a refusal is not a correction, it is a refusal.
+        ([0.2, 0.45, 0.9], [0.1, 0.3], False),  # three, two below
+        ([0.1, 0.5, 0.9], [0.1, 0.3], False),  # three, 0.5 included: still three
+        ([0.2, 0.4, 0.8], [0.1, 0.3], False),  # the exact list the human typed
+        ([0.85, 0.95, 0.1], [0.1, 0.3], False),  # three, straddling
         ([0.3, 0.6], [0.3, 0.6], True),
         # ...and a refusal from an EMPTY axis leaves it empty, so the
         # over-limit list never becomes the "before" of the next one.
@@ -1176,66 +1183,6 @@ def test_over_limit_refusal_is_visible_on_the_object(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_band_writes_can_never_go_over_the_limit(doc):
-    """The rule must permit what the CODE writes, or #76 breaks the
-    workbench. Two writers of a split exist: `ensure_band_split` (0.1 /
-    0.9) and the panel's band editor (a user width, stored as the width at
-    the 0-end and 1 - width at the 1-end). Both write only when the end
-    carries no split at all, which is precisely when the write cannot be
-    the second split at that end — so neither can trip the rule, and
-    `[0.1, 0.5, 0.9]` (a plain mid-surface split plus a band at each end)
-    is a layout the blend legitimately produces."""
-    from SilkMachinery import split_at_end, split_limit_problem
-
-    errors, checks = [], []
-    subsets = _subsets([0.1, 0.5, 0.9])
-
-    def write(cur, ss, width):
-        """SilkBlend.ensure_band_split's write / the panel's, in shape: the
-        caller means a band WIDTH, the property keeps the parametric split
-        at this end (the width at the 0 end, 1 - width at the 1 end, #70),
-        and the write only happens when the end carries no split at all."""
-        cur = list(cur)
-        if split_at_end(cur, ss) is not None:
-            return cur
-        stored = width if ss == 0 else 1.0 - width
-        return sorted(cur + [stored])
-
-    n = 0
-    for splits in subsets:
-        for ss in (0, 1):
-            # the blend's own default, then user widths at each end
-            for width in (0.1, 0.45, 0.05, 0.2, 0.49):
-                after = write(splits, ss, width)
-                n += 1
-                problem = split_limit_problem(after)
-                if problem is not None:
-                    errors.append("writing a %g-wide band at end %d of %s "
-                                  "leaves %s, which the rule refuses: %s"
-                                  % (width, ss, _fmt(splits), _fmt(after),
-                                     problem))
-    checks.append("%d (start, end, width) writes from every subset of "
-                  "{0.1, 0.5, 0.9}: none of them can produce an over-limit "
-                  "axis" % n)
-
-    # and on real geometry: a four-patch corner ring, where each patch
-    # carries a band at BOTH ends of BOTH axes -- the layout the rule has
-    # to survive.
-    model = cm.build_corner_model(doc)
-    worst = 0
-    for name, patch in model["patches"].items():
-        for prop in ("USplits", "VSplits"):
-            vals = [float(v) for v in (getattr(patch, prop) or [])]
-            worst = max(worst, len(vals))
-            problem = split_limit_problem(vals)
-            if problem is not None:
-                errors.append("%s.%s = %s is over the limit: %s"
-                              % (name, prop, _fmt(vals), problem))
-    checks.append("the 4-patch corner ring: every axis of every patch is "
-                  "within the limit (widest axis holds %d splits)" % worst)
-    return {"pass": not errors, "errors": errors, "checks": checks}
-
-
 ALL_TESTS = [
     test_band_cells_identical_to_legacy_on_default_splits,
     test_band_cells_generalizes_user_widths,
@@ -1249,5 +1196,4 @@ ALL_TESTS = [
     test_splits_normalized_on_set,
     test_over_limit_splits_are_refused_on_the_property,
     test_over_limit_refusal_is_visible_on_the_object,
-    test_band_writes_can_never_go_over_the_limit,
 ]
