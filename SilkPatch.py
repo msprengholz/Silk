@@ -59,8 +59,6 @@ path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
 iconPath = path_Silk_icons + "/ControlGridPatch.svg"
 
-ICON = "Resources/Icons/ControlGridPatch.svg"
-
 PATCH_TOOLTIP = ('Create a unified Patch from 3 or 4 selected '
                  'Silk Edge objects. The edge count picks the '
                  'fill: 3 edges -> pointed, 4 edges -> quad.')
@@ -774,7 +772,7 @@ class PatchViewProvider:
         vobj.Proxy = self
 
     def getIcon(self):
-        return ICON
+        return iconPath
 
     def attach(self, vobj):
         self.ViewObject = vobj

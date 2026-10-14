@@ -21,7 +21,10 @@ try:
 except Exception:
     pass
 
-ICON = "Resources/Icons/ControlGrid44_Rotate.svg"
+import os, Silk_dummy
+path_Silk = os.path.dirname(Silk_dummy.__file__)
+path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
+iconPath = path_Silk_icons + "/ControlGrid44_Rotate.svg"
 
 
 class Patch33:
@@ -147,7 +150,7 @@ class Patch33ViewProvider:
         vobj.Proxy = self
 
     def getIcon(self):
-        return ICON
+        return iconPath
 
     def attach(self, vobj):
         self.ViewObject = vobj
