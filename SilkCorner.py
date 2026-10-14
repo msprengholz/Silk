@@ -25,7 +25,7 @@ import FreeCAD
 import Part
 import ArachNURBS as AN
 
-from SilkBlend import _patch_side, band_cells
+from SilkBlend import band_cells, side_and_end
 from SilkMachinery import build_intervals, split_pair
 
 import os, Silk_dummy
@@ -95,7 +95,12 @@ class CornerBlend:
             other = s.PatchB if s.PatchA is p else s.PatchA
             if other is None:
                 continue
-            e, ss = _patch_side(p, other, tol)
+            # #83: read the strip's side off the STRIP (which carries the
+            # pinned Edge of a unified Blend), not off the patch pair. A
+            # patch pair sharing two seams names the same side twice, so a
+            # corner cell derived through `patch_side` can be taken on the
+            # wrong seam's band.
+            e, ss = side_and_end(s, p, tol)
             if not e:
                 continue
             if e[0] == "U":
@@ -120,8 +125,8 @@ class CornerBlend:
                 FreeCAD.Console.PrintError(
                     "Silk: corner blend strip %s has no patches.\n" % s.Name)
                 return None, None
-            e_a, ss_a = _patch_side(pa, pb, tol)
-            e_b, ss_b = _patch_side(pb, pa, tol)
+            e_a, ss_a = side_and_end(s, pa, tol)
+            e_b, ss_b = side_and_end(s, pb, tol)
             if not e_a or not e_b:
                 FreeCAD.Console.PrintError(
                     "Silk: corner blend strip %s: no shared edge found "

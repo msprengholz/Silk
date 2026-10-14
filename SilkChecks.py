@@ -886,15 +886,18 @@ def _corner_reference_rows(strips, tol=0.01):
     cells (not from the corner blend itself). Returns (rows,
     corner_cells) or (None, None) on any inconsistency.
     """
-    from SilkBlend import band_cells, _patch_side
+    from SilkBlend import band_cells, side_and_end
     rows = []
     corner_cells = {}
     for s in strips:
         pa, pb = s.PatchA, s.PatchB
         if pa is None or pb is None:
             return None, None
-        e_a, ss_a = _patch_side(pa, pb, tol)
-        e_b, ss_b = _patch_side(pb, pa, tol)
+        # #83: the mirror of SilkCorner._derive_rows -- the strip's side is
+        # read off the STRIP (a unified Blend pins its Edge), so a pair
+        # sharing two seams cannot collapse to one side here either.
+        e_a, ss_a = side_and_end(s, pa, tol)
+        e_b, ss_b = side_and_end(s, pb, tol)
         if not e_a or not e_b:
             return None, None
         bca = band_cells(pa, e_a, ss_a)
@@ -910,7 +913,7 @@ def _corner_reference_rows(strips, tol=0.01):
                 other = t.PatchB if t.PatchA is pth else t.PatchA
                 if other is None:
                     continue
-                te, tss = _patch_side(pth, other, tol)
+                te, tss = side_and_end(t, pth, tol)
                 if not te:
                     continue
                 if te[0] == "U":

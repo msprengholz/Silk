@@ -34,8 +34,8 @@ from popup import tipsDialog
 
 from SilkMachinery import patch_side as _patch_side, band_cells, \
     band_diagnosis, ensure_hidden_idxs_property, shared_seam, \
-    split_pair, axis_splits, band_edge, NO_BAND_1, NO_BAND_2, \
-    _EDGE_OF, _cyclic_adjacent
+    seam_from_edge, split_pair, axis_splits, band_edge, \
+    NO_BAND_1, NO_BAND_2, _EDGE_OF, _cyclic_adjacent
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -70,32 +70,10 @@ def _refuse(fp, msg):
 
 def _seam_from_edge(a_c, b_c, ep0, ep1, tol):
     """Pin the seam from an explicit Edge's endpoint poles (#39 decision
-    C): both endpoints must sit (within tol) on a distinct, cyclically
-    adjacent corner pair of BOTH patches. Purely geometric -- the Edge
-    object identity is irrelevant (patches may share geometry without
-    sharing the same Edge object). Returns (ea, eb, pairs) or None.
-    """
-    a0 = [i for i in range(4) if (a_c[i] - ep0).Length < tol]
-    a1 = [i for i in range(4) if (a_c[i] - ep1).Length < tol]
-    b0 = [i for i in range(4) if (b_c[i] - ep0).Length < tol]
-    b1 = [i for i in range(4) if (b_c[i] - ep1).Length < tol]
-    for i0 in a0:
-        for i1 in a1:
-            if not _cyclic_adjacent(i0, i1):
-                continue
-            if (a_c[i0] - a_c[i1]).Length < tol:
-                continue  # degenerate pair on A (pointed apex)
-            for j0 in b0:
-                for j1 in b1:
-                    if not _cyclic_adjacent(j0, j1):
-                        continue
-                    if (b_c[j0] - b_c[j1]).Length < tol:
-                        continue  # degenerate pair on B
-                    ea = _EDGE_OF.get((i0, i1))
-                    eb = _EDGE_OF.get((j0, j1))
-                    if ea and eb:
-                        return ea, eb, [(i0, j0), (i1, j1)]
-    return None
+    C). Delegates to `SilkMachinery.seam_from_edge`, which is the single
+    implementation now that a reader without a Blend (`side_of_edge`) asks
+    the same question."""
+    return seam_from_edge(a_c, b_c, ep0, ep1, tol)
 
 
 # ---- the seam this blend took, and the band split it owns -----------------
@@ -152,17 +130,49 @@ def _band_split_of(etype):
     return band_edge_prop(letter, end), end
 
 
+def side_and_end(o, p, tol=None):
+    """(etype, ss) -- the boundary side AND the end it names -- of the
+    seam blend `o` takes on patch `p`, or (None, None) when `o` cannot
+    say.
+
+    Resolved through the SAME `_resolve_seam` run_blend writes its band
+    through, so a reader and the writer can never disagree about which
+    seam is whose (#83). That matters on a pair sharing TWO seams: the
+    pair alone cannot name one, but `o`'s pinned Edge can, and every
+    reader that re-derived the side from the pair attributed the wrong
+    end's band to the sibling blend -- which is what made the auto-hide
+    union lose a cell.
+
+    `o` is any blend-shaped object with PatchA / PatchB and an optional
+    `Edge`: a unified `Blend` pins one, a legacy `BlendStrip` has no such
+    property and falls back to the pair's first matching seam (reported
+    below as the one caller that cannot always carry an edge).
+
+    `(None, None)` when `p` is not one of `o`'s two patches, matching what
+    `patch_side` did for a pair that shares nothing -- a caller that walks
+    a list of blends wider than `p`'s own (the corner cell) relies on that
+    refusal to skip."""
+    if not (o.PatchA is p or o.PatchB is p):
+        # Not this strip's patch at all. `patch_side(p, other)` could not
+        # answer in that case either (the geometry shares nothing), so
+        # answering here with the strip's own far side would be a NEW and
+        # wrong value, not the old refusal.
+        return None, None
+    tol = getattr(o, "tolerance", 0.01) if tol is None else tol
+    seam = _resolve_seam(o, o.PatchA, o.PatchB, tol)
+    if seam is None:
+        return None, None
+    e = seam[0] if o.PatchA is p else seam[1]
+    return e, (0 if e[1] == "0" else 1)
+
+
 def _side_on(o, p):
     """The boundary side blend `o` takes on patch `p`, or None when `o`
     cannot say -- re-resolved through the SAME `_resolve_seam` run_blend
     used, so the reader and the writer of a band split can never disagree
     about which seam is whose (the two-shared-edges case: auto-detect
     alone returns the same side for both blends of a pair)."""
-    seam = _resolve_seam(o, o.PatchA, o.PatchB,
-                         getattr(o, "tolerance", 0.01))
-    if seam is None:
-        return None
-    return seam[0] if o.PatchA is p else seam[1]
+    return side_and_end(o, p)[0]
 
 
 def _survivor_needs(doc, dying, p, letter):
@@ -293,7 +303,13 @@ def _linked_band_cells(fp, p):
         other = o.PatchB if o.PatchA is p else o.PatchA
         if getattr(other, "object_type", None) not in PATCH_TYPES:
             continue
-        e_j, ss_j = _patch_side(p, other, fp.tolerance)
+        # #83: the sibling's side is read off the SIBLING'S OWN SEAM, not
+        # off the patch pair. The pair carries no idea WHICH of its shared
+        # edges `o` took, so on a closed ring (two seams) this returned one
+        # answer for both blends -- each blend's re-derived set then held
+        # its sibling's WRONG cell, and the union kept that wrong cell
+        # while dropping the cell the sibling actually owns.
+        e_j, ss_j = side_and_end(o, p)
         if e_j:
             idxs |= set(band_cells(p, e_j, ss_j))
     # corner cells owned by corner blends on this patch (#28): the

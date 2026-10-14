@@ -95,7 +95,7 @@ except ImportError:  # pragma: no cover - console-only FreeCAD
 
 from SilkGuide import compute_guide_state
 from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge
-from SilkMachinery import patch_side, build_intervals, \
+from SilkMachinery import patch_side, side_of_edge, build_intervals, \
     corner_cells, split_pair, axis_splits, band_at_end, loop_order
 
 import os, Silk_dummy
@@ -2127,7 +2127,7 @@ def status_reason(entry):
 
 # ---- band split: read / write / validate ----------------------------------
 
-def _side_of(p, other):
+def _side_of(p, other, edge=None):
     """(property_name, end) of the band edge p contributes to the seam it
     shares with `other`, or (None, None) when they share no edge.
 
@@ -2137,12 +2137,27 @@ def _side_of(p, other):
     nothing left to look up and nothing to classify by value -- which is
     exactly what #81 was about.
 
+    #83: `edge` is the seam's OWN Edge, and it is what decides the side.
+    A patch pair carries no idea which of the shared edges is meant, so
+    on a pair sharing TWO seams -- a closed ring, the tube -- deriving the
+    side from the pair alone answers with one seam's side for both of
+    them: every band editor targeted the same property, typing a width on
+    one seam overwrote the other seam's band, and the blend stopped
+    matching. `side_of_edge` classifies the GIVEN edge; `patch_side` is
+    the fallback for a caller that genuinely holds only a pair (a single
+    seam, where the two cannot disagree). There is deliberately NO
+    fallback from a failed `side_of_edge` to the pair: falling back is
+    exactly the wrong answer this fix removes.
+
     Tolerates an unresolved pair: a patch that never built (its fill
     failed, or it is mid-recompute) carries no poles to compare, and seam
     resolution raises on the empty corner list. That is no reason to
     abandon the whole table -- the row simply has no band to size."""
     try:
-        etype, ss = patch_side(p, other)
+        if edge is None:
+            etype, ss = patch_side(p, other)
+        else:
+            etype, ss = side_of_edge(p, other, edge)
     except Exception:
         return None, None
     if etype is None:
@@ -2233,8 +2248,8 @@ def read_band_split(entry):
     and one write, which quietly asserted that a seam has a single width.
     It does not; see band_side."""
     pa, pb = entry["patch_a"], entry["patch_b"]
-    pa_prop, pa_ss = _side_of(pa, pb)
-    pb_prop, pb_ss = _side_of(pb, pa)
+    pa_prop, pa_ss = _side_of(pa, pb, entry["edge"])
+    pb_prop, pb_ss = _side_of(pb, pa, entry["edge"])
     if pa_prop is None or pb_prop is None:
         return None
 
@@ -2363,8 +2378,8 @@ def band_cell_problem(entry, which, value=None):
     me what the current layout gives" case (the mirror test, and
     invalid_bands' missing-spin case), where no width is on offer."""
     pa, pb = entry["patch_a"], entry["patch_b"]
-    pa_prop, pa_ss = _side_of(pa, pb)
-    pb_prop, pb_ss = _side_of(pb, pa)
+    pa_prop, pa_ss = _side_of(pa, pb, entry["edge"])
+    pb_prop, pb_ss = _side_of(pb, pa, entry["edge"])
     if pa_prop is None or pb_prop is None:
         return ("%s and %s share no edge, so there is no band to size"
                 % (pa.Name, pb.Name))

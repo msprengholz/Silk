@@ -399,19 +399,98 @@ def shared_seam(a_c, b_c, tol=0.01):
     return None
 
 
+def corners_of(p):
+    """The four boundary corners of patch `p` in cyclic order --
+    Poles[0], Poles[3], Poles[15], Poles[12], i.e. boundary edge k runs
+    corner k -> corner k+1. One expression so every reader of "which
+    side" starts from the same corners."""
+    return [p.Poles[0], p.Poles[3], p.Poles[15], p.Poles[12]]
+
+
+def _side(ss_label):
+    """The 0/1 end a boundary-side label's digit names."""
+    return 0 if ss_label == "0" else 1
+
+
 def patch_side(pa, pb, tol=0.01):
     """Edge type and side of the shared edge as seen from pa (toward pb).
 
     Returns (edge_type, ss) e.g. ("V1", 1), or (None, None) when the
     patches do not share an edge.
+
+    **From the PAIR alone, so it can only ever name ONE seam (#83).**
+    `shared_seam` walks the corners and returns the FIRST adjacent pair
+    both patches share, so a pair sharing TWO edges -- a closed ring, the
+    tube -- answers ('U0', 0) for both directions and for both of its
+    seams. It is the right answer for every caller that genuinely holds
+    nothing but a patch pair; a caller that knows WHICH seam it means
+    must use `side_of_edge` (or SilkBlend's `_resolve_seam`, which
+    prefers the blend's pinned Edge the same way).
     """
-    a_c = [pa.Poles[0], pa.Poles[3], pa.Poles[15], pa.Poles[12]]
-    b_c = [pb.Poles[0], pb.Poles[3], pb.Poles[15], pb.Poles[12]]
+    a_c = corners_of(pa)
+    b_c = corners_of(pb)
     seam = shared_seam(a_c, b_c, tol)
     if seam is None:
         return None, None
     ea = seam[0]
-    return ea, (0 if ea[1] == "0" else 1)
+    return ea, _side(ea[1])
+
+
+def seam_from_edge(a_c, b_c, ep0, ep1, tol=0.01):
+    """Pin the seam to ONE given Edge's endpoint poles (#39 decision C):
+    both endpoints must sit (within tol) on a distinct, cyclically
+    adjacent corner pair of BOTH patches. Purely geometric -- the Edge
+    object identity is irrelevant (patches may share geometry without
+    sharing the same Edge object). Returns (ea, eb, pairs) or None.
+
+    Lives here, not in SilkBlend, because `side_of_edge` is the same
+    question asked by a reader that has no Blend to carry the pin."""
+    a0 = [i for i in range(4) if (a_c[i] - ep0).Length < tol]
+    a1 = [i for i in range(4) if (a_c[i] - ep1).Length < tol]
+    b0 = [i for i in range(4) if (b_c[i] - ep0).Length < tol]
+    b1 = [i for i in range(4) if (b_c[i] - ep1).Length < tol]
+    for i0 in a0:
+        for i1 in a1:
+            if not _cyclic_adjacent(i0, i1):
+                continue
+            if (a_c[i0] - a_c[i1]).Length < tol:
+                continue  # degenerate pair on A (pointed apex)
+            for j0 in b0:
+                for j1 in b1:
+                    if not _cyclic_adjacent(j0, j1):
+                        continue
+                    if (b_c[j0] - b_c[j1]).Length < tol:
+                        continue  # degenerate pair on B
+                    ea = _EDGE_OF.get((i0, i1))
+                    eb = _EDGE_OF.get((j0, j1))
+                    if ea and eb:
+                        return ea, eb, [(i0, j0), (i1, j1)]
+    return None
+
+
+def side_of_edge(pa, pb, edge, tol=0.01):
+    """(edge_type, ss) of the GIVEN `edge` as seen from pa (toward pb),
+    e.g. ("V1", 1); (None, None) when `edge` is None, carries no poles, or
+    does not close a corner pair on both patches.
+
+    The edge-aware twin of `patch_side` (#83). `patch_side` throws away
+    WHICH shared edge it resolved, so a pair sharing TWO seams gets one
+    answer for both of them; carrying the edge through instead is what
+    lets a reader that already holds its seam name that seam's side. On
+    the tube the two seams land on different sides of each patch, so the
+    two answers are different properties, and a reader that re-derived
+    the side from the pair edited the wrong band -- and attributed the
+    wrong cells to the sibling blend."""
+    if edge is None:
+        return None, None
+    ep = list(getattr(edge, "Poles", []) or [])
+    if len(ep) < 4:
+        return None, None
+    seam = seam_from_edge(corners_of(pa), corners_of(pb), ep[0], ep[3], tol)
+    if seam is None:
+        return None, None
+    ea = seam[0]
+    return ea, _side(ea[1])
 
 
 # #76's cap, restated as a TYPE rather than a check (#82).
