@@ -29,6 +29,10 @@ _Avoid_: strip, blend band
 The boundary line where two adjacent patches meet, occupied by their shared edge.
 _Avoid_: common edge line
 
+**Free edge**:
+An Edge not yet referenced by any Patch; the pool a new patch is built from.
+_Avoid_: unused edge, unclaimed edge, available edge
+
 **Shared edge**:
 The single Edge object referenced by both of two adjacent patches' boundaries; the only admissible evidence that two patches are adjacent.
 _Avoid_: coincident edge, geometric adjacency
