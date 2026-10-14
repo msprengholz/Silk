@@ -605,44 +605,59 @@ class _DeleteWatcher:
         self._fp = fp
         self._fired = False
 
-    def slotDeletedObject(self, obj):
-        # #80: `_fired` is set FIRST, unconditionally. Two reasons, and the
-        # second is the one that mattered:
-        #
-        # 1. `getattr(x, "Name", None)` does NOT swallow ReferenceError --
-        #    the default only covers AttributeError. Once the document is
-        #    being torn down, `self._fp` is a DELETED object and reading
-        #    `.Name` raises. The old order set `_fired` after that read, so
-        #    the exception escaped before the one-shot flag was ever set...
-        # 2. ...and the observer is therefore never removed from the
-        #    document. Every subsequent deletion re-enters this slot and
-        #    raises again: measured at 959,399 tracebacks in one session,
-        #    each printed in full because it was raised inside a C++ slot.
-        #
-        # A dangling document observer outlives the Python object it wraps,
-        # and this project then crashed with SIGSEGV inside the 3D-view
-        # paint path (QOpenGLFramebufferObject::bind), which is consistent
-        # with the observer still being called from the GUI thread after
-        # the object it references is gone. So this ordering is not
-        # tidiness: the flag-first shape is what stops the spin, and the
-        # spin is a stability problem, not a logging one.
-        if self._fired:
-            return
+    def _spend(self):
+        """Retire this watcher for good: mark it fired AND unregister it.
+
+        Both, together, and only from a path that cannot raise before
+        completing -- an observer left registered is the spin (#80), and a
+        slot that can raise before setting the flag is the spin's cause.
+        """
         self._fired = True
-        try:
-            mine = getattr(self._fp, "Name", None)
-        except ReferenceError:
-            return          # our own object is already gone: nothing to do
-        try:
-            theirs = getattr(obj, "Name", None)
-        except ReferenceError:
-            return
-        if theirs != mine:
-            return
         try:
             FreeCAD.removeDocumentObserver(self)
         except Exception:
             pass
+
+    def slotDeletedObject(self, obj):
+        # #80: `getattr(x, "Name", None)` does NOT swallow ReferenceError --
+        # the default only covers AttributeError. Once the document is
+        # tearing down, `self._fp` is a DELETED object and reading `.Name`
+        # raises. The old code let that escape before setting `_fired` and
+        # before unregistering, so the slot re-entered on every later
+        # deletion: measured at 959,399 tracebacks in one session, each
+        # printed in full because it was raised inside a C++ slot. A
+        # dangling document observer also outlives the object it wraps,
+        # and FreeCAD then died with SIGSEGV in
+        # View3DInventorViewer::aboutToDestroyGLContext.
+        #
+        # So the flag is no longer set blindly-first. Setting it before
+        # the comparison was a REGRESSION I introduced in ef7054b and
+        # caught in review: the slot fires for EVERY deleted object in the
+        # document, so spending it on the first unrelated one meant the
+        # watcher had already retired itself by the time *our* blend was
+        # deleted -- and unblend silently stopped working
+        # (test_unblend_restores_the_patches,
+        # test_unblend_removes_only_the_seams_own_split). Two tests caught
+        # what the mutation checks and the crash-count fix could not.
+        #
+        # The rule that is actually correct: retire on the two cases where
+        # retirement is safe -- our blend is gone (do the unblend), or our
+        # own object is already deleted so we can never match again. On a
+        # name mismatch, KEEP WAITING.
+        if self._fired:
+            return
+        try:
+            mine = getattr(self._fp, "Name", None)
+        except ReferenceError:
+            self._spend()      # can never match again; stop being called
+            return
+        try:
+            theirs = getattr(obj, "Name", None)
+        except ReferenceError:
+            return             # a half-deleted `obj`; not ours, not yet
+        if theirs != mine:
+            return             # some other object went: stay armed
+        self._spend()
         _on_delete(obj)
 
     def slotDeletedDocument(self, doc):
