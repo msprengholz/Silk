@@ -140,17 +140,38 @@ def _band_split_of(etype):
             0 if etype[1] == "0" else 1)
 
 
-def _survivor_needs(doc, dying, p, etype):
-    """True when a blend OTHER than `dying` still needs `p`'s band split
-    for boundary side `etype` -- or when a corner blend still consumes
-    `dying`'s band (#28).
+def _side_on(o, p):
+    """The boundary side blend `o` takes on patch `p`, or None when `o`
+    cannot say -- re-resolved through the SAME `_resolve_seam` run_blend
+    used, so the reader and the writer of a band split can never disagree
+    about which seam is whose (the two-shared-edges case: auto-detect
+    alone returns the same side for both blends of a pair)."""
+    seam = _resolve_seam(o, o.PatchA, o.PatchB,
+                         getattr(o, "tolerance", 0.01))
+    if seam is None:
+        return None
+    return seam[0] if o.PatchA is p else seam[1]
 
-    The rule is per (patch, boundary side), which is what makes removing
-    one seam's split safe on a patch that carries four: a patch's sides
-    are U0 / U1 / V0 / V1, each with its own split on its own axis and
-    its own end, so no two SEAMS can ever want the same split, and the
-    only thing that can still want it is another blend on the same side.
+
+def _survivor_needs(doc, dying, p, prop):
+    """The splits on axis `prop` of `p` that a blend OTHER than `dying`
+    still needs -- one per surviving blend, read at that blend's OWN
+    seam end through `_band_split_of`.
+
+    The rule is per (patch, axis, end), which is what makes clearing a
+    whole band axis safe on a patch that carries several: a patch's
+    sides are U0 / U1 / V0 / V1, and two SEAMS can land on the SAME axis
+    at opposite ends -- the tube's TubeA.USplits [0.1, 0.9] is exactly
+    that, and so is a four-patch corner. So the values are READ OFF the
+    surviving blends, never assumed to be the 0.1 / 0.9 defaults: a user
+    width on the surviving seam's end is what comes back.
+
+    A blend that cannot resolve its seam contributes nothing -- it has no
+    band to keep, and inventing one would pin a split that belongs to
+    nobody.
     """
+    cur = list(getattr(p, prop) or [])
+    keep = []
     for o in doc.Objects:
         if (o is dying
                 or getattr(o, "object_type", "") not in BLEND_TYPES
@@ -159,17 +180,21 @@ def _survivor_needs(doc, dying, p, etype):
                 or not getattr(o, "PatchB", None)
                 or not (o.PatchA is p or o.PatchB is p)):
             continue
-        seam = _resolve_seam(o, o.PatchA, o.PatchB,
-                             getattr(o, "tolerance", 0.01))
-        if seam is None:
+        side = _side_on(o, p)
+        if side is None:
             continue
-        side = seam[0] if o.PatchA is p else seam[1]
-        if side == etype:
-            return True
-    try:
-        from SilkCorner import CornerBlend as _CB
-    except ImportError:
-        return False
+        prop_o, ss_o = _band_split_of(side)
+        if prop_o != prop:
+            continue
+        need = split_at_end(cur, ss_o)
+        if need is not None and need not in keep:
+            keep.append(need)
+    return keep
+
+
+def _corner_blend_feeds(doc, dying):
+    """True when a CornerBlend still feeds off `dying`'s band (#28): its
+    cells are still in use, so the axis under it must stay as it is."""
     for ob in doc.Objects:
         if getattr(ob, "object_type", "") != "CornerBlend":
             continue
@@ -179,21 +204,44 @@ def _survivor_needs(doc, dying, p, etype):
 
 
 def _drop_band_split(doc, dying, p, etype):
-    """Give back the band split this seam owns on patch `p` (#71).
+    """Give the band axis of patch `p` back on unblend (#71).
 
-    #70 kept the splits so a re-blend would read the user's width back;
-    the human reversed that (an unblended patch should LOOK like a plain
-    patch), so the split goes -- one value, on one axis, at one end. The
-    width is the price: re-blending this seam rebuilds at the default.
+    #70 kept every split; #71 removed only the ONE this seam owned, by
+    value. The human reversed that once more, and the reason is that in
+    the wizard the Band A / Band B editors ARE the patch's USplits /
+    VSplits property -- there is no other place a width can live, so
+    unsetting the blend has to unset them too:
+
+        "if i unset the blend in the wizard, then also remove the
+         corresponding u or v splits value!"
+
+    So the WHOLE band axis goes, the user's own split included, and the
+    axis name comes from `_band_split_of(etype)` -- the same two lines
+    run_blend.ensure_band_split writes through.
+
+    Two things are kept, and only these two:
+
+      * a split a SURVIVING blend still needs (`_survivor_needs`) --
+        unblending one of two seams on one axis must not strip the other
+        one's band;
+      * the whole axis, untouched, when a CornerBlend still feeds off
+        this blend (#28).
+
+    The width is the price: re-blending a seam whose axis was cleared
+    rebuilds at the default (0.1 / 0.9).
     """
-    if _survivor_needs(doc, dying, p, etype):
-        return False
-    prop, ss = _band_split_of(etype)
+    prop = _band_split_of(etype)[0]
     cur = list(getattr(p, prop) or [])
-    old = split_at_end(cur, ss)
-    if old is None:
-        return False            # the end carried no split: nothing of ours
-    setattr(p, prop, [v for v in cur if v != old])
+    if not cur:
+        return False            # the axis carried no split: nothing to do
+    if _corner_blend_feeds(doc, dying):
+        return False
+    # what is left is ONLY what a surviving blend still reads -- read in
+    # `cur`'s own order, so the stored list stays sorted.
+    left = [v for v in cur if v in _survivor_needs(doc, dying, p, prop)]
+    if left == cur:
+        return False            # every split on the axis is still needed
+    setattr(p, prop, left)
     return True
 
 
@@ -511,14 +559,19 @@ def _on_delete(fp):
 
     Two things are given back, and the ORDER matters:
 
-      1. the band's SPLIT -- the value this seam owned on each patch
-         (#71). #70 deliberately kept it, to preserve the user's width
-         (#64); the human reversed that, because an unblended patch that
-         still renders subdivided does not LOOK unblended. So the width
-         is discarded and re-blending this seam rebuilds at the default.
-         Only the split this seam owned goes: one axis, one end, the
-         side _resolve_seam says this blend took -- never a split another
-         seam still feeds on (a patch carries up to four, one per side).
+      1. the band's SPLITS -- the WHOLE axis on each patch (#71). #70
+         deliberately kept them, to preserve the user's width (#64); the
+         human reversed that, because an unblended patch that still
+         renders subdivided does not LOOK unblended -- and, in the
+         wizard, because the Band A / Band B editors ARE that property,
+         so there is nowhere else a width could live. The axis is the one
+         `_band_split_of` names for the side this blend took, and it goes
+         WHOLE, the user's own split included. Two things stay: a split a
+         SURVIVING blend still needs (a patch can carry two seams on one
+         axis -- the tube's TubeA.USplits [0.1, 0.9] -- and unblending
+         one must not strip the other's band), and the whole axis when a
+         CornerBlend still feeds off this blend (#28). The width is the
+         price: re-blending a cleared seam rebuilds at the default.
       2. the band CELLS -- the hidden-cell set is re-derived by each
          blend's execute from the strips alive at that moment, but a
          DELETED blend touches nothing and recompute() only walks touched
@@ -753,8 +806,8 @@ class Blend(BlendStrip):
     def onDelete(self, fp):
         """The unblend. Delegates to the shared _on_delete -- the one
         place that knows the whole rule (#71: the band CELLS come back
-        AND the band's SPLIT goes, so an unblended patch is a plain
-        patch again).
+        AND the band's SPLITS go, the whole axis bar what a surviving
+        blend still needs, so an unblended patch is a plain patch again).
 
         Like BlendStrip.onDelete this is never actually called -- FreeCAD
         1.1.3 has no DocumentObjectPy::onDelete, and the _DeleteWatcher

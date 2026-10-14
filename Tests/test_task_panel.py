@@ -1438,6 +1438,126 @@ def test_blend_confirm_matches_the_resolver(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+# ---- unblend: the untick takes the band's splits with it (#71) -------------
+
+def test_untick_unblends_and_says_the_band_splits_went(doc):
+    """Unticking a blended seam must take the band's SPLITS with it, and
+    must SAY so.
+
+    In the wizard the Band A / Band B editors ARE the patch's USplits /
+    VSplits property -- the same data, with no second copy anywhere -- so
+    a user who unsets the blend has unset the width, and the patch must go
+    back to a plain one. The status line therefore names the axes it
+    cleared: an untick is destructive to the user's widths, and a message
+    that reports only the reversible half ("Blend deleted") leaves the
+    user believing their widths are still there.
+    """
+    errors, checks = [], []
+    from SilkTaskPanel import BAND_A, write_band_split
+    from Tests.test_seam_resolver import _Capture
+
+    fixture, pa, pb, g = _open_gt_chain(doc)
+    try:
+        edge = g["E_Shr"]
+        panel = _open_panel(doc)
+        if not check(panel is not None, "Activated left no panel open",
+                     errors):
+            return {"pass": False, "errors": errors, "checks": checks}
+        try:
+            panel.sections.open(2)
+            row = panel.seam_row_index(edge)
+            panel.blend_table.cellClicked.emit(row, panel.COL_EDGE)
+            with _Capture() as cap:
+                panel.panel_confirm()
+            doc.recompute()
+            blends = _blend_objects(doc)
+            if not check(len(blends) == 1, "confirm created %d blend(s)"
+                         % len(blends), errors):
+                return {"pass": False, "errors": errors, "checks": checks}
+            bl = blends[0]
+            bl_name = bl.Name    # read NOW: the untick deletes it, and a
+                                 # deleted DocumentObject answers .Name
+                                 # with None rather than raising
+
+            # a USER's width on band A, set through the wizard's own editor
+            entry = next(e for e in panel.seam_inventory()
+                         if e["edge"] is edge)
+            check(write_band_split(entry, BAND_A, 0.25),
+                  "the band editor refused the user's width 0.25", errors)
+            doc.recompute()
+            fed = [p for p in (entry["patch_a"], entry["patch_b"])
+                   if p is not None]
+            before = {(p.Name, prop): list(getattr(p, prop, None) or [])
+                      for p in fed for prop in ("USplits", "VSplits")}
+            checks.append("before the untick: %s"
+                          % ", ".join("%s.%s=%r" % (p.Name, prop, before[
+                              (p.Name, prop)])
+                                      for p in fed
+                                      for prop in ("USplits", "VSplits")))
+            check(any(before.values()),
+                  "the blend wrote no band split at all -- the fixture does "
+                  "not exercise the case", errors)
+
+            flag = panel.blend_flag(edge)
+            check(flag is not None and flag.isChecked(),
+                  "the row is not a ticked flag before the untick", errors)
+            tip = flag.toolTip() if flag else ""
+            check("splits" in tip,
+                  "the untick's own tooltip does not say the band's splits "
+                  "go with it: %r" % tip, errors)
+
+            with _Capture() as cap2:
+                # a REAL click, not a synthetic signal emit: PySide2's
+                # `clicked` exposes a no-arg overload too, and emitting
+                # it by hand exercises a path a user never takes (the
+                # panel's slot takes the bool, which is what a click
+                # delivers).
+                flag.click()
+            doc.recompute()
+            errors += ["console error: %s" % e for e in cap2.errors]
+            check(not flag.isChecked(),
+                  "the click did not untick the box", errors)
+
+            status = panel.status_text()
+            checks.append("status: %r" % status)
+            check(edge.Name in status and bl_name in status,
+                  "the status line does not name the seam and its blend: %r"
+                  % status, errors)
+            check("band splits removed" in status,
+                  "the status line does not report that the band's splits "
+                  "went -- it reports only the deleted blend: %r" % status,
+                  errors)
+            for p in fed:
+                for prop in ("USplits", "VSplits"):
+                    was = before[(p.Name, prop)]
+                    left_ = list(getattr(p, prop, None) or [])
+                    check(not left_,
+                          "%s.%s=%r survived the untick -- the band editors "
+                          "ARE that property, so unsetting the blend must "
+                          "unset it" % (p.Name, prop, left_), errors)
+                    if was:
+                        check("%s.%s" % (p.Name, prop) in status,
+                              "%s.%s held %r before the untick and the status "
+                              "does not name it: %r"
+                              % (p.Name, prop, was, status), errors)
+                check(len(p.Shape.Faces) == 1,
+                      "%s is not one whole surface after the untick: %d "
+                      "faces" % (p.Name, len(p.Shape.Faces)), errors)
+                check(not p.Proxy._subgrids,
+                      "%s still builds %d subgrids after the untick"
+                      % (p.Name, len(p.Proxy._subgrids)), errors)
+            new_flag = panel.blend_flag(edge)
+            check(new_flag is not None and not new_flag.isChecked(),
+                  "the row is still ticked after the untick", errors)
+        finally:
+            _close_panel(panel)
+    finally:
+        Gui.Selection.clearSelection()
+        FreeCAD.closeDocument(fixture.Name)
+        FreeCAD.setActiveDocument(doc.Name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 # ---- the band split ----------------------------------------------------------
 
 def test_band_split_editor_reads_and_writes_the_patch_split(doc):
@@ -3678,6 +3798,7 @@ ALL_TESTS = [
     test_blend_table_merges_every_seam_with_its_flag,
     test_blend_collect_highlight_and_remove,
     test_blend_confirm_matches_the_resolver,
+    test_untick_unblends_and_says_the_band_splits_went,
     test_band_split_editor_reads_and_writes_the_patch_split,
     test_user_band_split_is_honoured_by_the_blend,
     test_band_split_multi_cell_is_refused_naming_patch_and_values,

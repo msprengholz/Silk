@@ -1469,9 +1469,18 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         """Untick: delete the Blend on this seam, as its own transaction
         (one undo step).
 
-        The band splits the blend wrote SURVIVE the unblend (#70): they
-        are the user's chosen width (#64) and re-blending reads them
-        back, so deleting them would silently discard the user's widths."""
+        The band splits DO NOT survive the unblend (#71, reversing #70):
+        in the wizard the Band A / Band B editors ARE the patch's
+        USplits / VSplits property, so there is no other place a width
+        could live -- "if i unset the blend in the wizard, then also
+        remove the corresponding u or v splits value!". The whole band
+        axis therefore goes, the user's own width included, and re-blending
+        rebuilds at the default. A split a SURVIVING blend still needs
+        stays (a patch can carry two seams on one axis).
+
+        The status line says WHICH axes were cleared, read back off the
+        patches after the delete -- an untick is destructive to the user's
+        widths, so it must not report only the part that is reversible."""
         edge = entry["edge"]
         blend = entry["blend"]
         doc = self.doc
@@ -1485,16 +1494,30 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                          % (edge.Name, getattr(blend, "Name", "?")))
             return False
         blend_name = blend.Name
+        fed = [p for p in (entry.get("patch_a"), entry.get("patch_b"))
+               if p is not None
+               and getattr(p, "object_type", None) in ("Patch", "Patch44",
+                                                       "Patch33")]
+        before = {p.Name: (list(getattr(p, "USplits", None) or []),
+                           list(getattr(p, "VSplits", None) or []))
+                  for p in fed}
         doc.openTransaction("Silk unblend")
         try:
             doc.removeObject(blend_name)
         finally:
             doc.commitTransaction()
         self.refresh()
+        cleared = ["%s.%s" % (p.Name, prop)
+                   for p in fed
+                   for prop, idx in (("USplits", 0), ("VSplits", 1))
+                   if before[p.Name][idx]
+                   and not list(getattr(p, prop, None) or [])]
+        tail = ("; band splits removed: %s" % ", ".join(cleared)
+                if cleared else "")
         self.status_lbl.setText(
-            "unblended %s (%s deleted)" % (edge.Name, blend_name))
+            "unblended %s (%s deleted)%s" % (edge.Name, blend_name, tail))
         FreeCAD.Console.PrintMessage(
-            "unblended %s (%s deleted)\n" % (edge.Name, blend_name))
+            "unblended %s (%s deleted)%s\n" % (edge.Name, blend_name, tail))
         return True
 
     def _fit_table(self, n_rows):
@@ -2095,8 +2118,10 @@ def status_reason(entry):
         made = ("%s" % entry["blend"].Name if entry["blend"] is not None
                 else "another blend")
         return ("Blended by %s.\nUntick to unblend it (deletes %s, one "
-                "undo step). Its band editors still work -- a width set "
-                "here re-drives that blend." % (made, made))
+                "undo step) -- and that takes the band's splits with it, "
+                "so a re-blend starts from the default width. Its band "
+                "editors still work -- a width set here re-drives that "
+                "blend." % (made, made))
     if status == "blocked":
         return ("Blocked: three or more patches reference this edge, so it "
                 "is not a seam you can blend (it needs the deferred corner "
