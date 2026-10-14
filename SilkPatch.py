@@ -51,7 +51,7 @@ import ArachNURBS as AN
 from popup import tipsDialog
 
 from SilkMachinery import build_subgrids, build_display, \
-    normalize_splits_report, loop_order
+    normalize_splits_report, split_limit_problem, _splits_str, loop_order
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -135,6 +135,16 @@ class Patch:
         # #67: re-entrancy guard for the Edges-cycle write. See
         # _store_boundary_cycle.
         self._normalizing_edges = False
+        # #76: the last split list each axis ACCEPTED, and the refusal
+        # that is currently outstanding. A refused write puts the axis
+        # back, which needs a "before" the object no longer has (onChanged
+        # sees the new value, not the old one), and the refusal has to
+        # outlive the write that caused it so execute() can flag the
+        # object. Both live here rather than on a property: they are
+        # bookkeeping about writes, not inputs, and a stale refusal must
+        # never survive into a saved file as geometry.
+        self._accepted_splits = {"USplits": [], "VSplits": []}
+        self._split_refusal = None
 
     def onDocumentRestored(self, obj):
         obj.recompute()
@@ -230,9 +240,30 @@ class Patch:
         act on; only a write that loses every value is worth a word (see
         onChanged for why the property editor's transient `0` must not
         raise one).
+
+        #76: an OVER-LIMIT list is the one input that is NOT corrected.
+        At most one split below 0.5 and one above it may be stored per
+        axis (`SilkMachinery.split_limit_problem`, the rule the band, the
+        corner-cell exclusion and the panel already share through
+        `split_end`). Past that, deciding which of two same-side splits
+        to keep would be a guess about a band WIDTH -- and the failure it
+        replaces is not a wrong surface but an INVISIBLE one: the blend
+        refuses a multi-cell band, returns early, and leaves its Poles
+        byte-identical while this patch reports itself Up-to-date and
+        Valid. So the axis goes back to the last list it accepted, which
+        moves no cell and therefore leaves nothing downstream stale, and
+        the object is flagged (see _refuse_splits).
         """
         current = list(getattr(fp, prop, None) or [])
         kept, out_of_range, repeated = normalize_splits_report(current)
+        over = split_limit_problem(kept)      # #76
+        if over is not None:
+            self._refuse_splits(fp, prop, current, over)
+            return
+        self._remember_accepted(prop, kept)
+        # A legal list clears an outstanding refusal: the object is only
+        # flagged while the axis still holds what the user cannot act on.
+        self._split_refusal = None
         if list(kept) == [float(v) for v in current]:
             return
         setattr(fp, prop, list(kept))
@@ -253,6 +284,71 @@ class Patch:
             "a width between 0 and 1 if that was meant.\n"
             % (fp.Name, prop, ", ".join("%g" % v for v in current),
                "; ".join(why)))
+
+    # ---- #76: the one-split-per-end limit --------------------------------
+
+    def _remember_accepted(self, prop, values):
+        """`prop` now holds `values` -- the last list this axis accepted.
+
+        The record is what a later over-limit write is put back to. It is
+        read from the proxy rather than from the object because onChanged
+        only ever sees the NEW value; the "before" is gone by then. Seeded
+        lazily because a Proxy restored from an old file has whatever
+        __dict__ that file pickled, which may predate this."""
+        hist = getattr(self, "_accepted_splits", None)
+        if hist is None:
+            hist = self._accepted_splits = {}
+        hist[prop] = [float(v) for v in values]
+
+    def _refuse_splits(self, fp, prop, current, problem):
+        """#76: refuse an over-limit split list, and make that visible.
+
+        Two halves, and the second is the point of the ticket:
+
+        1. Put the axis back to the last list it accepted (see
+           `_remember_accepted`), so the stored property, the geometry
+           and every blend built from it all still agree -- a refusal
+           changes NOTHING except that the value you asked for is not
+           there any more.
+        2. Leave the object INVALID, carrying the message, until a legal
+           write clears it. A console line is not a refusal the user can
+           find again: the failure being prevented is a blend that keeps
+           stale poles while everything reports itself fine, so the tree
+           entry itself has to say so. Raising out of execute() is how
+           FreeCAD surfaces a property error -- it puts 'Invalid' in
+           State, `isValid()` False and the message in
+           `getStatusString()`, and the tree draws its error marker --
+           while the already-built Shape stays on screen, which is right
+           here because the geometry did not move.
+
+        On a document restore it is done quietly (PrintMessage, not an
+        error): an old file must not greet the user with a complaint every
+        time it opens, exactly as for the out-of-range residue above.
+        """
+        restoring = 'Restore' in fp.State
+        hist = getattr(self, "_accepted_splits", {}) or {}
+        before = [float(v) for v in hist.get(prop, [])]
+        if before != [float(v) for v in current]:
+            try:
+                setattr(fp, prop, list(before))
+            except Exception:
+                pass
+        message = ("Silk: Patch '%s': %s = %s is refused -- %s The axis "
+                   "keeps %s, and the patch is marked invalid until a "
+                   "legal list is stored.\n"
+                   % (fp.Name, prop,
+                      ", ".join("%g" % float(v) for v in current),
+                      problem, _splits_str(before)))
+        if restoring:
+            FreeCAD.Console.PrintMessage(message)
+            self._split_refusal = None
+            return
+        FreeCAD.Console.PrintError(message)
+        # Set AFTER the write above: restoring the accepted list runs
+        # _normalize_splits_on_set again (the accepted path), which would
+        # otherwise clear the refusal this write just earned.
+        self._split_refusal = ("Silk: Patch '%s'.%s refused: %s"
+                               % (fp.Name, prop, problem))
 
     def _rebuild_display(self, fp):
         """Recompose the display Shape from the cached base surface,
@@ -568,6 +664,21 @@ class Patch:
     # ---- execute ---------------------------------------------------------
 
     def execute(self, fp):
+        # #76: a refused split write leaves the object flagged until a
+        # legal one arrives. Raising here is how FreeCAD surfaces a
+        # property error -- 'Invalid' in State, isValid() False, the
+        # message in getStatusString(), and the tree's error marker on
+        # the object itself. The alternative (a console line) is what
+        # #76 measured as the failure: a blend that refused a band and
+        # kept its stale poles while every object reported itself fine.
+        #
+        # Raising BEFORE the try, so the purgeTouched() below cannot
+        # clear the flag FreeCAD sets on a failed recompute -- and
+        # before any work, because the splits did not change: the surface
+        # already on screen is the right one and must survive.
+        refusal = getattr(self, "_split_refusal", None)
+        if refusal:
+            raise RuntimeError(refusal)
         # #59, part 1 -- the Patch half of the Blend <-> Patch recompute
         # cycle. A settled document.recompute() used to leave the two
         # covered Patches of a freshly blended pair ['Touched'] forever

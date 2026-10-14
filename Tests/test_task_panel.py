@@ -2527,6 +2527,111 @@ def test_band_editor_offers_no_width_the_panel_cannot_read_back(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_panel_band_edits_round_trip_within_the_split_limit(doc):
+    """#76 must not cost the panel anything: band editing is the one place
+    a user writes a split on purpose, so it has to keep working after an
+    over-limit list became a refusal.
+
+    Driven through `write_band_split` -- the call the editor makes -- at
+    BOTH ends (`_stacked_pair`: patch A at its parametric-1 end, patch B at
+    its parametric-0), as a ROUND TRIP: what `band_side` reads back after
+    the write is what was typed. Three things are asserted, because they
+    are the three ways this could have gone wrong:
+
+      * a width still round-trips at both ends, including repeated writes
+        at the SAME end (which REPLACE the split there -- the panel's
+        write is an edit of one end's split, never an append);
+      * no editor write can leave an axis over the limit, because the
+        stored parametric split is derived from a width the editor's own
+        range already keeps under the middle;
+      * and on real corner geometry, every strip still resolves to one
+        band cell and keeps its 24 poles -- the geometry the limit is
+        protecting, not just the property.
+    """
+    errors, checks = [], []
+    from SilkMachinery import split_limit_problem
+    from SilkTaskPanel import BAND_A, BAND_B, band_side, write_band_split, \
+        _side_of
+    from Tests.test_seam_resolver import _Capture
+
+    a, b, shared = _stacked_pair(doc)
+    entry = {"edge": shared, "patch_a": a, "patch_b": b,
+             "status": "blendable", "blend": None}
+    sides = ((BAND_A, a) + _side_of(a, b), (BAND_B, b) + _side_of(b, a))
+    for which, _p, prop, ss in sides:
+        what = "%s.%s end %d" % (_p.Name, prop, ss)
+        if ss not in (0, 1):
+            check(False, "%s: no end resolved (ss=%r)" % (what, ss), errors)
+            continue
+        for width in (0.05, 0.2, 0.45, 0.3, 0.45):
+            with _Capture() as cap:
+                wrote = write_band_split(entry, which, width)
+            got = band_side(entry, which)[3]
+            check(wrote and not cap.errors,
+                  "%s: writing %g was refused by the panel (%r)"
+                  % (what, width, cap.errors), errors)
+            check(abs(got - width) < 1e-9,
+                  "%s: wrote %g, read back %g -- the round trip the #76 "
+                  "refusal could have broken" % (what, width, got), errors)
+            vals = [float(v) for v in (getattr(_p, prop) or [])]
+            check(len(vals) <= 1,
+                  "%s: after writing %g the axis holds %r -- one editor "
+                  "must never append a second split at the same end"
+                  % (what, width, vals), errors)
+            check(split_limit_problem(vals) is None,
+                  "%s: the panel's own write left an over-limit axis %r"
+                  % (what, vals), errors)
+        check("Invalid" not in _p.State and _p.isValid() is True,
+              "%s: the patch is flagged after ordinary band edits (State=%r, "
+              "isValid=%r)" % (what, _p.State, _p.isValid()), errors)
+    checks.append("band widths 0.05 / 0.2 / 0.45 / 0.3 / 0.45 written and read "
+                  "back at BOTH ends through the panel's own write path; each "
+                  "end holds exactly one split and no axis goes over limit")
+
+    # ...and on corner geometry, where a patch really is seamed on both
+    # axes, the strips still build.
+    import Tests.corner_model as cm
+    model = cm.build_corner_model(doc)
+    for bname, strip in model["strips"].items():
+        what = "%s (%s | %s)" % (bname, strip.PatchA.Name, strip.PatchB.Name)
+        shared_edge = None
+        for _ename, e in model["edges"].items():
+            if e in list(strip.PatchA.Edges) and e in list(strip.PatchB.Edges):
+                shared_edge = e
+                break
+        if not check(shared_edge is not None,
+                     "%s: found no shared edge to write a width on" % what,
+                     errors):
+            continue
+        ent = {"edge": shared_edge, "patch_a": strip.PatchA,
+               "patch_b": strip.PatchB, "status": "blendable",
+               "blend": strip}
+        with _Capture() as cap:
+            wrote = write_band_split(ent, BAND_A, 0.25)
+        check(wrote and not cap.errors,
+              "%s: a 0.25 band-A width was refused (%r)" % (what, cap.errors),
+              errors)
+        check(abs(band_side(ent, BAND_A)[3] - 0.25) < 1e-9,
+              "%s: 0.25 reads back as %g" % (what, band_side(ent, BAND_A)[3]),
+              errors)
+        doc.recompute()
+        check(len(strip.Poles or []) == 24,
+              "%s: %d poles after the width edit, want 24"
+              % (what, len(strip.Poles or [])), errors)
+    for pname, patch in model["patches"].items():
+        for prop in ("USplits", "VSplits"):
+            vals = [float(v) for v in (getattr(patch, prop) or [])]
+            check(split_limit_problem(vals) is None,
+                  "%s.%s = %r is over the limit after the panel edits"
+                  % (pname, prop, vals), errors)
+            check("Invalid" not in patch.State,
+                  "%s.%s left the patch flagged (State=%r)"
+                  % (pname, prop, patch.State), errors)
+    checks.append("all 4 corner strips still build 24 poles after a panel "
+                  "width edit, and every patch axis stays within the limit")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 def test_asymmetric_band_widths_blend_green_and_differ_from_symmetric(doc):
     """A != B is reachable now, and it has to WORK (#69).
 
@@ -3586,6 +3691,7 @@ ALL_TESTS = [
     # #75
     test_band_width_at_the_middle_is_not_stored_even_at_the_1_end,
     test_band_editor_offers_no_width_the_panel_cannot_read_back,
+    test_panel_band_edits_round_trip_within_the_split_limit,
     test_asymmetric_band_widths_blend_green_and_differ_from_symmetric,
     test_setting_both_editors_to_the_same_value_writes_both,
     test_blocked_row_is_not_actionable_and_has_no_editor,

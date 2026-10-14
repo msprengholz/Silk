@@ -290,15 +290,32 @@ def _silk_owner(value, names):
     """
     if isinstance(value, types.ModuleType):
         return value.__name__ if value.__name__ in names else None
-    for cand in (value, type(value)):
-        name = getattr(cand, "__module__", None)
-        if name in names:
-            return name
-    owner = getattr(value, "__self__", None)
-    if owner is not None:
-        name = type(owner).__module__
-        if name in names:
-            return name
+    # #78: `getattr(x, "__module__", None)` does NOT swallow ReferenceError
+    # -- the default only covers AttributeError. A namespace binding that
+    # still points at an object of a CLOSED document raises
+    # ReferenceError here, and because the RPC namespace is persistent by
+    # design those bindings accumulate. One of them then made every single
+    # `run_all.py` invocation fail with
+    #   ReferenceError: Cannot access attribute '__module__' of deleted object
+    # and report "FreeCAD reported an error" with no tests run at all --
+    # a failure that disguises itself as a broken FreeCAD. Same mistake as
+    # the SilkBlend delete-watcher (#80); two occurrences, two places.
+    #
+    # A dead binding cannot own a live module, so it is not stale in any
+    # sense we can act on: returning None (not stale) is the honest answer
+    # and leaves the sweeper free to drop it by name later.
+    try:
+        for cand in (value, type(value)):
+            name = getattr(cand, "__module__", None)
+            if name in names:
+                return name
+        owner = getattr(value, "__self__", None)
+        if owner is not None:
+            name = type(owner).__module__
+            if name in names:
+                return name
+    except ReferenceError:
+        return None
     return None
 
 
@@ -371,11 +388,25 @@ def clear_stale_namespace(namespace, mod_dir=None, extra_prefixes=()):
     for key in list(namespace.keys()):
         if key in _PROTECTED_NAMES:
             continue
-        if any(key.startswith(p) for p in extra_prefixes) or _is_stale(
-            namespace.get(key), names
-        ):
+        try:
+            hit = any(key.startswith(p) for p in extra_prefixes) or _is_stale(
+                namespace.get(key), names
+            )
+        except ReferenceError:
+            # The binding points into a dead document. We cannot prove what
+            # it was, but we can prove it is useless: a deleted object can
+            # never be a live Silk module. Drop it rather than fail the run.
+            hit = True
+        if hit:
             del namespace[key]
             dropped.append(key)
+    if dropped:
+        # #78: visible, because a silent namespace clear is how this hid
+        # for so long -- 21 dead bindings accumulated with nothing to say
+        # so, until one of them failed every run in the session.
+        print("[leak] cleared %d stale RPC namespace binding(s): %s"
+              % (len(dropped), ", ".join(sorted(dropped)[:12])
+                 + (" ..." if len(dropped) > 12 else "")))
     return sorted(dropped)
 
 

@@ -326,6 +326,27 @@ def patch_side(pa, pb, tol=0.01):
     return ea, (0 if ea[1] == "0" else 1)
 
 
+def split_end(value):
+    """Which END of its axis ONE split belongs to: 0 (parametric-0), 1
+    (parametric-1), or None when it marks NEITHER -- which is what the
+    exact midpoint 0.5 does. #64, #76.
+
+    This is the classification itself, factored out of `split_at_end` so
+    that every question about a split's end asks THIS function: which
+    split is an end's band boundary (#64), which intervals are corner
+    cells (#61), which panel width can be stored (#75), and how many
+    splits an axis may carry (#76). Two notions of "which end" is how a
+    band comes to measure itself against a cell that was excluded for a
+    different reason.
+    """
+    v = float(value)
+    if v < 0.5:
+        return 0
+    if v > 0.5:
+        return 1
+    return None
+
+
 def split_at_end(splits, ss):
     """The split that carves the band at ONE END of an axis, or None.
 
@@ -347,13 +368,72 @@ def split_at_end(splits, ss):
     With TWO splits on one axis ([0.1, 0.9]) each end gets its own —
     end 0 takes the lowest, end 1 the highest. That is what lets a
     four-patch corner carry one split per seam side on the same axis.
+    The membership test is `split_end` (#76), the same one the
+    per-axis limit counts with; only the ORDER within an end is local
+    here, and it is the whole point of this function. An end's band is
+    the interval that reaches from that end: [0, s] at the 0 end, so s
+    is the LOWEST split there, and [s, 1] at the 1 end, so s is the
+    HIGHEST. Any further split at the same end is the middle one, and it
+    is to exactly that middle one that the geometry goes quietly wrong
+    (see split_limit_problem).
     """
     s = normalize_splits(list(splits or []))
-    if not s:
+    mine = [v for v in s if split_end(v) == ss]
+    if not mine:
         return None
-    if ss == 0:
-        return s[0] if s[0] < 0.5 else None
-    return s[-1] if s[-1] > 0.5 else None
+    return mine[0] if ss == 0 else mine[-1]
+
+
+def split_limit_problem(values):
+    """Why `values` may not be STORED as one axis' splits, or None. #76.
+
+    THE RULE: an axis carries at most ONE split below the middle and at
+    most ONE above it. Finer than "at most two", and it has to be -- each
+    split is the far edge of ONE band's interval, and an axis has one
+    interval per end that a band may carve, so `[0.2, 0.8]` is two bands
+    (one per end, legal) while `[0.2, 0.3]` is two bands that both want to
+    be at the SAME end and only the outermost of which any reader could
+    ever find (`split_at_end` reads the lowest / the highest and no
+    other). The midpoint 0.5 belongs to neither end and is never counted,
+    so `[0.1, 0.5, 0.9]` -- three splits, and what `ensure_band_split`
+    writes onto an axis that already carried a plain mid-surface
+    subdivision -- stays legal.
+
+    Why it matters, and why a silent correction is not good enough: past
+    the limit the result is not wrong so much as INVISIBLE. An extra
+    split on the band axis is absorbed without a word and the corner
+    blend quietly picks a different subgrid cell; an extra split on the
+    seam-parallel axis makes the band span cells the blend refuses, and
+    the refusal leaves the Blend's Poles byte-identical to the previous
+    run while the Patch reports itself Up-to-date and Valid. So this is a
+    REFUSAL (SilkPatch puts the axis back and flags the object), not a
+    truncation: which of two same-side splits to keep is a guess, and it
+    is a guess about a band WIDTH.
+
+    Per VALUE, through `split_end` -- the same classification the band,
+    the corner-cell exclusion and the panel use, so this limit can never
+    disagree with them about which end a split belongs to.
+    """
+    s = normalize_splits(list(values))
+    over = [(ss, [v for v in s if split_end(v) == ss]) for ss in (0, 1)]
+    over = [(ss, mine) for ss, mine in over if len(mine) > 1]
+    if not over:
+        return None
+    why = "; ".join("%s of them (%s) sit %s the middle"
+                    % (len(mine), ", ".join("%g" % v for v in mine),
+                       "below" if ss == 0 else "above")
+                    for ss, mine in over)
+    return ("%s -- one axis carries at most one split below 0.5 and one "
+            "above it: %s. Each split is the far edge of one band, and an "
+            "axis has one band per end, so a second split at the same end "
+            "is a width no reader could find (`split_at_end` reads the "
+            "lowest split at the 0 end and the highest at the 1 end). "
+            "Past the limit the result is invisible -- the corner blend "
+            "picks a different cell, or a band spans cells the blend "
+            "silently refuses -- so the list was not stored and the axis "
+            "keeps what it had. The midpoint 0.5 belongs to neither end "
+            "and is fine alongside either."
+            % (_splits_str(s), why))
 
 
 def corner_cells(splits, n_intervals):

@@ -53,6 +53,21 @@ Three problems, three groups of tests:
      the stored list equals what the geometry used, and the console
      says what was rejected and why.
 
+4. #76: the one-split-per-end limit was a SENTENCE in a refusal message.
+   - test_over_limit_splits_are_refused_on_the_property: at most one
+     split below 0.5 and one above, per axis, enforced on the property
+     path — [0.2, 0.8] and [0.1, 0.5, 0.9] pass, [0.2, 0.45, 0.9],
+     [0.2, 0.3] and [0.85, 0.95] are refused, and a refusal leaves the
+     axis exactly as it was;
+   - test_over_limit_refusal_is_visible_on_the_object: the refusal shows
+     up in the object's own state (Invalid / isValid() / status string),
+     with a control and a recovery, because the failure it prevents is a
+     blend that silently keeps stale poles;
+   - test_band_writes_can_never_go_over_the_limit: neither writer of a
+     split in the codebase (ensure_band_split, the panel's band editor)
+     can produce an over-limit axis, so the rule permits every layout
+     the workbench itself builds.
+
 NOTE on the oracle — the gap noted here was CLOSED by #63.
 SilkChecks re-derives band_cells independently, on purpose ("the oracle
 re-derives the object code's tables instead of importing them, so a bug
@@ -407,7 +422,15 @@ def test_split_at_end_picks_the_splits_own_end(doc):
     With two splits on ONE axis ([0.1, 0.9]) each end gets its own — the
     rule is per (axis, end), never a single global value. That is what
     lets a four-patch corner carry one split per seam side on the same
-    axis and still have each strip read the right one."""
+    axis and still have each strip read the right one.
+
+    #76 folds the classification into `split_end` — below 0.5 is the
+    0-end, above 0.5 the 1-end, exactly 0.5 neither — and `split_at_end`
+    is now the per-value classification plus the ORDER within an end
+    (lowest for the band that reaches from 0, highest for the one that
+    reaches from 1). The second half of this test pins the two together,
+    because a second notion of "which end" is exactly how a band comes to
+    measure itself against a cell excluded for a different reason."""
     from SilkMachinery import split_at_end
 
     errors, checks = [], []
@@ -432,6 +455,31 @@ def test_split_at_end_picks_the_splits_own_end(doc):
                           % (_fmt(splits), ss, got, want))
     checks.append("%d (splits, end) layouts: the lowest split is the 0-end's, "
                   "the highest the 1-end's, 0.5 is neither" % len(cases))
+
+    # #76: the per-axis limit counts with `split_end`, so this rule has to
+    # BE that classification -- an end "has a split" exactly when some
+    # split classifies to it. If the two ever drifted, the limit would be
+    # counting a different notion of "which end" than the one that reads
+    # the band.
+    from SilkMachinery import split_end
+    n = 0
+    for splits in _subsets([0.1, 0.3, 0.5, 0.7, 0.9]):
+        for ss in (0, 1):
+            n += 1
+            classified = any(split_end(v) == ss for v in splits)
+            got = split_at_end(splits, ss)
+            if classified != (got is not None):
+                errors.append("split_at_end(%s, %d) = %r, but split_end says "
+                              "this end %s a split"
+                              % (_fmt(splits), ss, got,
+                                 "has" if classified else "has no"))
+            if got is not None and split_end(got) != ss:
+                errors.append("split_at_end(%s, %d) = %g, which split_end "
+                              "puts at end %r" % (_fmt(splits), ss, got,
+                                                 split_end(got)))
+    checks.append("%d (splits, end) layouts: split_at_end and split_end "
+                  "classify the same end for every one of them -- the limit "
+                  "counts with the same rule that reads the band" % n)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -740,8 +788,12 @@ def test_multi_cell_band_refusal_names_patch_and_values(doc):
 
     Fixture: the corner PAIR (two patches, one strip). Patch44's
     seam-parallel axis (V, the axis running ALONG the shared seam) gets
-    [0.85, 0.95]: three intervals, the 1-end one is a corner cell, two
-    cells left in the band."""
+    [0.5, 0.8]: three intervals, the 1-end one is a corner cell, two
+    cells left in the band. #76 turned the old [0.85, 0.95] fixture into
+    an illegal write (two splits above 0.5, which is now refused), and
+    the substitution is better than a renaming: the extra cell here comes
+    from a plain MID-SURFACE split, which the limit permits -- so this is
+    a band the rule still cannot make single-cell, and it says so."""
     from Tests.corner_model import build_corner_pair
     from SilkMachinery import band_cells
 
@@ -752,11 +804,11 @@ def test_multi_cell_band_refusal_names_patch_and_values(doc):
     errors, checks = [], []
 
     with _Capture() as cap:
-        p44.VSplits = [0.85, 0.95]
+        p44.VSplits = [0.5, 0.8]
         doc.recompute()
 
     idxs = band_cells(p44, "V1", 1)
-    checks.append("band_cells(Patch44, V1, 1) with VSplits=[0.85, 0.95] "
+    checks.append("band_cells(Patch44, V1, 1) with VSplits=[0.5, 0.8] "
                   "= %r (2 cells)" % (idxs,))
     if len(idxs) != 2:
         errors.append("fixture did not produce a multi-cell band: %r" % idxs)
@@ -767,11 +819,11 @@ def test_multi_cell_band_refusal_names_patch_and_values(doc):
         ("cell count", "covers 2 subgrid cells"),
         ("seam + side", "seam V1 (band at parametric 1)"),
         ("band axis value", "band axis USplits = [0.9]"),
-        ("offending axis values", "seam-parallel axis VSplits = [0.85, 0.95]"),
+        ("offending axis values", "seam-parallel axis VSplits = [0.5, 0.8]"),
         ("interval count", "3 interval(s)"),
         ("corner cells excluded", "corner cell(s) [2] excluded"),
         ("cells left", "2 left in the band"),
-        ("valid fix", "Patch44.VSplits = [0.95]"),
+        ("valid fix", "Patch44.VSplits = [0.8]"),
     ]
     for label, frag in want_fragments:
         if frag not in msg:
@@ -790,18 +842,18 @@ def test_multi_cell_band_refusal_names_patch_and_values(doc):
 
     # And the suggested fix actually works.
     with _Capture() as cap2:
-        p44.VSplits = [0.95]
+        p44.VSplits = [0.8]
         doc.recompute()
     if cap2.errors:
         errors.append("the suggested fix still errors: %s" % cap2.errors)
     fixed = band_cells(p44, "V1", 1)
     if len(fixed) != 1:
-        errors.append("with VSplits=[0.95] the band is %r, want 1 cell"
+        errors.append("with VSplits=[0.8] the band is %r, want 1 cell"
                       % (fixed,))
     if len(strip.Poles or []) != 24:
         errors.append("after the suggested fix the strip has %d poles, "
                       "want 24" % len(strip.Poles or []))
-    checks.append("applying the suggested fix (VSplits=[0.95]) rebuilds the "
+    checks.append("applying the suggested fix (VSplits=[0.8]) rebuilds the "
                   "strip: 24 poles, one band cell %r, no errors" % (fixed,))
     return {"pass": not errors, "errors": errors, "checks": checks}
 
@@ -836,7 +888,7 @@ def test_splits_normalized_on_set(doc):
         # (written, expected stored, expected cell count with VSplits [])
         ([0.7, 0.0, 0.2, 1.0, -0.5, 2.0, 0.2], [0.2, 0.7], 3),
         ([0.5, 0.5], [0.5], 2),
-        ([0.9, 0.3, 0.6], [0.3, 0.6, 0.9], 4),   # unsorted in
+        ([0.9, 0.2, 0.5], [0.2, 0.5, 0.9], 4),   # unsorted in; 3 is legal (#76)
         ([0.0, 1.0], [], 0),                     # nothing survives -> loud
         ([0.0, 0.25, 1.0], [0.25], 2),           # a partial fix -> silent
         ([0.5], [0.5], 2),                       # a legal write: no-op
@@ -930,6 +982,260 @@ def test_splits_normalized_on_set(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+# ---- 4: #76 — the one-split-per-end limit, in code ----------------------
+
+def test_over_limit_splits_are_refused_on_the_property(doc):
+    """#76: "at most one split below 0.5 and at most one above 0.5, per
+    axis" was a SENTENCE in a refusal message. Here it is a rule the
+    property path enforces.
+
+    The rule is finer than "at most two", because that is what the
+    geometry can hold: a split is the FAR EDGE of one band's interval and
+    an axis has one interval per end, so `[0.2, 0.8]` is two bands (one per
+    end, legal) while `[0.2, 0.3]` is two bands that both want to be at the
+    SAME end. 0.5 marks neither end, so `[0.1, 0.5, 0.9]` — three splits,
+    and what `ensure_band_split` writes onto an axis that already carried a
+    plain mid-surface subdivision — is LEGAL and stays legal.
+
+    A refusal is a REFUSAL, not a silent correction: which of two
+    same-side splits to keep is a semantic guess (it decides the band
+    width), so the axis keeps the list it last accepted, unchanged, and the
+    geometry does not move at all."""
+    from SilkMachinery import split_limit_problem
+    from Tests.test_seam_resolver import _square_patch
+
+    errors, checks = [], []
+
+    # -- the rule itself, as data ---------------------------------------
+    legal = [[], [0.5], [0.2], [0.8], [0.2, 0.8], [0.05, 0.95],
+             [0.1, 0.5, 0.9], [0.2, 0.5], [0.5, 0.9]]
+    illegal = [[0.2, 0.3], [0.2, 0.45, 0.9], [0.2, 0.3, 0.4],
+               [0.85, 0.95], [0.1, 0.85, 0.95], [0.2, 0.3, 0.9, 0.8]]
+    for splits in legal:
+        problem = split_limit_problem(splits)
+        if problem is not None:
+            errors.append("%s is legal (one below 0.5, one above, 0.5 to "
+                          "neither) but the rule refuses it: %s"
+                          % (_fmt(splits), problem))
+    for splits in illegal:
+        if split_limit_problem(splits) is None:
+            errors.append("%s is over the limit (more than one split at the "
+                          "same end of the axis) and nothing says so"
+                          % _fmt(splits))
+    checks.append("%d legal and %d over-limit lists classified by the one "
+                  "rule, including 0.5 counting for neither end"
+                  % (len(legal), len(illegal)))
+
+    # the message names the values it refuses — a refusal the user cannot
+    # act on is half a refusal
+    msg = split_limit_problem([0.2, 0.45, 0.9])
+    if msg is None:
+        errors.append("split_limit_problem([0.2, 0.45, 0.9]) said nothing")
+    else:
+        for v in (0.2, 0.45, 0.9):
+            if "%g" % v not in msg:
+                errors.append("the refusal for [0.2, 0.45, 0.9] does not "
+                              "name %g: %s" % (v, msg))
+    checks.append("the refusal message names every value on the axis")
+
+    # -- and the same rule through the PROPERTY path --------------------
+    p = _square_patch(doc, "Limit")
+
+    def stored():
+        return [round(float(v), 12) for v in (p.USplits or [])]
+
+    def cells():
+        return len(p.Proxy._subgrids)
+
+    cases = [
+        # (written, stored after, accepted?)
+        ([0.2, 0.8], [0.2, 0.8], True),        # one per end: the 2-split band
+        ([0.1, 0.5, 0.9], [0.1, 0.5, 0.9], True),  # THREE, legal: 0.5 is neither
+        ([0.5], [0.5], True),
+        # ...and each of these puts the axis back to that [0.5]: a refusal
+        # is not a correction, it is a refusal.
+        ([0.2, 0.45, 0.9], [0.5], False),      # two below
+        ([0.3, 0.45, 0.9], [0.5], False),      # two below, again
+        ([0.85, 0.95], [0.5], False),          # two above
+        ([0.2, 0.3], [0.5], False),            # two below, straddling nothing
+        ([0.3, 0.6], [0.3, 0.6], True),
+        # ...and a refusal from an EMPTY axis leaves it empty, so the
+        # over-limit list never becomes the "before" of the next one.
+        ([], [], True),
+        ([0.2, 0.45, 0.9], [], False),
+        ([0.2, 0.8], [0.2, 0.8], True),
+    ]
+    for written, want, accepted in cases:
+        with _Capture() as cap:
+            p.USplits = list(written)
+        got = stored()
+        if got != want:
+            errors.append("USplits = %s stored as %s, want %s"
+                          % (_fmt(written), _fmt(got), _fmt(want)))
+        # geometry follows the stored list and NOTHING ELSE: a refusal
+        # moves no cell, so nothing downstream can be left stale. (No
+        # splits at all is no subgrids at all, not one cell.)
+        n_splits = len(got) + len(p.VSplits or [])
+        want_cells = (len(got) + 1) * (len(p.VSplits) + 1) if n_splits else 0
+        if cells() != want_cells:
+            errors.append("USplits = %s left %d cells, want %d (the stored "
+                          "list is %s)" % (_fmt(written), cells(),
+                                           want_cells, _fmt(got)))
+        said = "\n".join(cap.errors)
+        if accepted and said.strip():
+            errors.append("USplits = %s is legal and was reported anyway: %s"
+                          % (_fmt(written), said))
+        if not accepted:
+            if not said.strip():
+                errors.append("USplits = %s was refused in silence"
+                              % _fmt(written))
+            elif not all(("%g" % v) in said for v in written):
+                errors.append("the refusal for %s does not name every value "
+                              "it refused:\n%s" % (_fmt(written), said))
+    checks.append("%d USplits writes through the property: legal lists "
+                  "stored and silent, over-limit lists refused with the "
+                  "axis left exactly as it was and the cells unmoved"
+                  % len(cases))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_over_limit_refusal_is_visible_on_the_object(doc):
+    """The refusal has to be VISIBLE. The failure #76 exists to prevent is
+    not a crash: the blend refuses a band it cannot build, leaves its
+    Poles byte-identical to the previous run, and the Patch reports
+    `State ['Up-to-date']`, `isValid() True`, `getStatusString() 'Valid'`
+    — no tree marker, no stale flag, and a surface on screen that no
+    longer belongs to the inputs.
+
+    So the refusal is surfaced the way FreeCAD surfaces a property error:
+    the object is left INVALID, carrying the message. Asserted on the
+    state the tree reads, not on a printed line — plus the control (a
+    patch nobody refused is valid) so the flag cannot pass by being
+    always-on, and the recovery (a legal write clears it), so it cannot
+    pass by being permanent."""
+    from Tests.test_seam_resolver import _square_patch
+
+    errors, checks = [], []
+    p = _square_patch(doc, "Visible")
+
+    # control: an ordinary object is up to date and valid
+    if "Invalid" in p.State:
+        errors.append("a freshly built patch is already Invalid (%r)"
+                      % (p.State,))
+    if p.isValid() is not True:
+        errors.append("a freshly built patch reports isValid()=%r, want True"
+                      % (p.isValid(),))
+    if p.getStatusString() != "Valid":
+        errors.append("a freshly built patch reports status %r, want 'Valid'"
+                      % p.getStatusString())
+    checks.append("control: the untouched patch is Up-to-date / valid / "
+                  "'Valid' -- so the flag below is not simply always-on")
+
+    p.USplits = [0.2, 0.8]
+    doc.recompute()
+    p.USplits = [0.2, 0.45, 0.9]       # two splits below 0.5: refused
+    doc.recompute()                    # ...and still refused on the next pass
+
+    for label, probe in (("State", lambda: "Invalid" in p.State),
+                         ("isValid()", lambda: p.isValid() is False),
+                         ("getStatusString()",
+                          lambda: ("USplits" in p.getStatusString()
+                                   and "0.45" in p.getStatusString()))):
+        if not probe():
+            errors.append("after a refused USplits write the patch's %s "
+                          "does not show the refusal (State=%r, isValid=%r, "
+                          "status=%r)" % (label, p.State, p.isValid(),
+                                          p.getStatusString()))
+    if "Up-to-date" in p.State:
+        errors.append("the refused patch still claims to be Up-to-date "
+                      "(State=%r) -- that is exactly the #76 failure mode"
+                      % (p.State,))
+    checks.append("after the refused write: State %r, isValid()=%r, status "
+                  "'%s' -- and it survives a further doc.recompute(), so it "
+                  "is not a transient Touched flag"
+                  % (p.State, p.isValid(), p.getStatusString()))
+
+    # The refusal must not cost the user their geometry: the splits did not
+    # change, so the surface on screen is still the right one.
+    if p.Shape.isNull() or not p.Shape.isValid():
+        errors.append("the refused write destroyed the patch shape")
+    checks.append("the refused write leaves the patch shape intact -- the "
+                  "geometry is unchanged because the splits are")
+
+    # ...and a legal write clears the flag: the object recovers.
+    p.USplits = [0.2, 0.8]
+    doc.recompute()
+    if "Invalid" in p.State or p.isValid() is not True:
+        errors.append("a legal USplits write did not clear the refusal "
+                      "(State=%r, isValid=%r)" % (p.State, p.isValid()))
+    if "Up-to-date" not in p.State:
+        errors.append("after the fix the patch is not Up-to-date (%r)"
+                      % (p.State,))
+    checks.append("a legal write after the refusal clears it: State %r, "
+                  "isValid()=%r" % (p.State, p.isValid()))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_band_writes_can_never_go_over_the_limit(doc):
+    """The rule must permit what the CODE writes, or #76 breaks the
+    workbench. Two writers of a split exist: `ensure_band_split` (0.1 /
+    0.9) and the panel's band editor (a user width, stored as the width at
+    the 0-end and 1 - width at the 1-end). Both write only when the end
+    carries no split at all, which is precisely when the write cannot be
+    the second split at that end — so neither can trip the rule, and
+    `[0.1, 0.5, 0.9]` (a plain mid-surface split plus a band at each end)
+    is a layout the blend legitimately produces."""
+    from SilkMachinery import split_at_end, split_limit_problem
+
+    errors, checks = [], []
+    subsets = _subsets([0.1, 0.5, 0.9])
+
+    def write(cur, ss, width):
+        """SilkBlend.ensure_band_split's write / the panel's, in shape: the
+        caller means a band WIDTH, the property keeps the parametric split
+        at this end (the width at the 0 end, 1 - width at the 1 end, #70),
+        and the write only happens when the end carries no split at all."""
+        cur = list(cur)
+        if split_at_end(cur, ss) is not None:
+            return cur
+        stored = width if ss == 0 else 1.0 - width
+        return sorted(cur + [stored])
+
+    n = 0
+    for splits in subsets:
+        for ss in (0, 1):
+            # the blend's own default, then user widths at each end
+            for width in (0.1, 0.45, 0.05, 0.2, 0.49):
+                after = write(splits, ss, width)
+                n += 1
+                problem = split_limit_problem(after)
+                if problem is not None:
+                    errors.append("writing a %g-wide band at end %d of %s "
+                                  "leaves %s, which the rule refuses: %s"
+                                  % (width, ss, _fmt(splits), _fmt(after),
+                                     problem))
+    checks.append("%d (start, end, width) writes from every subset of "
+                  "{0.1, 0.5, 0.9}: none of them can produce an over-limit "
+                  "axis" % n)
+
+    # and on real geometry: a four-patch corner ring, where each patch
+    # carries a band at BOTH ends of BOTH axes -- the layout the rule has
+    # to survive.
+    model = cm.build_corner_model(doc)
+    worst = 0
+    for name, patch in model["patches"].items():
+        for prop in ("USplits", "VSplits"):
+            vals = [float(v) for v in (getattr(patch, prop) or [])]
+            worst = max(worst, len(vals))
+            problem = split_limit_problem(vals)
+            if problem is not None:
+                errors.append("%s.%s = %s is over the limit: %s"
+                              % (name, prop, _fmt(vals), problem))
+    checks.append("the 4-patch corner ring: every axis of every patch is "
+                  "within the limit (widest axis holds %d splits)" % worst)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_band_cells_identical_to_legacy_on_default_splits,
     test_band_cells_generalizes_user_widths,
@@ -941,4 +1247,7 @@ ALL_TESTS = [
     test_default_band_split_decision_is_unchanged,
     test_multi_cell_band_refusal_names_patch_and_values,
     test_splits_normalized_on_set,
+    test_over_limit_splits_are_refused_on_the_property,
+    test_over_limit_refusal_is_visible_on_the_object,
+    test_band_writes_can_never_go_over_the_limit,
 ]

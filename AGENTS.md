@@ -103,6 +103,24 @@ the HIGHEST to the parametric-1 end, one exactly at 0.5 to neither. With two
 splits on ONE axis (`[0.1, 0.9]`) each end gets its own — the rule is per
 (patch, axis, side), so a corner patch's two seams on one axis never collide.
 
+**At most ONE split below 0.5 and ONE above 0.5, per axis** (#76, enforced in
+code, not prose). That is finer than "at most two": `[0.2, 0.8]` is two bands,
+one per end; `[0.2, 0.45, 0.9]` and `[0.2, 0.3]` are two bands that both want
+to be at the SAME end. 0.5 marks neither end, so `[0.1, 0.5, 0.9]` — three
+splits, and what `ensure_band_split` writes onto an axis that already carried a
+plain mid-surface split — is legal and stays legal. One rule, counted through
+`SilkMachinery.split_end` (below 0.5 -> end 0, above -> end 1, exactly 0.5 ->
+neither), which `split_at_end` itself is built from, so the limit cannot
+disagree with the band or `corner_cells` about which end a split is for.
+Enforced on the property-set path (`SilkPatch._normalize_splits_on_set`), so
+the script, panel and expression paths all meet it. An over-limit list is
+REFUSED, not corrected: the axis goes back to the list it last accepted (which
+is why `_accepted_splits` is remembered on the proxy — `onChanged` never sees
+the value it replaced) and `execute()` raises, leaving the object `Invalid`
+until a legal list is stored. Neither writer of a split can trip it —
+`ensure_band_split` and `write_band_split` both write only at an end that
+carries no split.
+
 ### Step 3b: Band = subgrid cells, NOT re-segmentation (ticket #33)
 The strip band is taken from the patch's pre-computed subgrid cells
 (`p.Proxy._subgrids`, produced by USplits/VSplits) — never by re-segmenting
