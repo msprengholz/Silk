@@ -298,7 +298,7 @@ def test_patch_get_subgrid_api(doc):
 
     edges = _make_loop_edges(doc)
     p = create_patch(edges, name="PatchU")
-    p.USplits = [0.3]
+    p.USplit1 = 0.3
     doc.recompute()
 
     sub_poles, sub_weights = p.Proxy.getSubgrid(0, 0.5, 0, 1)

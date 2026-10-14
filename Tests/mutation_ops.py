@@ -3,7 +3,7 @@ Tests/mutation_ops.py — shared mutation operators + run_mutations helper
 (issue #43 backfill; reused later by the #41 matrix).
 
 Each operator applies a mutation through the ops layer (Sketches/Poles/
-USplits + doc.recompute()), then re-validates its mutated object(s) with
+band edge + doc.recompute()), then re-validates its mutated object(s) with
 the relevant SilkChecks oracle. Operators read their targets out of a
 model dict produced by a test's build() callable and never inspect
 private internals (_subgrids, _base_surface, ...) — behavior only.
@@ -95,25 +95,33 @@ def move_boundary_pole(model, *, edge=None, pole_index=1, delta=None):
     return checks, errors
 
 
-def change_splits(model, *, patch=None, splits_sweep=None, splits_axis="USplits"):
-    """Set / remove / sweep the split parameters on a unified
-    Patch (dispatched on the USplits/VSplits properties); subgrid
+#: The neutral axis: `Split1 = 0`, `Split2 = 1`, i.e. no band at either
+#: end and therefore no subdivision at all. #82: the sentinel IS the
+#: property's own endpoint, so "no split on this axis" is a pair of
+#: ordinary-looking numbers.
+NO_BAND = (0.0, 1.0)
+
+
+def change_splits(model, *, patch=None, splits_sweep=None, splits_axis="U"):
+    """Set / remove / sweep the band edges on a unified Patch; subgrid
     cells rebuild and the object revalidates. `splits_axis` picks the
-    swept property ("USplits" or "VSplits" -- the pointed seams often
-    carry their band split on the other axis than the quad ones).
+    swept axis ("U" or "V" -- the pointed seams often carry their band
+    edge on the other axis than the quad ones) and `splits_sweep` is a
+    list of `(Split1, Split2)` pairs.
 
     Only sweeps that keep the blend's band a single seam-adjacent cell
     are safe (per #33 the blend supports single-cell bands), so the seam
     stays clean. Which values those are depends on the axis (#41):
-    - the split axis PARALLEL to the shared seam controls the band's
-      cell COUNT, so there only [], [0.1], [0.9]-style values keep a
-      single cell (0.1/0.9 are the corner-cell exclusions that leave
-      exactly one band cell);
+    - the axis PARALLEL to the shared seam controls the band's cell
+      COUNT, so there a sweep may carry at most one END's edge, or two
+      DIFFERENT ones -- each edge drops exactly one corner cell, which
+      leaves the single remaining cell in the band. Two ends holding the
+      SAME edge collapse to one split whose both cells are corner cells,
+      so that pair has no band at all;
     - the PERPENDICULAR axis never affects the band count, so any
       values are safe.
-    Callers pass the safe sweep per model; the default sweep (legacy
-    behavior, unchanged) is only safe on the perpendicular axis (or on
-    models without a blend) and ends at [0.9]."""
+    Callers pass the safe sweep per model; the default sweep is only
+    safe on the perpendicular axis (or on models without a blend)."""
     doc = _doc(model)
     if patch is None:
         patch = model.get("patch")
@@ -122,23 +130,25 @@ def change_splits(model, *, patch=None, splits_sweep=None, splits_axis="USplits"
     else:
         patch = _resolve(model, patch)
     if splits_sweep is None:
-        splits_sweep = ([0.5], [0.25, 0.75], [], [0.1], [0.9])
+        splits_sweep = ((0.5, 1.0), (0.25, 0.75), NO_BAND, (0.1, 1.0),
+                        (0.0, 0.9))
     checks, errors = [], []
-    for splits in splits_sweep:
-        setattr(patch, splits_axis, splits)
+    prop1, prop2 = "%sSplit1" % splits_axis, "%sSplit2" % splits_axis
+    for pair in splits_sweep:
+        setattr(patch, prop1, pair[0])
+        setattr(patch, prop2, pair[1])
         doc.recompute()
+        shown = "%s=%g/%g" % (splits_axis, float(getattr(patch, prop1)),
+                              float(getattr(patch, prop2)))
         res = _oracle_patch(patch)
         bad = [(n, d) for n, ok, d in res if not ok]
         if bad:
-            errors.append("change_splits %s=%s not green: %s"
-                          % (splits_axis, splits, bad))
+            errors.append("change_splits %s not green: %s" % (shown, bad))
             continue
         if patch.Shape.isNull() or not patch.Shape.isValid():
-            errors.append("change_splits %s=%s: invalid shape"
-                          % (splits_axis, splits))
+            errors.append("change_splits %s: invalid shape" % shown)
             continue
-        checks.append("%s=%s -> oracle green, shape valid"
-                      % (splits_axis, splits))
+        checks.append("%s -> oracle green, shape valid" % shown)
     return checks, errors
 
 
@@ -173,8 +183,11 @@ def toggle_display(model, *, obj=None):
     checks, errors = [], []
     if hasattr(obj, "ShowSubgrids"):
         flags = ["ShowSubgrids", "ShowGrid", "AutoHideBlend"]
-        if not obj.USplits:
-            obj.USplits = [0.5]   # so ShowSubgrids exercises real sub-shapes
+        if not obj.USplit1 and obj.USplit2 == 1.0:
+            # so ShowSubgrids exercises real sub-shapes. A band edge at
+            # the 0 end (#82) is the neutral choice: it cuts the axis in
+            # two and drops the first cell from any band.
+            obj.USplit1 = 0.5
             doc.recompute()
     else:
         flags = ["ShowCurve", "ShowPolygon"]
@@ -233,7 +246,7 @@ def recompute_convergence(model, *, iterations=5, tol=1e-6):
     every iteration, no pole set drifts beyond tol, and every object
     exposing _HiddenSubgridIdxs keeps the IDENTICAL set across all
     iterations with every index inside [0, nu*nv), where nu/nv are
-    derived from the public USplits/VSplits (a set that is stale from
+    derived from the four public band edges (a set that is stale from
     before the first iteration, ping-pongs, or holds out-of-range cell
     indices after a split change is flagged)."""
     doc = _doc(model)
@@ -264,8 +277,9 @@ def recompute_convergence(model, *, iterations=5, tol=1e-6):
                 errors.append("recompute_convergence iter %d: %s hidden-cell "
                               "set %r != baseline %r (ping-pong / stale)"
                               % (i, o.Name, h, hidden0[o.Name]))
-            nu = len(list(getattr(o, "USplits", []) or [])) + 1
-            nv = len(list(getattr(o, "VSplits", []) or [])) + 1
+            from SilkMachinery import build_intervals, split_pair
+            nu = len(build_intervals(*split_pair(o, "U")))
+            nv = len(build_intervals(*split_pair(o, "V")))
             oob = [k for k in h if not (0 <= k < nu * nv)]
             if oob:
                 errors.append("recompute_convergence iter %d: %s hidden-cell "

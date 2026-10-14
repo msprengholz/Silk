@@ -1,43 +1,68 @@
 """
-Corner band splits (ticket #32): each corner patch needs a band split in
-BOTH directions.
+Corner band edges (ticket #32, restated by #82): each corner patch needs a
+band edge in BOTH directions.
 
 A 2x2 corner patch meets two blend strips (one per shared radial edge),
 one seam perpendicular to U, one perpendicular to V. Each strip must
-ensure the split that isolates its 0.1 band — on the correct axis and on
-the seam's side (0.9 for a seam at parametric 1). Only then does the
+ensure the edge that isolates its 0.1 band — on the correct axis and on
+the seam's own END (0.9 for a seam at parametric 1). Only then does the
 0.1x0.1 corner cell at the central junction exist.
 
-Pre-fix, SilkBlend wrote USplits=[0.1] once per patch (whenever the patch
-had no subgrids at all), regardless of seam axis/side, and the second
-strip on the same patch never added the perpendicular split.
+Pre-#82, SilkBlend wrote a split value into a per-axis LIST once per
+patch (whenever the patch had no subgrids at all), regardless of seam
+axis/side, and the second strip on the same patch never added the
+perpendicular split. Now it writes ONE property, named for the end it
+belongs to, and the two strips on one patch write two different
+properties.
 
-Expected end state after the full ring:
+Expected end state after the full ring (the band edge each axis carries,
+as `(Split1, Split2)`):
 
-    patch      USplits   VSplits
-    Patch44    [0.9]     [0.9]
-    Patch001   [0.1]     [0.9]
-    Patch002   [0.9]     [0.9]
-    Patch003   [0.1]     [0.9]
+    patch      USplit1/USplit2   VSplit1/VSplit2
+    Patch44    0.0  / 0.9        0.0  / 0.9
+    Patch001   0.1  / (none)     0.0  / 0.9
+    Patch002   0.0  / 0.9        0.0  / 0.9
+    Patch003   0.1  / (none)     0.0  / 0.9
+
+Patch002's two seams both sit at the parametric-1 end of their axes,
+which is why its U axis carries the 1 end's edge too.
+
+(the pre-#82 table read as `USplits=[0.9]`, `[0.1]`, `[]`, `[0.1]` with
+`VSplits=[0.9]` throughout -- the same information, with each value filed
+under the end that names it)
 """
 
 import FreeCAD
 
-# (name, expected USplits, expected VSplits)
+# (name, expected (USplit1, USplit2), expected (VSplit1, VSplit2))
 EXPECTED_SPLITS = [
-    ("Patch44", [0.9], [0.9]),
-    ("Patch001", [0.1], [0.9]),
-    ("Patch002", [0.9], [0.9]),
-    ("Patch003", [0.1], [0.9]),
+    ("Patch44", (0.0, 0.9), (0.0, 0.9)),
+    ("Patch001", (0.1, 1.0), (0.0, 0.9)),
+    ("Patch002", (0.0, 0.9), (0.0, 0.9)),
+    ("Patch003", (0.1, 1.0), (0.0, 0.9)),
 ]
 
 
-def _sorted_vals(p, prop):
-    return sorted(float(v) for v in (getattr(p, prop) or []))
+def _edges(p, letter):
+    """`(Split1, Split2)` of one axis, as plain floats."""
+    return (round(float(getattr(p, letter + "Split1")), 12),
+            round(float(getattr(p, letter + "Split2")), 12))
+
+
+def _fmt(pair):
+    return "%g / %g" % pair
 
 
 def test_corner_patches_have_both_band_splits(doc):
-    """After the full ring, every patch has both splits (2x2 subgrid)."""
+    """After the full ring, every patch has an edge on both of the ends
+    its two seams ask for (2x2 subgrid).
+
+    The assertion is per PROPERTY, not per axis: #82's whole point is
+    that the name says which end the edge belongs to, so a corner patch
+    holding 0.9 on U's parametric-1 end and 0.1 on V's parametric-0 end
+    is a different thing from one holding 0.1 and 0.9 the other way
+    round — and it is the pair of PROPERTIES that tells them apart.
+    """
     from Tests.corner_model import build_corner_model
 
     model = build_corner_model(doc)
@@ -45,16 +70,16 @@ def test_corner_patches_have_both_band_splits(doc):
     checks = []
     for name, want_u, want_v in EXPECTED_SPLITS:
         p = model["patches"][name]
-        got_u = _sorted_vals(p, "USplits")
-        got_v = _sorted_vals(p, "VSplits")
+        got_u = _edges(p, "U")
+        got_v = _edges(p, "V")
         if got_u != want_u:
-            errors.append(f"{name}: USplits={got_u}, want {want_u}")
+            errors.append(f"{name}: USplit1/USplit2={got_u}, want {want_u}")
         if got_v != want_v:
-            errors.append(f"{name}: VSplits={got_v}, want {want_v}")
+            errors.append(f"{name}: VSplit1/VSplit2={got_v}, want {want_v}")
         n = len(p.Proxy._subgrids)
         if n != 4:
             errors.append(f"{name}: {n} subgrid cells, want 4 (2x2)")
-        checks.append(f"{name}: U={got_u} V={got_v} cells={n}")
+        checks.append(f"{name}: U={_fmt(got_u)} V={_fmt(got_v)} cells={n}")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 

@@ -36,22 +36,24 @@ Builders reuse existing fixtures, nothing duplicated silently:
 
 Split-sweep safety (documented per model, see SEAM_AXIS_SAFE below):
 the blend band (#33) is the seam-adjacent subgrid cell; its cell COUNT
-depends only on the split axis PARALLEL to the shared seam, so seam-
-parallel sweeps must stay within [], [0.1], [0.9] (corner-exclusion
-values that leave exactly one band cell) while perpendicular sweeps may
-take any values. Chosen per model and asserted empirically green:
-  GT quad   pa seam V0 -> VSplits seam-parallel, USplits perpendicular
-            pb seam U0 -> USplits seam-parallel, VSplits perpendicular
-  cone pair pa seam U1 / pb seam U0 -> USplits seam-parallel both
-  cone+hood cone seam V1 -> VSplits seam-parallel (USplits perp),
-            hood seam U0 -> USplits seam-parallel (VSplits perp)
+depends only on the axis PARALLEL to the shared seam. Since #82 that
+axis carries two NAMED band edges, one per end, and each edge drops
+exactly one corner cell -- so a seam-parallel sweep keeps a single band
+cell whenever the two ends hold DIFFERENT values, which SEAM_AXIS_SAFE
+enforces. Perpendicular sweeps may take any values. Chosen per model and
+asserted empirically green:
+  GT quad   pa seam V0 -> V axis seam-parallel, U axis perpendicular
+            pb seam U0 -> U axis seam-parallel, V axis perpendicular
+  cone pair pa seam U1 / pb seam U0 -> U axis seam-parallel both
+  cone+hood cone seam V1 -> V axis seam-parallel (U perp),
+            hood seam U0 -> U axis seam-parallel (V perp)
 
 Known latent bug found & fixed while deriving these (#41 report):
 ArachNURBS.blend_poly_2x4_1x6's end-point degeneracy guard inspected
 the FIRST curve while the tangent comes from the SECOND, so a blend row
-pairing a non-degenerate row with a degenerate one (coneA USplits=[0.1]
+pairing a non-degenerate row with a degenerate one (coneA USplit1=0.1
 vs coneB's apex column) crashed "Cannot normalize null vector". Fixed
-with a both-curves guard (strictly crash-only change); the [0.1]
+with a both-curves guard (strictly crash-only change); the (0.1, no band)
 cone-pair sweep below is the red->green regression for it.
 """
 
@@ -70,13 +72,17 @@ FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                        "Resources", "Test_files", "Silk_Workflow.FCStd")
 
 # Sweep values that keep the blend band a single seam-adjacent cell on
-# the split axis PARALLEL to the seam (see module docstring): [] -> one
-# interval, [0.9]/[0.1] -> the corner cell at the band end is excluded
-# (#33 band_cells), leaving exactly one band cell. The final value [0.1]
-# also proves the corner-exclusion path; on the PERPENDICULAR axis the
-# operator's legacy default sweep ([0.5], [0.25, 0.75], [], [0.1],
-# [0.9]) is safe at every step and is used unchanged.
-SEAM_AXIS_SAFE = ([0.9], [], [0.1])
+# the axis PARALLEL to the seam (see module docstring), as `(Split1,
+# Split2)` pairs: (0, 1) -> no edge at either end, one interval; (0, 0.9)
+# and (0.1, 1) -> one end's edge, which drops that end's cell as the
+# corner cell (#33 band_cells) and leaves exactly one band cell. Every
+# pair holds DIFFERENT values at the two ends, which is what keeps the
+# band non-degenerate: two ends holding the same edge would collapse the
+# axis to a single split whose BOTH cells are corner cells. The final
+# value also proves the corner-exclusion path; on the PERPENDICULAR axis
+# the operator's default sweep ((0.5, 1), (0.25, 0.75), (0, 1), (0.1, 1),
+# (0, 0.9)) is safe at every step and is used unchanged.
+SEAM_AXIS_SAFE = ((0.0, 0.9), (0.0, 1.0), (0.1, 1.0))
 
 
 # ---- builders ----------------------------------------------------------
@@ -173,10 +179,9 @@ def test_mutation_unified_quad_pipeline(doc):
       - move a pole on the SHARED boundary edge E_Shr -> both patches
         AND the blend rebuild (acceptance 1);
       - change_splits on BOTH axes of BOTH patches (acceptance 2):
-        perpendicular axes take the legacy default sweep, seam-parallel
-        axes (pa.VSplits for the V0 seam, pb.USplits for the U0 seam)
-        take SEAM_AXIS_SAFE so the band stays a single cell at every
-        step;
+        perpendicular axes take the default sweep, seam-parallel axes
+        (pa's V axis for the V0 seam, pb's U axis for the U0 seam) take
+        SEAM_AXIS_SAFE so the band stays a single cell at every step;
       - display toggles;
       - recompute convergence incl. hidden-cell-set assertions
         (acceptance 3). The full oracle (check_edge + check_patch +
@@ -191,15 +196,15 @@ def test_mutation_unified_quad_pipeline(doc):
             [functools.partial(mo.move_boundary_pole, edge="E_Shr",
                                pole_index=1, delta=Vector(3.0, 2.0, 1.0)),
              functools.partial(mo.change_splits, patch="pa",
-                               splits_axis="USplits"),
+                               splits_axis="U"),
              functools.partial(mo.change_splits, patch="pa",
-                               splits_axis="VSplits",
+                               splits_axis="V",
                                splits_sweep=SEAM_AXIS_SAFE),
              functools.partial(mo.change_splits, patch="pb",
-                               splits_axis="USplits",
+                               splits_axis="U",
                                splits_sweep=SEAM_AXIS_SAFE),
              functools.partial(mo.change_splits, patch="pb",
-                               splits_axis="VSplits"),
+                               splits_axis="V"),
              functools.partial(mo.toggle_display, obj="pa"),
              functools.partial(mo.recompute_convergence, iterations=5)])
         errors += errs
@@ -218,9 +223,9 @@ def test_mutation_unified_pointed_pair(doc):
     the shared profile (its endpoints are the seam corners, so the
     corner-based seam detection stays valid while both patches' nets
     change), splits sweep on BOTH axes of both patches (seam-parallel
-    axes USplits take SEAM_AXIS_SAFE — including [0.1], the value that
+    U axes take SEAM_AXIS_SAFE — including (0.1, no band), the value that
     regresses the blend_poly degenerate-second-curve fix — perpendicular
-    axes VSplits take the legacy default sweep), and recompute
+    V axes take the default sweep), and recompute
     convergence with hidden-cell-set assertions. The full oracle must
     stay green after every operator."""
     errors, checks = [], []
@@ -230,15 +235,15 @@ def test_mutation_unified_pointed_pair(doc):
         [functools.partial(mo.move_boundary_pole, edge="A2",
                            pole_index=1, delta=Vector(2.0, 1.0, 1.0)),
          functools.partial(mo.change_splits, patch="pa",
-                           splits_axis="USplits",
+                           splits_axis="U",
                            splits_sweep=SEAM_AXIS_SAFE),
          functools.partial(mo.change_splits, patch="pa",
-                           splits_axis="VSplits"),
+                           splits_axis="V"),
          functools.partial(mo.change_splits, patch="pb",
-                           splits_axis="USplits",
+                           splits_axis="U",
                            splits_sweep=SEAM_AXIS_SAFE),
          functools.partial(mo.change_splits, patch="pb",
-                           splits_axis="VSplits"),
+                           splits_axis="V"),
          functools.partial(mo.recompute_convergence, iterations=5)])
     errors += errs
     checks += chks
@@ -252,8 +257,8 @@ def test_mutation_unified_pointed_quad(doc):
     arc): both fill types mutate cleanly — a boundary-pole move on the
     hood's NON-shared edge H2 (rebuilds the quad patch, the blend band
     follows), splits sweeps on both axes of both patches (cone seam V1:
-    VSplits seam-parallel safe / USplits perpendicular default; hood
-    seam U0: USplits seam-parallel safe / VSplits perpendicular
+    V axis seam-parallel safe / U axis perpendicular default; hood
+    seam U0: U axis seam-parallel safe / V axis perpendicular
     default), and recompute convergence with hidden-cell-set
     assertions. The full oracle must stay green after every operator."""
     errors, checks = [], []
@@ -263,15 +268,15 @@ def test_mutation_unified_pointed_quad(doc):
         [functools.partial(mo.move_boundary_pole, edge="H2",
                            pole_index=1, delta=Vector(0.0, -3.0, -2.0)),
          functools.partial(mo.change_splits, patch="pa",
-                           splits_axis="VSplits",
+                           splits_axis="V",
                            splits_sweep=SEAM_AXIS_SAFE),
          functools.partial(mo.change_splits, patch="pa",
-                           splits_axis="USplits"),
+                           splits_axis="U"),
          functools.partial(mo.change_splits, patch="pb",
-                           splits_axis="USplits",
+                           splits_axis="U",
                            splits_sweep=SEAM_AXIS_SAFE),
          functools.partial(mo.change_splits, patch="pb",
-                           splits_axis="VSplits"),
+                           splits_axis="V"),
          functools.partial(mo.recompute_convergence, iterations=5)])
     errors += errs
     checks += chks
@@ -285,7 +290,7 @@ def test_mutation_chain_worst_case_restores_1e6(doc):
     build the unified GT chain fresh, capture the baseline pole
     deviation vs the stored fixture (expect 0.0: same ops-layer build
     path), then apply the worst-case mutation sequence — shared-boundary
-    pole move + USplits/VSplits changes on BOTH patches + >=5
+    pole move + band-edge changes on BOTH patches + >=5
     recomputes — asserting the full oracle is green at EVERY step, then
     revert every mutation to its EXACT original value, recompute, and
     assert the stored ground truth (edges + both patches + blend) holds
@@ -326,26 +331,28 @@ def test_mutation_chain_worst_case_restores_1e6(doc):
 
         # ---- worst-case mutation sequence, oracle green at every step
         orig_poles = {n: list(e.Poles) for n, e in m["edges"].items()}
-        orig_splits = (list(pa.USplits), list(pa.VSplits),
-                       list(pb.USplits), list(pb.VSplits))
+        from SilkMachinery import split_pair
+        props = ("USplit1", "USplit2", "VSplit1", "VSplit2")
+        orig_splits = tuple(float(getattr(p, q))
+                            for p in (pa, pb) for q in props)
         shr = m["edges"]["E_Shr"]
         poles = list(shr.Poles)
         poles[1] = poles[1] + Vector(3.0, 2.0, 1.0)   # shared boundary pole
         shr.Poles = poles
         doc.recompute()
         oracle_green("after shared-edge pole move")
-        pa.USplits = [0.5]     # pa seam V0: perpendicular axis
+        pa.USplit1 = 0.5       # pa seam V0: perpendicular axis
         doc.recompute()
-        oracle_green("after pa.USplits=[0.5]")
-        pa.VSplits = [0.9]     # pa seam-parallel axis: band cell v0 only
+        oracle_green("after pa.USplit1=0.5")
+        pa.VSplit2 = 0.9       # pa seam-parallel axis: band cell v0 only
         doc.recompute()
-        oracle_green("after pa.VSplits=[0.9]")
-        pb.USplits = [0.9]     # pb seam U0, seam-parallel: band cell u0
+        oracle_green("after pa.VSplit2=0.9")
+        pb.USplit2 = 0.9       # pb seam U0, seam-parallel: band cell u0
         doc.recompute()
-        oracle_green("after pb.USplits=[0.9]")
-        pb.VSplits = [0.5]     # pb perpendicular axis
+        oracle_green("after pb.USplit2=0.9")
+        pb.VSplit1 = 0.5       # pb perpendicular axis
         doc.recompute()
-        oracle_green("after pb.VSplits=[0.5]")
+        oracle_green("after pb.VSplit1=0.5")
         for i in range(5):
             doc.recompute()
             oracle_green("mutated recompute %d" % i)
@@ -353,8 +360,9 @@ def test_mutation_chain_worst_case_restores_1e6(doc):
         # ---- revert every mutation to its exact original value
         for n, e in m["edges"].items():
             e.Poles = orig_poles[n]
-        (pa.USplits, pa.VSplits,
-         pb.USplits, pb.VSplits) = orig_splits
+        for patch_, off in ((pa, 0), (pb, 4)):
+            for k, q in enumerate(props):
+                setattr(patch_, q, orig_splits[off + k])
         for i in range(5):
             doc.recompute()
         if not oracle_green("after full revert"):

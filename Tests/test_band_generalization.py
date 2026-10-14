@@ -1,18 +1,18 @@
 """
-#61 — generalized band-split corner-cell exclusion, an actionable
-one-cell refusal, and split normalization on set.
+#61 — generalized band-edge corner-cell exclusion, an actionable band
+refusal, and band-edge normalization on set. Restated for #82's two
+named edges per axis.
 
-Three problems, three groups of tests:
+Four groups of tests:
 
 1. band_cells' corner-cell exclusion was hard-coded to the LITERAL
    values 0.1 / 0.9 ("a split sits near this end of the axis -> that
    end's cell is a corner cell, drop it"). A user-chosen width (0.2,
    0.85) fell through it silently, so a corner cell could be pulled
    into a band.
-   - test_band_cells_identical_to_legacy_on_default_splits: the new
-     rule is PROVABLY identical to the old one for every split list
-     the fixtures can produce ({0.1, 0.5, 0.9}, every subset, both
-     axes, every seam label and side);
+   - test_corner_cells_follow_the_end_that_carries_an_edge: an end's
+     cell is a corner cell exactly when that END carries an edge, at
+     any width, and nothing else is;
    - test_band_cells_generalizes_user_widths: at 0.2 / 0.85 (and
      0.3 / 0.7) the corner cell is still excluded — and provably is
      NOT what the old literal rule returned;
@@ -20,53 +20,44 @@ Three problems, three groups of tests:
      model geometry, every band width moved off 0.1 / 0.9 — every band
      still resolves to the same single corner-free cell;
 
-1b. #64 — the band width is the USER'S. The blend reads the two split
-   values the patch already carries at the seam-perpendicular axis's
-   ends instead of asserting its own default beside them (no new Blend
-   property; the patch owns its splits, the blend consumes them).
-   - test_split_at_end_picks_the_splits_own_end: the end-classification
-     rule (lowest split -> the 0 end, highest -> the 1 end, 0.5 -> both
-     neither), including two splits on ONE axis;
-   - test_blend_reads_the_user_band_width: a user width survives the
-     recompute with no duplicate added, is the band's ACTUAL parameter
-     extent (checked against the base surface, not a cell index), and
-     the blend's poles move onto it;
-   - test_band_widths_of_both_sides_are_independent: setting one side's
-     width leaves the other side's split list alone, in both directions;
-   - test_corner_patch_band_widths_stay_per_seam: the four-patch corner
-     keeps both splits per patch and one band cell per strip; a width on
-     one seam does not disturb the other seam's band axis;
-   - test_default_band_split_decision_is_unchanged: over every split list
-     the fixtures can produce, the new rule writes the default EXACTLY
-     when the pre-#64 one did — the no-user-choice path is unchanged.
+1b. #64 — the band width is the USER'S. The blend reads the edge the
+    patch already carries at the seam-perpendicular axis's end instead
+    of asserting its own default beside it (no new Blend property; the
+    patch owns its edges, the blend consumes them).
+    - test_band_edge_is_named_for_its_own_end: #82's replacement for
+      the end-classification rule -- `Split1` IS the 0 end's edge,
+      `Split2` the 1 end's, with no threshold anywhere, and
+      `band_cells`/`corner_cells` reading the same names;
+    - test_blend_reads_the_user_band_width: a user width survives the
+      recompute with no default re-asserted, is the band's ACTUAL
+      parameter extent (checked against the base surface, not a cell
+      index), and the blend's poles move onto it;
+    - test_band_widths_of_both_sides_are_independent: setting one side's
+      width leaves the other side's edge alone, in both directions;
+    - test_corner_patch_band_widths_stay_per_seam: the four-patch corner
+      keeps an edge per end per axis and one band cell per strip; a width
+      on one seam does not disturb the other seam's band axis;
+    - test_default_band_edge_decision_is_unchanged: the blend writes the
+      default EXACTLY when the end carries no edge — the no-user-choice
+      path is unchanged.
 
-2. The multi-cell refusal named a cell count and nothing else.
-   - test_multi_cell_band_refusal_names_patch_and_values: the message
-     names the patch, the seam, both axis split lists, how many cells
-     they make, the excluded corner cells, and the single split value
-     that would leave a one-cell band.
+2. The band refusal names the patch, the seam, both named edges on each
+   axis and what single edit would leave a one-cell band.
+   - test_zero_cell_band_refusal_names_patch_and_values
 
-3. #53 display residue: a rejected split stayed in the stored
-   USplits / VSplits while the geometry silently dropped it.
-   - test_splits_normalized_on_set: 0 < u1 < u2 < 1 is pinned — 0.0,
-     1.0, negative, >1, duplicates and unsorted input never persist,
-     the stored list equals what the geometry used, and the console
-     says what was rejected and why.
+3. #53 display residue: a mistyped edge stayed in the stored property
+   while the geometry silently dropped it.
+   - test_band_edges_normalized_on_set
 
-4. #76: the one-split-per-end limit was a SENTENCE in a refusal message.
-   - test_over_limit_splits_are_refused_on_the_property: at most one
-     split below 0.5 and one above, per axis, enforced on the property
-     path — [0.2, 0.8] and [0.1, 0.5, 0.9] pass, [0.2, 0.45, 0.9],
-     three or more are refused, and a refusal leaves the
-     axis exactly as it was;
-   - test_over_limit_refusal_is_visible_on_the_object: the refusal shows
-     up in the object's own state (Invalid / isValid() / status string),
-     with a control and a recovery, because the failure it prevents is a
-     blend that silently keeps stale poles;
-   - test_band_writes_can_never_go_over_the_limit: neither writer of a
-     split in the codebase (ensure_band_split, the panel's band editor)
-     can produce an over-limit axis, so the rule permits every layout
-     the workbench itself builds.
+4. #76 — the two-split cap is now a TYPE, not a check.
+   - test_third_split_on_an_axis_is_not_expressible: there are two
+     properties and each names its own end, so no write -- list or
+     property -- can put a third split on an axis, and the two
+     degenerate writes that ARE possible (out of range, inverted) are
+     corrected and reported rather than left for the band to refuse.
+   - test_a_band_is_one_cell_by_construction: the arithmetic that made
+     a multi-cell band possible is gone -- each edge cuts one corner
+     cell off the axis it is on, so exactly one cell is left.
 
 NOTE on the oracle — the gap noted here was CLOSED by #63.
 SilkChecks re-derives band_cells independently, on purpose ("the oracle
@@ -74,27 +65,19 @@ re-derives the object code's tables instead of importing them, so a bug
 in the object code cannot hide itself"), and that copy still hard-coded
 0.1 / 0.9 when this ticket was written. Consequence, demonstrated: a
 SETTLED, correct blend whose seam-parallel axis carries a user width
-(e.g. Patch44.VSplits=[0.85] on the corner pair, where no blend writes
+(e.g. Patch44.VSplit2 = 0.85 on the corner pair, where no blend writes
 that axis) builds its 24 poles from the correct single corner-free cell,
 yet check_blend derived a two-cell band, failed to produce reference
 rows and reported "no shared edge found" on B1/B2 — the oracle
 disagreeing with correct geometry.
 
-#63 generalized that independent copy with the same end-classification
-rule (again MIRRORED, not imported — see Tests/test_oracle_band_cells.py,
-which also PROVES the new rule byte-identical to the old one on all 512
-default-reachable layouts). The oracle no longer has a gap here, so the
-tests in this file may now be complemented by a check_blend assertion on
-a non-default width; that one lives with the rest of the oracle work.
+#63 generalized that independent copy with the same end rule, and #82
+gave both copies the named edges to read.
 """
-
-import itertools
 
 import FreeCAD
 
 import Tests.corner_model as cm
-
-Vector = FreeCAD.Vector
 
 
 class _Capture:
@@ -117,71 +100,111 @@ class _Capture:
 
 
 class _StubPatch:
-    """Minimal stand-in: band_cells reads nothing but USplits / VSplits
-    (and band_diagnosis the Name), so the split-selection RULE can be
-    exercised over many layouts without building geometry."""
+    """Minimal stand-in: band_cells reads nothing but the four named band
+    edges (and band_diagnosis the Name), so the corner-cell RULE can be
+    exercised over many layouts without building geometry.
 
-    def __init__(self, u=None, v=None, name="Stub"):
-        self.USplits = list(u or [])
-        self.VSplits = list(v or [])
+    `u` / `v` are `(Split1, Split2)` pairs; the default is the neutral
+    pair, "no band at either end"."""
+
+    def __init__(self, u=(0.0, 1.0), v=(0.0, 1.0), name="Stub"):
+        self.USplit1, self.USplit2 = u
+        self.VSplit1, self.VSplit2 = v
         self.Name = name
 
 
+# Sentinels: "no band at that end" is the property's OWN endpoint.
+NO_BAND_1, NO_BAND_2 = 0.0, 1.0
+
+
 def _legacy_band_cells(p, ea, ss):
-    """The pre-#61 rule, verbatim — the 0.1 / 0.9 literals."""
-    from SilkMachinery import build_intervals
-    ivs_u = build_intervals(list(p.USplits or []))
-    ivs_v = build_intervals(list(p.VSplits or []))
+    """The pre-#61 rule, verbatim — the 0.1 / 0.9 literals, driven by the
+    two edges the layout would have written as a list.
+
+    Kept only as the CONTROL the generalization is compared against: it
+    is what a rule keyed to the two literal values would say about the
+    same pair of ends. An end with no edge is the empty list."""
+    us = [v for v in (p.USplit1, p.USplit2) if 0.0 < v < 1.0]
+    vs = [v for v in (p.VSplit1, p.VSplit2) if 0.0 < v < 1.0]
+
+    def ivs(ss_):
+        s = sorted(set(ss_))
+        return [(0.0, 1.0)] if not s else list(zip([0.0] + s, s + [1.0]))
+    ivs_u, ivs_v = ivs(us), ivs(vs)
     nu, nv = len(ivs_u), len(ivs_v)
     if ea[0] == "U":
         b = (nv - 1) if ss else 0
         keep_u = set(range(nu))
-        if any(abs(s - 0.1) < 1e-9 for s in (p.USplits or [])):
+        if any(abs(s - 0.1) < 1e-9 for s in us):
             keep_u.discard(0)
-        if any(abs(s - 0.9) < 1e-9 for s in (p.USplits or [])):
+        if any(abs(s - 0.9) < 1e-9 for s in us):
             keep_u.discard(nu - 1)
         return [a * nv + b for a in sorted(keep_u)]
     a = (nu - 1) if ss else 0
     keep_v = set(range(nv))
-    if any(abs(s - 0.1) < 1e-9 for s in (p.VSplits or [])):
+    if any(abs(s - 0.1) < 1e-9 for s in vs):
         keep_v.discard(0)
-    if any(abs(s - 0.9) < 1e-9 for s in (p.VSplits or [])):
+    if any(abs(s - 0.9) < 1e-9 for s in vs):
         keep_v.discard(nv - 1)
     return [a * nv + b for b in sorted(keep_v)]
 
 
-def _subsets(values):
-    """Every subset of `values`, as sorted lists."""
-    out = []
-    for r in range(len(values) + 1):
-        for combo in itertools.combinations(values, r):
-            out.append(list(combo))
-    return out
+def _fmt_pair(pair):
+    return "(%g, %g)" % tuple(pair)
 
 
-def _fmt(vs):
-    return "[" + ", ".join("%g" % float(v) for v in vs) + "]"
+# ---- 1a: the exclusion follows the named end ------------------------------
 
+def test_corner_cells_follow_the_end_that_carries_an_edge(doc):
+    """An interval is a corner cell exactly when the END it reaches from
+    carries a band edge — first interval for `Split1`, last for `Split2`,
+    and neither when that property holds its own endpoint (0.0 / 1.0).
 
-# ---- 1a: provable equivalence on the fixture values ----------------------
-
-def test_band_cells_identical_to_legacy_on_default_splits(doc):
-    """The generalized rule reproduces the old 0.1/0.9 rule EXACTLY for
-    every split list the fixtures can produce: all subsets of
-    {0.1, 0.5, 0.9} on both axes, every seam label, both sides — 8 * 8
-    * 4 * 2 = 512 layouts, compared cell-for-cell.
-
-    0.1 and 0.9 are the band widths ensure_band_split writes; 0.5 is the
-    mid-surface split the mutation sweeps use. None of the three can
-    straddle the 0.5 end classification, which is what makes the
-    identity provable rather than merely checked on the fixtures."""
-    from SilkMachinery import band_cells
+    No value threshold anywhere: 0.5 is an ordinary edge for both ends
+    now (it was "neither end's" under the pre-#82 classification, which
+    is what made a 0.5 width unstorable and sent `[0.2, 0.4]` down the
+    #81 path). The widths the workbench itself writes (0.1 / 0.9) and
+    the user widths (0.2 / 0.85 / 0.45 / 0.05) are all just values."""
+    from SilkMachinery import corner_cells, build_intervals
 
     errors, checks = [], []
-    splits_sets = _subsets([0.1, 0.5, 0.9])
+
+    cases = [
+        # ((Split1, Split2), intervals, expected excluded indices)
+        ((0.2, 0.85), 3, {0, 2}),      # both ends marked -> first + last
+        ((0.85, NO_BAND_2), 2, {0}),    # one edge, and it is the 0 END's --
+        ((NO_BAND_1, 0.85), 2, {1}),    # ...the 0.85 in the other slot is
+        ((0.2, NO_BAND_2), 2, {0}),     # the 1 end's. The NAME decides; a
+        ((NO_BAND_1, 0.15), 2, {1}),    # value never has to be compared with
+        ((0.5, NO_BAND_2), 2, {0}),     # the middle of the axis (#81).
+        ((NO_BAND_1, 0.5), 2, {1}),     # the midpoint is an ORDINARY edge
+        ((NO_BAND_1, NO_BAND_2), 1, set()),   # no edge, no corner cell
+        ((NO_BAND_1, 0.9), 2, {1}),     # Split1 AT its sentinel: only 1 end
+        ((0.1, NO_BAND_2), 2, {0}),     # Split2 AT its sentinel: only 0 end
+    ]
+    for pair, n, want in cases:
+        got = corner_cells(pair[0], pair[1], n)
+        if got != want:
+            errors.append("corner_cells(%s, %d) = %r, want %r"
+                          % (_fmt_pair(pair), n, sorted(got), sorted(want)))
+        # the declared interval count must be the one the pair really
+        # makes, or the case above would be asserting against a fiction
+        if len(build_intervals(*pair)) != n:
+            errors.append("corner_cells case %s claims %d intervals, the "
+                          "pair really makes %d"
+                          % (_fmt_pair(pair), n, len(build_intervals(*pair))))
+    checks.append("corner_cells over %d named-edge layouts: the first cell "
+                  "whenever Split1 carries an edge, the last whenever "
+                  "Split2 does, and the 0.5 midpoint counted like any "
+                  "other" % len(cases))
+
+    # The 0.1 / 0.9 defaults -- the only widths the workbench writes --
+    # still behave exactly as the literal rule they replaced.
+    from SilkMachinery import band_cells
     n = 0
-    for us, vs in itertools.product(splits_sets, repeat=2):
-        p = _StubPatch(us, vs, name="Stub")
+    for u, v in (((0.1, NO_BAND_2), (NO_BAND_1, 0.9)),
+                 ((0.1, 0.9), (NO_BAND_1, 0.9))):
+        p = _StubPatch(u, v, name="Default")
         for ea in ("U0", "U1", "V0", "V1"):
             for ss in (0, 1):
                 got = band_cells(p, ea, ss)
@@ -189,73 +212,75 @@ def test_band_cells_identical_to_legacy_on_default_splits(doc):
                 n += 1
                 if got != want:
                     errors.append("band_cells(%s, %s, %d) = %r, legacy %r "
-                                  "for USplits=%s VSplits=%s"
+                                  "for U=%s V=%s"
                                   % (p.Name, ea, ss, got, want,
-                                     _fmt(us), _fmt(vs)))
-    checks.append("%d layouts compared (U in %s x V in %s, 4 seam labels "
-                  "x 2 sides): generalized rule == legacy rule"
-                  % (n, len(splits_sets), len(splits_sets)))
+                                     _fmt_pair(u), _fmt_pair(v)))
+    checks.append("%d default-width layouts (4 seam labels x 2 sides x 2 "
+                  "axis states): the named-edge rule == the old literal "
+                  "rule, exactly -- for the layouts the old model could "
+                  "hold, i.e. each end carrying its OWN default" % n)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 # ---- 1b: it really is generalized ----------------------------------------
 
 def test_band_cells_generalizes_user_widths(doc):
-    """A user width is treated like the default one: the split nearest
-    each end of the axis marks that end's cell as the corner cell.
+    """A user width is treated like the default one: the end that carries
+    an edge has its cell marked as the corner cell.
 
-    [0.2, 0.85] on the seam-parallel axis of a patch whose other axis
-    is [0.9] gives 2 x 3 cells; seam V1 / side 1 fixes U interval 1 and
-    the band is the single middle V cell — the two END cells are corner
-    cells. The old literal rule matched neither 0.2 nor 0.85 and
-    returned all three V cells: the corner cell silently entered the
-    band (the #61 bug)."""
+    (Split1, Split2) = (0.2, 0.85) on the seam-parallel axis of a patch
+    whose other axis carries 0.9 at its 1 end gives 2 x 3 cells; seam V1 /
+    side 1 fixes U interval 1 and the band is the single middle V cell —
+    the two END cells are corner cells. The old literal rule matched
+    neither 0.2 nor 0.85 and returned all three V cells: the corner cell
+    silently entered the band (the #61 bug)."""
     from SilkMachinery import band_cells, corner_cells
 
     errors, checks = [], []
 
-    # (splits, intervals, expected excluded interval indices)
+    # (pair, intervals, expected excluded interval indices). The NAME of
+    # the property says the end, so 0.85 in Split1 is the 0 end's edge and
+    # 0.85 in Split2 is the 1 end's -- a value never has to be compared
+    # with the middle of the axis to be filed (#81).
     cases = [
-        ([0.2, 0.85], 3, {0, 2}),     # both ends marked -> drop first+last
-        ([0.85], 2, {1}),             # one width at the 1-end
-        ([0.2], 2, {0}),              # one width at the 0-end
-        ([0.5], 2, set()),            # mid-surface split marks no end
-        ([], 1, set()),               # no split, no corner cell
-        ([0.15, 0.3, 0.8], 4, {0, 3}),  # crowded: the extremes still rule
+        ((0.2, 0.85), 3, {0, 2}),     # both ends marked -> drop first+last
+        ((NO_BAND_1, 0.85), 2, {1}),  # one width at the 1-end
+        ((0.85, NO_BAND_2), 2, {0}),  # one width at the 0-end
+        ((NO_BAND_1, NO_BAND_2), 1, set()),   # no edge, no corner cell
     ]
-    for splits, n, want in cases:
-        got = corner_cells(splits, n)
+    for pair, n, want in cases:
+        got = corner_cells(pair[0], pair[1], n)
         if got != want:
             errors.append("corner_cells(%s, %d) = %r, want %r"
-                          % (_fmt(splits), n, sorted(got), sorted(want)))
+                          % (_fmt_pair(pair), n, sorted(got), sorted(want)))
     checks.append("corner_cells over %d layouts: %s"
                   % (len(cases), ", ".join(
-                      "%s/%d->%s" % (_fmt(s), n,
-                                     sorted(corner_cells(s, n)))
-                      for s, n, _ in cases)))
+                      "%s/%d->%s" % (_fmt_pair(p), n,
+                                     sorted(corner_cells(p[0], p[1], n)))
+                      for p, n, _ in cases)))
 
     # The reported bug, on the real selection function.
-    p = _StubPatch([0.9], [0.2, 0.85], name="Wide")
+    p = _StubPatch((NO_BAND_1, 0.9), (0.2, 0.85), name="Wide")
     got = band_cells(p, "V1", 1)
     want = [1 * 3 + 1]            # U interval 1, V interval 1
     if got != want:
-        errors.append("band_cells(V1, 1) with VSplits=[0.2, 0.85] = %r, want "
-                      "%r (the corner cells at both ends must be excluded)"
-                      % (got, want))
+        errors.append("band_cells(V1, 1) with V edges (0.2, 0.85) = %r, "
+                      "want %r (the corner cells at both ends must be "
+                      "excluded)" % (got, want))
     legacy = _legacy_band_cells(p, "V1", 1)
     if legacy == got:
-        errors.append("the legacy rule now agrees on [0.2, 0.85] (%r) — the "
+        errors.append("the legacy rule now agrees on (0.2, 0.85) (%r) — the "
                       "regression case no longer reproduces" % (legacy,))
-    checks.append("VSplits=[0.2, 0.85], USplits=[0.9], seam V1/1: "
+    checks.append("V edges (0.2, 0.85), U edges (0, 0.9), seam V1/1: "
                   "band_cells=%r (legacy rule said %r — it had pulled the "
                   "corner cells in)" % (got, legacy))
 
     # And the default layout still resolves to exactly the same single
     # cell as it always did, only the width differs.
-    d = _StubPatch([0.9], [0.9], name="Default")
+    d = _StubPatch((NO_BAND_1, 0.9), (NO_BAND_1, 0.9), name="Default")
     if band_cells(d, "V1", 1) != _legacy_band_cells(d, "V1", 1):
-        errors.append("default [0.9] layout no longer matches legacy")
-    checks.append("default VSplits=[0.9]: band_cells=%r == legacy"
+        errors.append("default (0, 0.9) layout no longer matches legacy")
+    checks.append("default V edges (0, 0.9): band_cells=%r == legacy"
                   % (band_cells(d, "V1", 1),))
     return {"pass": not errors, "errors": errors, "checks": checks}
 
@@ -309,17 +334,19 @@ def test_corner_model_bands_follow_non_default_widths(doc):
 
     REMAP = {0.1: 0.2, 0.9: 0.85}
     for name, p in model["patches"].items():
-        for prop in ("USplits", "VSplits"):
-            cur = [float(v) for v in (getattr(p, prop) or [])]
-            new = [REMAP.get(round(v, 9), v) for v in cur]
-            if new != cur:
-                setattr(p, prop, new)
+        for letter in ("U", "V"):
+            for n_ in (1, 2):
+                prop = "%sSplit%d" % (letter, n_)
+                cur = float(getattr(p, prop))
+                new = REMAP.get(round(cur, 9), cur)
+                if new != cur:
+                    setattr(p, prop, new)
         p.recompute()   # patch only: no blend re-asserts its default here
-    moved = {n: (list(p.USplits or []), list(p.VSplits or []))
+    moved = {n: (_edges(p, "U"), _edges(p, "V"))
              for n, p in model["patches"].items()}
     checks.append("widths moved: %s"
                   % ", ".join("%s U=%s V=%s"
-                              % (n, _fmt(u), _fmt(v))
+                              % (n, _fmt_pair(u), _fmt_pair(v))
                               for n, (u, v) in sorted(moved.items())))
 
     for bname, p, e, ss in band_sides(model):
@@ -348,8 +375,14 @@ def test_corner_model_bands_follow_non_default_widths(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def _edges(p, letter):
+    """`(Split1, Split2)` of one axis, as plain floats."""
+    return (round(float(getattr(p, letter + "Split1")), 12),
+            round(float(getattr(p, letter + "Split2")), 12))
+
+
 def _band_axis(p, other, tol=0.01):
-    """(seam label, side, band-axis property, side-0/1) of p's band for
+    """(seam label, side, band-edge property, side-0/1) of p's band for
     the seam it shares with `other`.
 
     Independently re-derived from the documented rule (AGENTS.md step 3):
@@ -362,30 +395,31 @@ def _band_axis(p, other, tol=0.01):
     e, ss = patch_side(p, other, tol)
     if e is None:
         return None, None, None, None
-    return e, ss, ("VSplits" if e[0] == "U" else "USplits"), ss
+    letter = "V" if e[0] == "U" else "U"
+    return e, ss, "%sSplit%d" % (letter, ss + 1), ss
 
 
-def _intervals(splits):
-    """[(lo, hi)] from split values, written out here so the width
-    assertions do not borrow the object code's interval builder."""
-    s = sorted(set(float(v) for v in (splits or []) if 0.0 < v < 1.0))
+def _intervals(pair):
+    """[(lo, hi)] from a pair of named edges, written out here so the
+    width assertions do not borrow the object code's interval builder."""
+    s = sorted(set(float(v) for v in pair if 0.0 < v < 1.0))
     return list(zip([0.0] + s, s + [1.0]))
 
 
 def _band_interval(p, prop, ss):
-    ivs = _intervals(getattr(p, prop) or [])
+    ivs = _intervals(_edges(p, prop[0]))
     return ivs[0] if ss == 0 else ivs[-1]
 
 
 def _band_box(p, ea, ss):
     """(u-interval, v-interval) of p's band cell for seam ea / side ss,
-    derived here from the split lists so it never borrows band_cells.
+    derived here from the named edges so it never borrows band_cells.
 
     The band axis is PERPENDICULAR to the seam (seam along U -> V band)
     and sits at the seam's own parametric end; the seam-PARALLEL extent
-    is the whole axis here because these fixtures put no extra split on
+    is the whole axis here because these fixtures put no extra edge on
     it. `None` on an axis means "derive it from the cell index"."""
-    us, vs = _intervals(p.USplits), _intervals(p.VSplits)
+    us, vs = _intervals(_edges(p, "U")), _intervals(_edges(p, "V"))
     if ea[0] == "U":
         return None, (vs[0] if ss == 0 else vs[-1])
     return (us[0] if ss == 0 else us[-1]), None
@@ -398,9 +432,9 @@ def _band_corners_on_surface(p, idx, want_u, want_v):
 
     This is the geometric proof that the band's ACTUAL extent is that box
     -- not a bookkeeping claim about a cell index."""
-    nv = len(_intervals(p.VSplits))
+    nv = len(_intervals(_edges(p, "V")))
     iu, ivc = divmod(idx, nv)
-    us, vs = _intervals(p.USplits), _intervals(p.VSplits)
+    us, vs = _intervals(_edges(p, "U")), _intervals(_edges(p, "V"))
     box_u = want_u if want_u is not None else us[iu]
     box_v = want_v if want_v is not None else vs[ivc]
     flat = list(p.Proxy._subgrids[idx])
@@ -414,84 +448,96 @@ def _band_corners_on_surface(p, idx, want_u, want_v):
     return worst
 
 
-def test_split_at_end_picks_the_splits_own_end(doc):
-    """The end-classification rule #64 reads the band boundary through:
-    the LOWEST split belongs to the parametric-0 end, the HIGHEST to the
-    parametric-1 end, and one exactly at 0.5 to NEITHER.
+def test_band_edge_is_named_for_its_own_end(doc):
+    """#82 replaces the end-classification rule, and this pins what took
+    its place: `Split1` IS the parametric-0 end's band edge and `Split2`
+    IS the parametric-1 end's, with no threshold and no ordering.
 
-    With two splits on ONE axis ([0.1, 0.9]) each end gets its own — the
-    rule is per (axis, end), never a single global value. That is what
-    lets a four-patch corner carry one split per seam side on the same
-    axis and still have each strip read the right one.
+    The pre-#82 rule (`split_at_end`) read a LIST and guessed: the
+    lowest split belongs to the 0 end, the highest to the 1 end, and one
+    exactly at 0.5 to NEITHER. That guess is #81 — on `[0.2, 0.4]` it
+    reported no band at the 1 end, so the blend wrote a third split that
+    the two-entry cap then refused and the patch went Invalid. With the
+    edge's NAME saying, there is nothing to guess, and the two cases the
+    old rule could not express are ordinary:
+      * the midpoint, 0.5, is an edge at BOTH ends now;
+      * a wide 0-end edge (0.9 on Split1) is a 0.9-wide band at the 0
+        end, never a band that migrates to the other end.
 
-    #76 folds the classification into `split_end` — below 0.5 is the
-    0-end, above 0.5 the 1-end, exactly 0.5 neither — and `split_at_end`
-    is now the per-value classification plus the ORDER within an end
-    (lowest for the band that reaches from 0, highest for the one that
-    reaches from 1). The second half of this test pins the two together,
-    because a second notion of "which end" is exactly how a band comes to
-    measure itself against a cell excluded for a different reason."""
-    from SilkMachinery import split_at_end
+    Also pinned: every consumer reads the same names -- band_cells and
+    corner_cells agree with `band_at_end` about which end carries what,
+    because they all read the same two properties (a second notion of
+    "which end" is how a band comes to measure itself against a cell
+    excluded for a different reason)."""
+    from SilkMachinery import band_at_end, build_intervals, corner_cells
 
     errors, checks = [], []
+
     cases = [
-        # (splits, ss, expected)
-        ([], 0, None), ([], 1, None),
-        ([0.1], 0, 0.1), ([0.1], 1, None),
-        ([0.9], 0, None), ([0.9], 1, 0.9),
-        ([0.1, 0.9], 0, 0.1), ([0.1, 0.9], 1, 0.9),   # both ends, one axis
-        ([0.25], 0, 0.25), ([0.75], 1, 0.75),          # user widths
-        ([0.25, 0.75], 0, 0.25), ([0.25, 0.75], 1, 0.75),
-        ([0.5], 0, None), ([0.5], 1, None),            # neither end
-        ([0.15, 0.3, 0.8], 0, 0.15), ([0.15, 0.3, 0.8], 1, 0.8),
-        ([0.3, 0.5], 0, 0.3), ([0.3, 0.5], 1, None),
+        # ((Split1, Split2), ss, expected edge or None)
+        ((NO_BAND_1, NO_BAND_2), 0, None),
+        ((NO_BAND_1, NO_BAND_2), 1, None),
+        ((0.1, NO_BAND_2), 0, 0.1),      # one edge at the 0 end
+        ((NO_BAND_1, 0.9), 1, 0.9),      # one edge at the 1 end
+        ((0.1, 0.9), 0, 0.1),            # both ends, one axis
+        ((0.1, 0.9), 1, 0.9),
+        ((0.25, NO_BAND_2), 0, 0.25),    # user widths
+        ((NO_BAND_1, 0.75), 1, 0.75),
+        ((0.5, NO_BAND_2), 0, 0.5),      # the midpoint IS an edge now
+        ((NO_BAND_1, 0.5), 1, 0.5),
+        ((0.2, 0.4), 0, 0.2),            # #81's own case: both edges read
+        ((0.2, 0.4), 1, 0.4),
+        ((0.9, NO_BAND_2), 0, 0.9),      # a wide 0-end edge stays at the 0 end
     ]
-    for splits, ss, want in cases:
-        got = split_at_end(splits, ss)
+    for pair, ss, want in cases:
+        got = band_at_end(pair[0], pair[1], ss)
         ok = (got is None and want is None) or \
              (got is not None and want is not None and abs(got - want) < 1e-12)
         if not ok:
-            errors.append("split_at_end(%s, %d) = %r, want %r"
-                          % (_fmt(splits), ss, got, want))
-    checks.append("%d (splits, end) layouts: the lowest split is the 0-end's, "
-                  "the highest the 1-end's, 0.5 is neither" % len(cases))
+            errors.append("band_at_end(%s, %d) = %r, want %r"
+                          % (_fmt_pair(pair), ss, got, want))
+    checks.append("%d (pair, end) layouts: Split1 is the 0 end's edge, "
+                  "Split2 the 1 end's, 0.5 included, no threshold"
+                  % len(cases))
 
-    # #76: the per-axis limit counts with `split_end`, so this rule has to
-    # BE that classification -- an end "has a split" exactly when some
-    # split classifies to it. If the two ever drifted, the limit would be
-    # counting a different notion of "which end" than the one that reads
-    # the band.
-    from SilkMachinery import split_end
+    # The interval arithmetic and the corner-cell exclusion agree with it
+    # on every layout, because they read the same properties.
+    from SilkMachinery import axis_splits
+    candidates = [NO_BAND_1, NO_BAND_1, 0.2, 0.4, 0.5, 0.9, NO_BAND_2]
     n = 0
-    for splits in _subsets([0.1, 0.3, 0.5, 0.7, 0.9]):
-        for ss in (0, 1):
-            n += 1
-            classified = any(split_end(v) == ss for v in splits)
-            got = split_at_end(splits, ss)
-            if classified != (got is not None):
-                errors.append("split_at_end(%s, %d) = %r, but split_end says "
-                              "this end %s a split"
-                              % (_fmt(splits), ss, got,
-                                 "has" if classified else "has no"))
-            if got is not None and split_end(got) != ss:
-                errors.append("split_at_end(%s, %d) = %g, which split_end "
-                              "puts at end %r" % (_fmt(splits), ss, got,
-                                                 split_end(got)))
-    checks.append("%d (splits, end) layouts: split_at_end and split_end "
-                  "count the same for every one of them -- the limit "
-                  "counts with the same rule that reads the band" % n)
+    for s1 in candidates:
+        for s2 in candidates:
+            n_iv = len(build_intervals(s1, s2))
+            corners = corner_cells(s1, s2, n_iv)
+            for ss in (0, 1):
+                has = band_at_end(s1, s2, ss) is not None
+                dropped = (0 in corners) if ss == 0 \
+                    else (n_iv - 1 in corners)
+                n += 1
+                if has != dropped:
+                    errors.append("end %d of (Split1=%g, Split2=%g): "
+                                  "band_at_end says it %s an edge, "
+                                  "corner_cells %s that end's cell"
+                                  % (ss, s1, s2,
+                                     "has" if has else "has no",
+                                     "dropped" if dropped else "kept"))
+            if axis_splits(s1, s2) and n_iv != 1 + len(axis_splits(s1, s2)):
+                errors.append("(%g, %g) makes %d intervals, which is not "
+                              "one more than the %d edges it carries"
+                              % (s1, s2, n_iv, len(axis_splits(s1, s2))))
+    checks.append("%d (pair, end) layouts over {sentinel, 0.2, 0.4, 0.5, "
+                  "0.9}: band_at_end, corner_cells and the interval count "
+                  "all agree -- one rule, read by name" % n)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 def test_blend_reads_the_user_band_width(doc):
     """#64, the defect: the blend used to ASSERT its default 0.1 / 0.9
-    instead of READING the patch's split, so a user width never took
-    effect — it accumulated beside the default ([0.1] + user 0.2 ->
-    [0.1, 0.2], band still 0.1 wide, and on a patch that already had a
-    split at that end the band grew a second cell and refused).
+    instead of READING the patch's band edge, so a user width never took
+    effect.
 
-    Now the patch owns its splits and the blend consumes them: a user
-    width survives the recompute with NO duplicate value added, it
+    Now the patch owns its edges and the blend consumes them: a user
+    width survives the recompute with NO default written beside it, it
     becomes the band's actual width (verified against the base surface,
     not just a cell index), and the blend's poles move onto it."""
     from SilkMachinery import band_cells
@@ -515,23 +561,26 @@ def test_blend_reads_the_user_band_width(doc):
         return {"pass": False,
                 "errors": ["default blend has %d poles, want 24"
                            % len(default_poles)], "checks": checks}
-    default_a = sorted(float(v) for v in (getattr(pa, prop_a) or []))
+    default_a = _edges(pa, prop_a[0])
     checks.append("default: %s seam %s/side %d -> %s = %s"
-                  % (pa.Name, ea, ss_a, prop_a, _fmt(default_a)))
+                  % (pa.Name, ea, ss_a, prop_a, _fmt_pair(default_a)))
 
     # the user moves ONE side's band width (0.1 default -> 0.3)
     user = 0.3 if ss_a == 0 else 0.7
     with _Capture() as cap:
-        setattr(pa, prop_a, [user])
+        setattr(pa, prop_a, user)
         doc.recompute()
 
-    stored = sorted(float(v) for v in (getattr(pa, prop_a) or []))
-    checks.append("after setting %s.%s = %s and recomputing: %s = %s"
-                  % (pa.Name, prop_a, _fmt([user]), prop_a, _fmt(stored)))
-    if stored != [user]:
-        errors.append("%s.%s = %s after recompute, want exactly %s — the "
-                      "blend re-asserted its default beside the user's "
-                      "width" % (pa.Name, prop_a, _fmt(stored), _fmt([user])))
+    stored = _edges(pa, prop_a[0])
+    checks.append("after setting %s.%s = %g and recomputing: %s = %s"
+                  % (pa.Name, prop_a, user, prop_a, _fmt_pair(stored)))
+    want_pair = list(default_a)
+    want_pair[int(prop_a[-1]) - 1] = user
+    if stored != (round(want_pair[0], 12), round(want_pair[1], 12)):
+        errors.append("%s.%s = %s after recompute, want %s — the blend "
+                      "re-asserted its default beside the user's width"
+                      % (pa.Name, prop_a, _fmt_pair(stored),
+                         _fmt_pair((want_pair[0], want_pair[1]))))
     errors += ["console error: %s" % e for e in cap.errors]
 
     # the width is the band's ACTUAL parameter extent ...
@@ -554,6 +603,7 @@ def test_blend_reads_the_user_band_width(doc):
                                                     dev))
 
     # ... and the blend's poles moved onto it.
+    Vector = FreeCAD.Vector
     new_poles = [tuple(q) for q in (blend.Poles or [])]
     if len(new_poles) != 24:
         errors.append("blend has %d poles after the width change, want 24"
@@ -574,7 +624,7 @@ def test_blend_reads_the_user_band_width(doc):
 
 def test_band_widths_of_both_sides_are_independent(doc):
     """Each side of the seam is read on its own patch, so a width set on
-    one leaves the other side's split list exactly as the blend wrote
+    one leaves the other side's band edge exactly as the blend wrote
     it — in both directions, and each patch keeps its own user width."""
     from SilkWorkflowOps import create_blend_by_edge
     from Tests.test_patch_touched import _build_two_patch_pair
@@ -586,64 +636,66 @@ def test_band_widths_of_both_sides_are_independent(doc):
 
     _, ss_a, prop_a, _ = _band_axis(pa, pb)
     _, ss_b, prop_b, _ = _band_axis(pb, pa)
-    def va(v):
-        return v if ss_a == 0 else 1.0 - v
-    def vb(v):
-        return v if ss_b == 0 else 1.0 - v
 
-    base_b = sorted(float(v) for v in (getattr(pb, prop_b) or []))
+    base_b = _edges(pb, prop_b[0])
     checks.append("defaults: %s.%s = %s, %s.%s = %s"
-                  % (pa.Name, prop_a, _fmt(getattr(pa, prop_a)), pb.Name,
-                     prop_b, _fmt(getattr(pb, prop_b))))
+                  % (pa.Name, prop_a, _fmt_pair(_edges(pa, prop_a[0])),
+                     pb.Name, prop_b, _fmt_pair(base_b)))
+
+    def set_edge(p, prop, width, ss):
+        pair = list(_edges(p, prop[0]))
+        pair[int(prop[-1]) - 1] = width if ss == 0 else 1.0 - width
+        setattr(p, prop, pair[int(prop[-1]) - 1])
 
     # A only
-    setattr(pa, prop_a, [va(0.25)])
+    set_edge(pa, prop_a, 0.25, ss_a)
     doc.recompute()
     doc.recompute()
-    if sorted(float(v) for v in (getattr(pa, prop_a) or [])) != [va(0.25)]:
-        errors.append("A's width did not stick: %s.%s = %s"
-                      % (pa.Name, prop_a, _fmt(getattr(pa, prop_a))))
-    if sorted(float(v) for v in (getattr(pb, prop_b) or [])) != base_b:
+    if _edges(pa, prop_a[0]) != _edges(pa, prop_a[0]) or \
+            abs(_band_interval(pa, prop_a, ss_a)[1]
+                - _band_interval(pa, prop_a, ss_a)[0] - 0.25) > 1e-9:
+        errors.append("A's width did not stick: %s.%s = %s over %r"
+                      % (pa.Name, prop_a, _fmt_pair(_edges(pa, prop_a[0])),
+                         _band_interval(pa, prop_a, ss_a)))
+    if _edges(pb, prop_b[0]) != base_b:
         errors.append("setting A's width disturbed B: %s.%s = %s, want %s"
-                      % (pb.Name, prop_b, _fmt(getattr(pb, prop_b)),
-                         _fmt(base_b)))
+                      % (pb.Name, prop_b, _fmt_pair(_edges(pb, prop_b[0])),
+                         _fmt_pair(base_b)))
     if len(blend.Poles or []) != 24:
         errors.append("blend lost poles after A's width change (%d)"
                       % len(blend.Poles or []))
-    checks.append("A width %g: A reads it, B still %s, blend has 24 poles"
-                  % (0.25, _fmt(base_b)))
+    checks.append("A width 0.25: A reads it, B still %s, blend has 24 poles"
+                  % (_fmt_pair(base_b),))
 
     # now B too, with a different width — A must not be re-asserted
-    setattr(pb, prop_b, [vb(0.4)])
+    set_edge(pb, prop_b, 0.4, ss_b)
     doc.recompute()
     doc.recompute()
-    if sorted(float(v) for v in (getattr(pa, prop_a) or [])) != [va(0.25)]:
-        errors.append("setting B's width disturbed A: %s.%s = %s"
-                      % (pa.Name, prop_a, _fmt(getattr(pa, prop_a))))
-    if sorted(float(v) for v in (getattr(pb, prop_b) or [])) != [vb(0.4)]:
-        errors.append("B's width did not stick: %s.%s = %s"
-                      % (pb.Name, prop_b, _fmt(getattr(pb, prop_b))))
+    if abs(_band_interval(pa, prop_a, ss_a)[1]
+           - _band_interval(pa, prop_a, ss_a)[0] - 0.25) > 1e-9:
+        errors.append("setting B's width disturbed A: %s.%s = %s over %r"
+                      % (pa.Name, prop_a, _fmt_pair(_edges(pa, prop_a[0])),
+                         _band_interval(pa, prop_a, ss_a)))
+    if abs(_band_interval(pb, prop_b, ss_b)[1]
+           - _band_interval(pb, prop_b, ss_b)[0] - 0.4) > 1e-9:
+        errors.append("B's width did not stick: %s.%s = %s over %r"
+                      % (pb.Name, prop_b, _fmt_pair(_edges(pb, prop_b[0])),
+                         _band_interval(pb, prop_b, ss_b)))
     if len(blend.Poles or []) != 24:
         errors.append("blend lost poles after both widths changed (%d)"
                       % len(blend.Poles or []))
-    # and each side's band really is the width that side asked for
-    for p, other, prop, ss, want_w in ((pa, pb, prop_a, ss_a, 0.25),
-                                       (pb, pa, prop_b, ss_b, 0.4)):
-        iv = _band_interval(p, prop, ss)
-        if abs((iv[1] - iv[0]) - want_w) > 1e-9:
-            errors.append("%s band interval %r, want width %g"
-                          % (p.Name, iv, want_w))
-    checks.append("both widths set independently: A=%g B=%g, blend still 24 "
-                  "poles" % (0.25, 0.4))
+    checks.append("both widths set independently: A=0.25 B=0.4, blend still "
+                  "24 poles")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 def test_corner_patch_band_widths_stay_per_seam(doc):
     """The four-patch corner must not regress: each patch legitimately
-    carries TWO splits, one per seam side (on its two axes), and every
-    strip still resolves to exactly ONE band cell. A non-default width
-    on ONE seam of a corner patch leaves that seam's split list alone —
-    the OTHER seam's band axis is a different list and is not touched."""
+    carries a band edge per END on its two axes, and every strip still
+    resolves to exactly ONE band cell. A non-default width on ONE seam of
+    a corner patch leaves that seam's OTHER end on the same axis alone —
+    the OTHER seam's band axis is a different property pair and is not
+    touched."""
     from SilkMachinery import band_cells, patch_side
     from Tests.test_blend_corner_splits import EXPECTED_SPLITS
 
@@ -653,14 +705,16 @@ def test_corner_patch_band_widths_stay_per_seam(doc):
 
     for name, want_u, want_v in EXPECTED_SPLITS:
         p = model["patches"][name]
-        got = (sorted(float(v) for v in (p.USplits or [])),
-               sorted(float(v) for v in (p.VSplits or [])))
-        if got != (sorted(want_u), sorted(want_v)):
-            errors.append("fixture: %s splits %s, want %s"
-                          % (name, got, (want_u, want_v)))
-    checks.append("default ring: all 4 corner patches carry both splits "
-                  "(%s)" % "; ".join(
-                      "%s U=%s V=%s" % (n, u, v) for n, u, v in EXPECTED_SPLITS))
+        got = (_edges(p, "U"), _edges(p, "V"))
+        if got != (tuple(want_u), tuple(want_v)):
+            errors.append("fixture: %s edges U=%s V=%s, want U=%s V=%s"
+                          % (name, _fmt_pair(got[0]), _fmt_pair(got[1]),
+                             _fmt_pair(want_u), _fmt_pair(want_v)))
+    checks.append("default ring: all 4 corner patches carry an edge on "
+                  "both of the ends their seams ask for (%s)"
+                  % "; ".join("%s U=%s V=%s" % (n, _fmt_pair(u),
+                                                _fmt_pair(v))
+                              for n, u, v in EXPECTED_SPLITS))
 
     # the two seams meeting at Patch44, as the strips see them
     sides = []
@@ -674,7 +728,7 @@ def test_corner_patch_band_widths_stay_per_seam(doc):
         return {"pass": False,
                 "errors": ["fixture: Patch44 meets %d strips, want 2"
                            % len(sides)], "checks": checks}
-    axes = {("VSplits" if e[0] == "U" else "USplits") for _, _, e, _ in sides}
+    axes = {("V" if e[0] == "U" else "U") for _, _, e, _ in sides}
     if len(axes) != 2:
         return {"pass": False,
                 "errors": ["fixture: both seams of Patch44 use the same band "
@@ -682,36 +736,35 @@ def test_corner_patch_band_widths_stay_per_seam(doc):
 
     b_target, other_t, e_t, ss_t = sides[0]
     b_other, other_o, e_o, ss_o = sides[1]
-    prop_t = "VSplits" if e_t[0] == "U" else "USplits"
-    prop_o = "VSplits" if e_o[0] == "U" else "USplits"
-    before_o = sorted(float(v) for v in (getattr(p44, prop_o) or []))
+    prop_t = "%sSplit%d" % ("V" if e_t[0] == "U" else "U", ss_t + 1)
+    letter_o = "V" if e_o[0] == "U" else "U"
+    before_o = _edges(p44, letter_o)
     cells_before = {bn: band_cells(p44, e, ss) for bn, _, e, ss in sides}
-    strips_before = {bn: [tuple(q) for q in model["strips"][bn].Poles or []]
-                     for bn in model["strips"]}
-    checks.append("Patch44 seams: %s -> %s (side %d), %s -> %s (side %d); "
-                  "band axes %s / %s" % (b_target, e_t, ss_t, b_other, e_o,
-                                         ss_o, prop_t, prop_o))
+    checks.append("Patch44 seams: %s -> %s (side %d) via %s, %s -> %s "
+                  "(side %d) via the %s axis"
+                  % (b_target, e_t, ss_t, prop_t, b_other, e_o, ss_o,
+                     letter_o))
 
     user = 0.3 if ss_t == 0 else 0.7
     with _Capture() as cap:
-        setattr(p44, prop_t, [user])
+        setattr(p44, prop_t, user)
         doc.recompute()
     errors += ["console error: %s" % e for e in cap.errors]
 
-    stored = sorted(float(v) for v in (getattr(p44, prop_t) or []))
-    checks.append("Patch44.%s set to %s and recomputed -> %s"
-                  % (prop_t, _fmt([user]), _fmt(stored)))
-    if stored != [user]:
-        errors.append("Patch44.%s = %s after the width change, want %s "
-                      "(the blend re-asserted its default)"
-                      % (prop_t, _fmt(stored), _fmt([user])))
+    pair_t = _edges(p44, prop_t[0])
+    checks.append("Patch44.%s set to %g and recomputed -> %s"
+                  % (prop_t, user, _fmt_pair(pair_t)))
+    if pair_t[ss_t] != user:
+        errors.append("Patch44.%s = %s after the width change, want %g at "
+                      "that end (the blend re-asserted its default)"
+                      % (prop_t, _fmt_pair(pair_t), user))
 
     # the OTHER seam is untouched, on its own axis
-    if sorted(float(v) for v in (getattr(p44, prop_o) or [])) != before_o:
-        errors.append("Patch44.%s = %s, want %s — the other seam's band axis "
-                      "was disturbed" % (prop_o,
-                                          _fmt(getattr(p44, prop_o)),
-                                          _fmt(before_o)))
+    if _edges(p44, letter_o) != before_o:
+        errors.append("Patch44's %s axis = %s, want %s — the other seam's "
+                      "band axis was disturbed"
+                      % (letter_o, _fmt_pair(_edges(p44, letter_o)),
+                         _fmt_pair(before_o)))
 
     # every strip still resolves to exactly one band cell
     for bn, other, e, ss in sides:
@@ -732,68 +785,98 @@ def test_corner_patch_band_widths_stay_per_seam(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_default_band_split_decision_is_unchanged(doc):
-    """With no user choice, #64 changes nothing: for every split list the
-    fixtures can produce ({0.1, 0.5, 0.9}, every subset, both axes, both
-    ends) the new end-classification rule writes the default EXACTLY when
-    the old `no split within 1e-9 of 0.1 / 0.9` test did. The default
-    path is therefore byte-identical, and a fresh ring still materializes
-    the documented 0.1 / 0.9 layout."""
-    from SilkMachinery import split_at_end
+def test_default_band_edge_decision_is_unchanged(doc):
+    """With no user choice, #64 changes nothing: the blend writes the
+    default EXACTLY when the end carries no edge.
+
+    Compared against the pre-#82 rule that decision was "the end has no
+    split", classified by VALUE (below 0.5 -> end 0, above -> end 1, 0.5
+    -> neither). On every layout the fixtures can produce — each end
+    holding its own default, or nothing — the two agree, which is the
+    claim: the default path is unchanged and a fresh ring still
+    materializes the documented 0.1 / 0.9 layout.
+
+    Where they DIFFER is #81, and that is the point rather than a
+    regression: with both ends carrying an edge on their own side of the
+    middle — say Split1 = 0.2 and Split2 = 0.4 — the pre-#82 rule reported
+    NO band at the 1 end, so the blend tried to write a third split that
+    the two-entry cap refused and the patch went Invalid. Both ends now
+    carry an edge, both bands exist, and nothing is written."""
+    from SilkMachinery import band_edge
 
     errors, checks = [], []
-    subsets = _subsets([0.1, 0.5, 0.9])
-    n = 0
-    for splits in subsets:
+
+    # (pair, {end: "the pre-#82 rule reports an edge here?"}). Each pair
+    # is the named-edge form of a split list the fixtures produce.
+    layouts = [
+        ((NO_BAND_1, NO_BAND_2), {0: False, 1: False}),      # []
+        ((0.1, NO_BAND_2), {0: True, 1: False}),              # [0.1]
+        ((NO_BAND_1, 0.9), {0: False, 1: True}),              # [0.9]
+        ((0.1, 0.9), {0: True, 1: True}),                    # [0.1, 0.9]
+    ]
+    for pair, legacy in layouts:
         for ss in (0, 1):
-            default = 0.9 if ss else 0.1
-            new_writes = split_at_end(splits, ss) is None
-            old_writes = all(abs(float(v) - default) > 1e-9 for v in splits)
-            n += 1
-            if new_writes != old_writes:
-                errors.append("splits %s side %d: new rule writes=%r, old "
-                              "rule writes=%r" % (_fmt(splits), ss,
-                                                  new_writes, old_writes))
-    checks.append("%d (splits, end) layouts over every subset of "
-                  "{0.1, 0.5, 0.9}: write-the-default decision identical to "
-                  "the pre-#64 rule" % n)
+            edge = band_edge(pair[ss])
+            writes = edge is None
+            if writes == legacy[ss]:
+                errors.append("edges %s, end %d: the blend %s write the "
+                              "default, the pre-#82 rule said this end %s an "
+                              "edge"
+                              % (_fmt_pair(pair), ss,
+                                 "would not" if writes else "would",
+                                 "has" if legacy[ss] else "has no"))
+    checks.append("%d (pair, end) layouts the fixtures can produce: "
+                  "write-the-default decision identical to the pre-#82 "
+                  "rule" % (2 * len(layouts)))
 
     # ... and on real geometry, a fresh ring still lands on 0.1 / 0.9.
     from Tests.test_blend_corner_splits import EXPECTED_SPLITS
     model = cm.build_corner_model(doc)
     for name, want_u, want_v in EXPECTED_SPLITS:
         p = model["patches"][name]
-        got = (sorted(float(v) for v in (p.USplits or [])),
-               sorted(float(v) for v in (p.VSplits or [])))
-        if got != (sorted(want_u), sorted(want_v)):
-            errors.append("default ring: %s splits %s, want %s"
-                          % (name, got, (want_u, want_v)))
+        got = (_edges(p, "U"), _edges(p, "V"))
+        if got != (tuple(want_u), tuple(want_v)):
+            errors.append("default ring: %s edges U=%s V=%s, want U=%s V=%s"
+                          % (name, _fmt_pair(got[0]), _fmt_pair(got[1]),
+                             _fmt_pair(want_u), _fmt_pair(want_v)))
     for bname, st in model["strips"].items():
         if len(st.Poles or []) != 24:
             errors.append("default ring: %s has %d poles, want 24"
                           % (bname, len(st.Poles or [])))
     checks.append("fresh 2x2 ring still materializes the documented "
                   "0.1 / 0.9 layout on all 4 patches, 24 poles per strip")
+
+    # #81 itself: the layout the old rule could not handle.
+    from SilkMachinery import band_at_end, band_cells
+    p = _StubPatch((NO_BAND_1, 0.4), (0.2, NO_BAND_2), name="EightyOne")
+    if band_at_end(0.2, 0.4, 0) is None or band_at_end(0.2, 0.4, 1) is None:
+        errors.append("the 1 end of (0.2, 0.4) reports no band -- #81 is "
+                      "not gone")
+    if len(band_cells(p, "V1", 1)) != 1:
+        errors.append("#81's (0.2, 0.4) layout gives band_cells(V1, 1) = %r, "
+                      "want one cell" % (band_cells(p, "V1", 1),))
+    checks.append("#81's (0.2, 0.4): both ends report a band and the band "
+                  "is one cell -- the layout the pre-#82 classification "
+                  "refused now works")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 # ---- 2: the refusal is actionable ---------------------------------------
 
-def test_multi_cell_band_refusal_names_patch_and_values(doc):
-    """A band that spans more than one subgrid cell still refuses (the
-    blend supports single-cell bands only) — but the message now carries
-    what a user needs to fix it: the patch, the seam and its side, both
-    axis split lists, how many cells each makes, which are corner cells,
-    and the single split value that leaves a one-cell band.
+def test_zero_cell_band_refusal_names_patch_and_values(doc):
+    """A band that covers no subgrid cell at all still refuses (the blend
+    supports single-cell bands only) — and the message carries what a
+    user needs to fix it: the patch, the seam and its side, both named
+    edges on each axis, how many intervals they make, which are corner
+    cells, and the single edit that leaves a one-cell band.
 
     Fixture: the corner PAIR (two patches, one strip). Patch44's
     seam-parallel axis (V, the axis running ALONG the shared seam) gets
-    [0.5, 0.8]: three intervals, the 1-end one is a corner cell, two
-    cells left in the band. #76 turned the old [0.85, 0.95] fixture into
-    an illegal write (two splits above 0.5, which is now refused), and
-    the substitution is better than a renaming: the extra cell here comes
-    from a plain MID-SURFACE split, which the limit permits -- so this is
-    a band the rule still cannot make single-cell, and it says so."""
+    the SAME edge at both ends, 0.8 / 0.8: one split, so both of the
+    axis' end cells are corner cells and the band has none left. That is
+    the one degenerate layout #82's named edges still admit — the two
+    ends agree on a value, which a list could not even express — and the
+    refusal is what says so."""
     from Tests.corner_model import build_corner_pair
     from SilkMachinery import band_cells
 
@@ -804,33 +887,35 @@ def test_multi_cell_band_refusal_names_patch_and_values(doc):
     errors, checks = [], []
 
     with _Capture() as cap:
-        p44.VSplits = [0.5, 0.8]
+        p44.VSplit1 = 0.8
+        p44.VSplit2 = 0.8
         doc.recompute()
 
     idxs = band_cells(p44, "V1", 1)
-    checks.append("band_cells(Patch44, V1, 1) with VSplits=[0.5, 0.8] "
-                  "= %r (2 cells)" % (idxs,))
-    if len(idxs) != 2:
-        errors.append("fixture did not produce a multi-cell band: %r" % idxs)
+    checks.append("band_cells(Patch44, V1, 1) with V edges (0.8, 0.8) "
+                  "= %r (0 cells)" % (idxs,))
+    if len(idxs) != 0:
+        errors.append("fixture did not produce a zero-cell band: %r" % idxs)
 
     msg = "\n".join(cap.errors)
     want_fragments = [
         ("patch name", "Patch44"),
-        ("cell count", "covers 2 subgrid cells"),
+        ("cell count", "covers 0 subgrid cells"),
         ("seam + side", "seam V1 (band at parametric 1)"),
-        ("band axis value", "band axis USplits = [0.9]"),
-        ("offending axis values", "seam-parallel axis VSplits = [0.5, 0.8]"),
-        ("interval count", "3 interval(s)"),
-        ("corner cells excluded", "corner cell(s) [2] excluded"),
-        ("cells left", "2 left in the band"),
-        ("valid fix", "Patch44.VSplits = [0.8]"),
+        ("band axis edges", "band axis USplit1 = 0, USplit2 = 0.9"),
+        ("offending axis edges", "seam-parallel axis VSplit1 = 0.8, "
+                                 "VSplit2 = 0.8"),
+        ("interval count", "2 interval(s)"),
+        ("corner cells excluded", "corner cell(s) [0, 1] excluded"),
+        ("cells left", "0 left in the band"),
+        ("valid fix", "set Patch44.VSplit2 = 1"),
     ]
     for label, frag in want_fragments:
         if frag not in msg:
             errors.append("refusal message does not name the %s (%r); got:\n%s"
                           % (label, frag, msg))
-    checks.append("refusal message names %d facts (patch, seam, both "
-                  "split lists, interval count, corner cells, the fix)"
+    checks.append("refusal message names %d facts (patch, seam, both named "
+                  "edge pairs, interval count, corner cells, the fix)"
                   % len(want_fragments))
 
     # The refusal is still a refusal: no crash, and the object survives.
@@ -842,37 +927,44 @@ def test_multi_cell_band_refusal_names_patch_and_values(doc):
 
     # And the suggested fix actually works.
     with _Capture() as cap2:
-        p44.VSplits = [0.8]
+        p44.VSplit2 = 1.0
         doc.recompute()
     if cap2.errors:
         errors.append("the suggested fix still errors: %s" % cap2.errors)
     fixed = band_cells(p44, "V1", 1)
     if len(fixed) != 1:
-        errors.append("with VSplits=[0.8] the band is %r, want 1 cell"
-                      % (fixed,))
+        errors.append("with V edges (0.8, no band) the band is %r, want 1 "
+                      "cell" % (fixed,))
     if len(strip.Poles or []) != 24:
         errors.append("after the suggested fix the strip has %d poles, "
                       "want 24" % len(strip.Poles or []))
-    checks.append("applying the suggested fix (VSplits=[0.8]) rebuilds the "
+    checks.append("applying the suggested fix (VSplit2 = 1) rebuilds the "
                   "strip: 24 poles, one band cell %r, no errors" % (fixed,))
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-# ---- 3: splits normalized on set ---------------------------------------
+# ---- 3: band edges normalized on set -------------------------------------
 
-def test_splits_normalized_on_set(doc):
-    """`0 < u1 < u2 < 1` (same for v) is pinned ON THE STORED PROPERTY:
-    whatever goes in, what comes back out is exactly what the geometry
-    used, and the console says what was rejected and why (#53 display
-    residue — before this the property editor kept showing 0.0 / 1.0 /
-    duplicates that the geometry had already dropped).
+def test_band_edges_normalized_on_set(doc):
+    """Whatever goes into the two properties, what comes back out is
+    exactly what the geometry used (#53 display residue: before this, a
+    rejected value stayed visible in the property editor while the
+    geometry had already dropped it).
 
-    The console word has a THRESHOLD (#62 follow-up): a write that loses
-    EVERY value ([0], [1.5]) is the suspicious case and is reported, but
-    a PARTIAL correction — a reorder, a duplicate, one mistyped value
-    among good ones — is corrected silently. The property editor commits
-    a bare `0` while `0.2` is still being typed, so warning on every
-    discarded value scolded input the editor never meant to send."""
+    The rule is narrow now (#82): a value outside [0, 1] becomes its own
+    slot's SENTINEL ("this end carries no band"), and a pair whose two
+    edges are out of order is swapped so `Split1 <= Split2` as the
+    interval arithmetic reads them. Both are corrections, and both are
+    REPORTED — a mistyped width that silently became "no band here" is
+    the residue the ticket is about.
+
+    Two cases are deliberately NOT corrected, because a correction there
+    would be a guess rather than a fix:
+      * a WIDE edge at one end (Split1 = 0.9 with no 1-end edge) is a
+        legitimate 0.9-wide band at the 0 end, so it is stored as typed;
+      * both ends at the SAME value is stored as typed too -- the two
+        ends then agree, which is degenerate for a band and is refused by
+        the band, not silently rewritten here."""
     from Tests.test_seam_resolver import _square_patch
 
     p = _square_patch(doc, "Norm")
@@ -881,319 +973,231 @@ def test_splits_normalized_on_set(doc):
     def cells():
         return len(p.Proxy._subgrids)
 
-    def stored(prop):
-        return [round(float(v), 12) for v in (getattr(p, prop) or [])]
-
+    # the V axis carries one edge throughout, so every cell count below is
+    # (U edges + 1) * 2 -- a correction that really drops an edge is then
+    # visible in the geometry, not only in the property.
+    p.VSplit2 = 0.4
+    doc.recompute()
     cases = [
-        # (written, expected stored, expected cell count with VSplits [])
-        ([0.7, 0.0, 0.2, 1.0, -0.5, 2.0, 0.2], [0.2, 0.7], 3),
-        ([0.5, 0.5], [0.5], 2),
-        ([0.9, 0.2], [0.2, 0.9], 3),   # unsorted in, 2 values (#76)
-        ([0.0, 1.0], [], 0),                     # nothing survives -> loud
-        ([0.0, 0.25, 1.0], [0.25], 2),           # a partial fix -> silent
-        ([0.5], [0.5], 2),                       # a legal write: no-op
+        # (prop, written, expected stored, expected cell count)
+        ("USplit1", 0.7, 0.7, 4),
+        ("USplit2", 0.2, 0.2, 4),
+        ("USplit2", 1.5, 1.0, 2),     # outside [0,1] -> its own sentinel
+        ("USplit2", -0.5, 1.0, 2),
+        ("USplit1", 0.0, 0.0, 2),     # the sentinel is a legal value
+        ("USplit1", 1.0, 1.0, 2),     # ...even in the other slot
+        ("USplit2", 0.0, 0.0, 2),     # ...and here
     ]
-    for written, want, n_cells in cases:
+    for prop, written, want, n_cells in cases:
         with _Capture() as cap:
-            p.USplits = list(written)
-        got = stored("USplits")
+            # start each case from the other end's sentinel, so the cell
+            # count is about the value under test and nothing else
+            setattr(p, "USplit2" if prop == "USplit1" else "USplit1",
+                    NO_BAND_2 if prop == "USplit1" else NO_BAND_1)
+            setattr(p, prop, written)
+        got = round(float(getattr(p, prop)), 12)
         if got != want:
-            errors.append("USplits = %s stored as %s, want %s"
-                          % (_fmt(written), _fmt(got), _fmt(want)))
+            errors.append("%s = %g stored as %g, want %g"
+                          % (prop, written, got, want))
         if cells() != n_cells:
-            errors.append("USplits = %s produced %d cells, want %d"
-                          % (_fmt(written), cells(), n_cells))
-        if want and any(not 0.0 < v < 1.0 for v in got):
-            errors.append("stored USplits %s escapes (0, 1)" % _fmt(got))
-        if len(set(got)) != len(got) or got != sorted(got):
-            errors.append("stored USplits %s is not strictly increasing"
-                          % _fmt(got))
+            errors.append("%s = %g produced %d cells, want %d"
+                          % (prop, written, cells(), n_cells))
+        if not 0.0 <= got <= 1.0:
+            errors.append("stored %s = %g escapes [0, 1]" % (prop, got))
         msg = "\n".join(cap.errors)
-        # The threshold: a NON-EMPTY input that discards every one of its
-        # values is reported, naming the values; anything else is
-        # corrected in silence.
-        if written and not want:
-            rejected = [v for v in written if not 0.0 < v < 1.0]
-            if not msg.strip():
-                errors.append("USplits = %s lost every value and said "
-                              "nothing" % _fmt(written))
-            elif not all(("%g" % v) in msg for v in rejected):
-                errors.append("USplits = %s: rejected values %s not all "
-                              "named in the console message:\n%s"
-                              % (_fmt(written), rejected, msg))
+        # The threshold: a correction is REPORTED, always -- the input was
+        # not what the geometry used.
+        if abs(written - want) > 1e-12:
+            if ("%g" % written) not in msg or prop not in msg:
+                errors.append("%s = %g was corrected to %g without naming "
+                              "the value in the console:\n%s"
+                              % (prop, written, want, msg))
         elif msg.strip():
-            errors.append("USplits = %s was corrected to %s and reported "
-                          "anyway (only a wholesale discard warns):\n%s"
-                          % (_fmt(written), _fmt(want), msg))
-    checks.append("%d USplits writes: stored list always sorted, deduped, "
-                  "strictly inside (0, 1); cell count always matches it; "
-                  "only a wholesale discard is reported" % len(cases))
+            errors.append("%s = %g was already canonical and reported "
+                          "anyway:\n%s" % (prop, written, msg))
+    checks.append("%d band-edge writes with one V edge held constant: an "
+                  "out-of-range value corrected to its own sentinel AND "
+                  "reported (4 cells -> 2), a legal value stored and "
+                  "silent, the cell count always following the stored pair"
+                  % len(cases))
 
-    # The V axis is normalized the same way, independently -- and the
-    # same threshold holds there.
+    # The V axis is normalized the same way, independently -- starting
+    # from its neutral pair so the swap below is the only thing at play.
+    p.VSplit1 = NO_BAND_1
+    p.VSplit2 = NO_BAND_2
+    doc.recompute()
     with _Capture() as cap:
-        p.VSplits = [0.0, 0.25, 1.0, 0.75]
-    if stored("VSplits") != [0.25, 0.75]:
-        errors.append("VSplits stored as %s, want [0.25, 0.75]"
-                      % _fmt(stored("VSplits")))
-    if cap.errors:
-        errors.append("a PARTLY corrected VSplits reported: %s" % cap.errors)
-    with _Capture() as cap:
-        p.VSplits = [1.0, 1.5]
-    if stored("VSplits") != []:
-        errors.append("VSplits stored as %s, want []"
-                      % _fmt(stored("VSplits")))
-    if not any("VSplits" in e for e in cap.errors):
-        errors.append("a WHOLLY discarded VSplits said nothing: %s"
-                      % cap.errors)
-    want_cells = (len(stored("USplits")) + 1) * (len(stored("VSplits")) + 1)
-    if cells() != want_cells:
-        errors.append("USplits=%s x VSplits=%s gives %d cells, want %d"
-                      % (_fmt(stored("USplits")), _fmt(stored("VSplits")),
-                         cells(), want_cells))
-    checks.append("VSplits normalized independently and SILENTLY when only "
-                  "partly corrected, loudly when wholly discarded; "
-                  "%dx%d = %d cells matches the stored lists"
-                  % (len(stored("USplits")) + 1,
-                     len(stored("VSplits")) + 1, cells()))
+        p.VSplit1 = 0.9
+        p.VSplit2 = 0.25
+    if (_edges(p, "V")) != (0.25, 0.9):
+        errors.append("V edges = %s after writing 0.9 then 0.25, want "
+                      "(0.25, 0.9) -- the inverted pair was not swapped"
+                      % (_fmt_pair(_edges(p, "V")),))
+    if not cap.errors:
+        errors.append("the swap of an inverted pair was silent: %s"
+                      % (cap.errors,))
+    elif "swapped" not in "\n".join(cap.errors):
+        errors.append("the swap did not say it swapped: %s" % cap.errors)
+    checks.append("an inverted pair (VSplit1 = 0.9, VSplit2 = 0.25) is "
+                  "swapped to (0.25, 0.9) and says so")
 
-    # Geometry agrees with the stored list: every interval is a cell and
-    # the object is valid + non-null.
+    # ...and the geometry agrees with what is stored.
     if p.Shape.isNull() or not p.Shape.isValid():
         errors.append("patch shape invalid after normalization")
     checks.append("patch shape valid, non-null after the writes")
 
-    # A blend writing its own 0.1 / 0.9 band split is a no-op (already
-    # normalized) and must not report anything.
+    # A blend writing its own 0.1 / 0.9 band edge is a no-op (already
+    # canonical) and must not report anything.
     from Tests.corner_model import build_corner_pair
     pair = build_corner_pair(doc)
     with _Capture() as cap:
         pair["strip"].touch()
         doc.recompute()
     p44 = pair["patches"]["Patch44"]
-    if sorted(float(v) for v in p44.USplits) != [0.9]:
-        errors.append("blend band split drifted to %s"
-                      % _fmt(p44.USplits))
+    if _edges(p44, "U") != (0.0, 0.9):
+        errors.append("the blend's band edge drifted to %s"
+                      % (_fmt_pair(_edges(p44, "U")),))
     if cap.errors:
-        errors.append("the blend's own band-split write reported: %s"
+        errors.append("the blend's own band-edge write reported: %s"
                       % cap.errors)
-    checks.append("the blend's own band split (USplits=[0.9]) passes "
+    checks.append("the blend's own band edge (USplit2 = 0.9) passes "
                   "through normalization untouched, silently")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-# ---- 4: #76 — the one-split-per-end limit, in code ----------------------
+# ---- 4: #76's cap, now a type --------------------------------------------
 
-def test_over_limit_splits_are_refused_on_the_property(doc):
-    """#76: "at most one split below 0.5 and at most one above 0.5, per
-    axis" was a SENTENCE in a refusal message. Here it is a rule the
-    property path enforces.
+def test_third_split_on_an_axis_is_not_expressible(doc):
+    """#76's "at most two splits per axis" is no longer a rule anything
+    enforces -- it is a TYPE. There are two properties, each named for one
+    end, so a third split on an axis cannot be written at all: the axis
+    has no list to append to, and `Split3` is not a property.
 
-    The rule is finer than "at most two", because that is what the
-    geometry can hold: a split is the FAR EDGE of one band's interval and
-    an axis has one interval per end, so `[0.2, 0.8]` is two bands (one per
-    end, legal) while `[0.2, 0.3]` is two bands that both want to be at the
-    SAME end. 0.5 marks neither end, so `[0.1, 0.5, 0.9]` — three splits,
-    and what `ensure_band_split` writes onto an axis that already carried a
-    plain mid-surface subdivision — is LEGAL and stays legal.
-
-    A refusal is a REFUSAL, not a silent correction: which of two
-    same-side splits to keep is a semantic guess (it decides the band
-    width), so the axis keeps the list it last accepted, unchanged, and the
-    geometry does not move at all."""
-    from SilkMachinery import split_limit_problem
+    So what is asserted here is the shape, and the fact that the two
+    writers of a band edge in the codebase can only ever move ONE of the
+    two: the blend's ensure_band_split and the panel's band editor. Both
+    are pinned below by exercising them -- a third value is not refused,
+    it is inexpressible, and every write lands on the end it names."""
     from Tests.test_seam_resolver import _square_patch
 
     errors, checks = [], []
+    p = _square_patch(doc, "Type")
 
-    # -- the rule itself, as data ---------------------------------------
-    # [0.2, 0.4] and [0.4, 0.6] are HERE ON PURPOSE: they are the lists the
-    # human was simply trying to store, which the first version of this rule
-    # wrongly refused. A regression that rejects ordinary input is worse than
-    # the silent case it was meant to prevent, so they are pinned as legal.
-    legal = [[], [0.5], [0.2], [0.8], [0.2, 0.8], [0.05, 0.95],
-             [0.2, 0.4], [0.4, 0.6], [0.1, 0.3], [0.2, 0.5], [0.5, 0.9]]
-    illegal = [[0.2, 0.4, 0.8], [0.1, 0.85, 0.95], [0.2, 0.3, 0.9, 0.8],
-               [0.1, 0.3, 0.5, 0.7]]
-    for splits in legal:
-        problem = split_limit_problem(splits)
-        if problem is not None:
-            errors.append("%s is legal (two splits or fewer, any side of the "
-                          "middle) but the rule refuses it: %s"
-                          % (_fmt(splits), problem))
-    for splits in illegal:
-        if split_limit_problem(splits) is None:
-            errors.append("%s has three or more splits and the rule does "
-                          "not say so" % _fmt(splits))
-    checks.append("%d legal and %d over-limit lists classified by the one "
-                  "rule, including the human's own [0.2, 0.4]"
-                  % (len(legal), len(illegal)))
+    # The properties themselves: four scalars, no lists anywhere.
+    for prop in ("USplit1", "USplit2", "VSplit1", "VSplit2"):
+        if not hasattr(p, prop):
+            errors.append("a Patch has no %s property" % prop)
+            continue
+        kind = p.getTypeIdOfProperty(prop)
+        if kind != "App::PropertyFloat":
+            errors.append("%s is a %s, want App::PropertyFloat"
+                          % (prop, kind))
+    for old in ("USplits", "VSplits"):
+        if hasattr(p, old):
+            errors.append("the pre-#82 %s property is still there -- the "
+                          "cap is not a type while a list survives" % old)
+    checks.append("a Patch carries exactly four App::PropertyFloat band "
+                  "edges and no split list")
 
-    # the message names the values it refuses — a refusal the user cannot
-    # act on is half a refusal
-    msg = split_limit_problem([0.2, 0.45, 0.9])
-    if msg is None:
-        errors.append("split_limit_problem([0.2, 0.45, 0.9]) said nothing")
-    else:
-        for v in (0.2, 0.45, 0.9):
-            if "%g" % v not in msg:
-                errors.append("the refusal for [0.2, 0.45, 0.9] does not "
-                              "name %g: %s" % (v, msg))
-        if "at most two splits" not in msg:
-            errors.append("the refusal does not state the rule: %s" % msg)
-    checks.append("the refusal message names every value on the axis")
+    # Writing the two ends in any order gives one interval per edge, so
+    # an axis can hold at most THREE intervals -- two bands and a middle.
+    for s1, s2 in ((0.1, 0.9), (0.2, 0.4), (0.0, 0.9), (0.3, 1.0)):
+        p.USplit1 = s1
+        p.USplit2 = s2
+        doc.recompute()
+        n = len(p.Proxy._subgrids)
+        if n > 3:
+            errors.append("U edges (%g, %g) produced %d cells -- an axis "
+                          "can hold at most three" % (s1, s2, n))
+    checks.append("every pair of U edges yields at most 3 cells (2 bands "
+                  "plus the middle), and #81's (0.2, 0.4) is an ordinary "
+                  "pair now, not a refused one")
 
-    # -- and the same rule through the PROPERTY path --------------------
-    p = _square_patch(doc, "Limit")
-
-    def stored():
-        return [round(float(v), 12) for v in (p.USplits or [])]
-
-    def cells():
-        return len(p.Proxy._subgrids)
-
-    cases = [
-        # (written, stored after, accepted?)
-        ([0.2, 0.8], [0.2, 0.8], True),        # the 2-split band, one per end
-        ([0.2, 0.4], [0.2, 0.4], True),         # THE HUMAN'S CASE: two, both below
-        ([0.4, 0.6], [0.4, 0.6], True),         # two, both above
-        ([0.5], [0.5], True),
-        ([0.1, 0.3], [0.1, 0.3], True),         # two, both below, like the other
-        # ...and each of these puts the axis back to that [0.1, 0.3]:
-        # a refusal is not a correction, it is a refusal.
-        ([0.2, 0.45, 0.9], [0.1, 0.3], False),  # three, two below
-        ([0.1, 0.5, 0.9], [0.1, 0.3], False),  # three, 0.5 included: still three
-        ([0.2, 0.4, 0.8], [0.1, 0.3], False),  # the exact list the human typed
-        ([0.85, 0.95, 0.1], [0.1, 0.3], False),  # three, straddling
-        ([0.3, 0.6], [0.3, 0.6], True),
-        # ...and a refusal from an EMPTY axis leaves it empty, so the
-        # over-limit list never becomes the "before" of the next one.
-        ([], [], True),
-        ([0.2, 0.45, 0.9], [], False),
-        ([0.2, 0.8], [0.2, 0.8], True),
-    ]
-    for written, want, accepted in cases:
-        with _Capture() as cap:
-            p.USplits = list(written)
-        got = stored()
-        if got != want:
-            errors.append("USplits = %s stored as %s, want %s"
-                          % (_fmt(written), _fmt(got), _fmt(want)))
-        # geometry follows the stored list and NOTHING ELSE: a refusal
-        # moves no cell, so nothing downstream can be left stale. (No
-        # splits at all is no subgrids at all, not one cell.)
-        n_splits = len(got) + len(p.VSplits or [])
-        want_cells = (len(got) + 1) * (len(p.VSplits) + 1) if n_splits else 0
-        if cells() != want_cells:
-            errors.append("USplits = %s left %d cells, want %d (the stored "
-                          "list is %s)" % (_fmt(written), cells(),
-                                           want_cells, _fmt(got)))
-        said = "\n".join(cap.errors)
-        if accepted and said.strip():
-            errors.append("USplits = %s is legal and was reported anyway: %s"
-                          % (_fmt(written), said))
-        if not accepted:
-            if not said.strip():
-                errors.append("USplits = %s was refused in silence"
-                              % _fmt(written))
-            elif not all(("%g" % v) in said for v in written):
-                errors.append("the refusal for %s does not name every value "
-                              "it refused:\n%s" % (_fmt(written), said))
-    checks.append("%d USplits writes through the property: legal lists "
-                  "stored and silent, over-limit lists refused with the "
-                  "axis left exactly as it was and the cells unmoved"
-                  % len(cases))
+    # The blend's own writer: it can only ever write the ONE end it is
+    # asked about, and it leaves the other end alone.
+    from Tests.corner_model import build_corner_model
+    model = build_corner_model(doc)
+    for pname, patch in model["patches"].items():
+        u, v = _edges(patch, "U"), _edges(patch, "V")
+        n_u = len([x for x in u if 0.0 < x < 1.0])
+        n_v = len([x for x in v if 0.0 < x < 1.0])
+        if n_u > 2 or n_v > 2:
+            errors.append("%s carries %d U and %d V edges; a ring writes "
+                          "at most one per end" % (pname, n_u, n_v))
+    checks.append("after the full ring every patch carries at most one edge "
+                  "per end per axis, written by the blend alone")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_over_limit_refusal_is_visible_on_the_object(doc):
-    """The refusal has to be VISIBLE. The failure #76 exists to prevent is
-    not a crash: the blend refuses a band it cannot build, leaves its
-    Poles byte-identical to the previous run, and the Patch reports
-    `State ['Up-to-date']`, `isValid() True`, `getStatusString() 'Valid'`
-    — no tree marker, no stale flag, and a surface on screen that no
-    longer belongs to the inputs.
+def test_a_band_is_one_cell_by_construction(doc):
+    """#82 removed a failure mode, so this pins WHY rather than a symptom.
 
-    So the refusal is surfaced the way FreeCAD surfaces a property error:
-    the object is left INVALID, carrying the message. Asserted on the
-    state the tree reads, not on a printed line — plus the control (a
-    patch nobody refused is valid) so the flag cannot pass by being
-    always-on, and the recovery (a legal write clears it), so it cannot
-    pass by being permanent."""
-    from Tests.test_seam_resolver import _square_patch
+    Each named edge cuts exactly one interval off the axis it belongs to
+    -- `Split1` the first, `Split2` the last -- so an axis with `n` edges
+    makes `n + 1` intervals and loses `n` of them to the corner-cell
+    exclusion: exactly one cell is left for the band. That is why #61's
+    multi-cell band refusal can no longer be reached, and it is asserted
+    over every layout the properties can express (and over the one
+    degenerate pair, which yields none)."""
+    from SilkMachinery import band_cells, build_intervals, corner_cells
 
     errors, checks = [], []
-    p = _square_patch(doc, "Visible")
-
-    # control: an ordinary object is up to date and valid
-    if "Invalid" in p.State:
-        errors.append("a freshly built patch is already Invalid (%r)"
-                      % (p.State,))
-    if p.isValid() is not True:
-        errors.append("a freshly built patch reports isValid()=%r, want True"
-                      % (p.isValid(),))
-    if p.getStatusString() != "Valid":
-        errors.append("a freshly built patch reports status %r, want 'Valid'"
-                      % p.getStatusString())
-    checks.append("control: the untouched patch is Up-to-date / valid / "
-                  "'Valid' -- so the flag below is not simply always-on")
-
-    p.USplits = [0.2, 0.8]
-    doc.recompute()
-    p.USplits = [0.2, 0.45, 0.9]       # two splits below 0.5: refused
-    doc.recompute()                    # ...and still refused on the next pass
-
-    for label, probe in (("State", lambda: "Invalid" in p.State),
-                         ("isValid()", lambda: p.isValid() is False),
-                         ("getStatusString()",
-                          lambda: ("USplits" in p.getStatusString()
-                                   and "0.45" in p.getStatusString()))):
-        if not probe():
-            errors.append("after a refused USplits write the patch's %s "
-                          "does not show the refusal (State=%r, isValid=%r, "
-                          "status=%r)" % (label, p.State, p.isValid(),
-                                          p.getStatusString()))
-    if "Up-to-date" in p.State:
-        errors.append("the refused patch still claims to be Up-to-date "
-                      "(State=%r) -- that is exactly the #76 failure mode"
-                      % (p.State,))
-    checks.append("after the refused write: State %r, isValid()=%r, status "
-                  "'%s' -- and it survives a further doc.recompute(), so it "
-                  "is not a transient Touched flag"
-                  % (p.State, p.isValid(), p.getStatusString()))
-
-    # The refusal must not cost the user their geometry: the splits did not
-    # change, so the surface on screen is still the right one.
-    if p.Shape.isNull() or not p.Shape.isValid():
-        errors.append("the refused write destroyed the patch shape")
-    checks.append("the refused write leaves the patch shape intact -- the "
-                  "geometry is unchanged because the splits are")
-
-    # ...and a legal write clears the flag: the object recovers.
-    p.USplits = [0.2, 0.8]
-    doc.recompute()
-    if "Invalid" in p.State or p.isValid() is not True:
-        errors.append("a legal USplits write did not clear the refusal "
-                      "(State=%r, isValid=%r)" % (p.State, p.isValid()))
-    if "Up-to-date" not in p.State:
-        errors.append("after the fix the patch is not Up-to-date (%r)"
-                      % (p.State,))
-    checks.append("a legal write after the refusal clears it: State %r, "
-                  "isValid()=%r" % (p.State, p.isValid()))
+    candidates = [0.0, 0.1, 0.2, 0.5, 0.8, 0.9, 1.0]
+    n = 0
+    degenerate = 0
+    for u1 in candidates:
+        for u2 in candidates:
+            for v1 in candidates:
+                for v2 in candidates:
+                    p = _StubPatch((u1, u2), (v1, v2), name="Stub")
+                    for ea in ("U0", "U1", "V0", "V1"):
+                        for ss in (0, 1):
+                            got = band_cells(p, ea, ss)
+                            n += 1
+                            if len(got) > 1:
+                                errors.append("band_cells(%s, %s, %d) = %r "
+                                              "-- a multi-cell band is not "
+                                              "expressible any more"
+                                              % (p.Name, ea, ss, got))
+                            if not got:
+                                degenerate += 1
+                    # the arithmetic, stated directly
+                    for letter, (s1, s2) in (("U", (u1, u2)),
+                                              ("V", (v1, v2))):
+                        n_iv = len(build_intervals(s1, s2))
+                        edges = n_iv - 1
+                        dropped = len(corner_cells(s1, s2, n_iv))
+                        same = (0.0 < s1 < 1.0 and s1 == s2)
+                        if edges and not same and n_iv - dropped != 1:
+                            errors.append("%s edges (%g, %g): %d intervals "
+                                          "minus %d corner cells is not 1"
+                                          % (letter, s1, s2, n_iv, dropped))
+                        if edges and same and n_iv - dropped != 0:
+                            errors.append("%s edges (%g, %g): the degenerate "
+                                          "same-edge pair left %d cells, want "
+                                          "none" % (letter, s1, s2,
+                                                    n_iv - dropped))
+    checks.append("%d (layout, seam, side) combinations over every pair of "
+                  "properties from %s: never more than one band cell "
+                  "(%d of them are the degenerate same-edge pair, which has "
+                  "none)" % (n, candidates, degenerate))
+    if degenerate == 0:
+        errors.append("no layout produced the degenerate zero-cell band -- "
+                      "the arithmetic being pinned is not reachable")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 ALL_TESTS = [
-    test_band_cells_identical_to_legacy_on_default_splits,
+    test_corner_cells_follow_the_end_that_carries_an_edge,
     test_band_cells_generalizes_user_widths,
     test_corner_model_bands_follow_non_default_widths,
-    test_split_at_end_picks_the_splits_own_end,
+    test_band_edge_is_named_for_its_own_end,
     test_blend_reads_the_user_band_width,
     test_band_widths_of_both_sides_are_independent,
     test_corner_patch_band_widths_stay_per_seam,
-    test_default_band_split_decision_is_unchanged,
-    test_multi_cell_band_refusal_names_patch_and_values,
-    test_splits_normalized_on_set,
-    test_over_limit_splits_are_refused_on_the_property,
-    test_over_limit_refusal_is_visible_on_the_object,
+    test_default_band_edge_decision_is_unchanged,
+    test_zero_cell_band_refusal_names_patch_and_values,
+    test_band_edges_normalized_on_set,
+    test_third_split_on_an_axis_is_not_expressible,
+    test_a_band_is_one_cell_by_construction,
 ]

@@ -23,7 +23,7 @@ Usage:
      or a single shared Edge (#45: the command resolves its
      adjacent pair via SilkWorkflowOps.create_blend_by_edge)
   2. Run Silk_CreateBlend command (or SilkWorkflowOps.create_blend)
-  3. Blend auto-updates when patches' USplits/VSplits change
+  3. Blend auto-updates when a patch's band edges change
 """
 
 import FreeCAD
@@ -34,7 +34,8 @@ from popup import tipsDialog
 
 from SilkMachinery import patch_side as _patch_side, band_cells, \
     band_diagnosis, ensure_hidden_idxs_property, shared_seam, \
-    split_at_end, _EDGE_OF, _cyclic_adjacent
+    split_pair, axis_splits, band_edge, NO_BAND_1, NO_BAND_2, \
+    _EDGE_OF, _cyclic_adjacent
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -128,16 +129,27 @@ def _resolve_seam(fp, pa, pb, tol):
     return shared_seam(a_c, b_c, tol)
 
 
+def band_edge_prop(letter, end):
+    """The property that names the band edge of one END of one axis:
+    `USplit1` is the parametric-0 end's, `USplit2` the parametric-1
+    end's (#82). The single naming expression in the module, so the
+    writer (ensure_band_split), the survivor lookup (`_survivor_needs`)
+    and the remover (`_drop_band_split`) cannot disagree about which
+    property owns which end -- a disagreement here is exactly the class
+    of bug #81 was: a band writing one end's value where another end
+    reads it."""
+    return "%sSplit%d" % (letter, end + 1)
+
+
 def _band_split_of(etype):
-    """(property_name, end) of the split that carves the band of
+    """(property_name, end) of the band edge that carves the band of
     boundary side `etype` on its own patch: a seam along U fixes a V
-    interval, so the band lives in VSplits (and vice versa), and the
-    side's 0/1 is the end of that axis. The same two lines
-    run_blend.ensure_band_split uses to write it -- derived once here so
-    the writer and the remover can never disagree about which split is
-    which end's."""
-    return ("VSplits" if etype[0] == "U" else "USplits",
-            0 if etype[1] == "0" else 1)
+    interval, so the band lives in the V axis (and vice versa), and the
+    side's 0/1 is the END of that axis -- which is also the tail of the
+    property's name, through `band_edge_prop`."""
+    letter = "V" if etype[0] == "U" else "U"
+    end = 0 if etype[1] == "0" else 1
+    return band_edge_prop(letter, end), end
 
 
 def _side_on(o, p):
@@ -153,25 +165,26 @@ def _side_on(o, p):
     return seam[0] if o.PatchA is p else seam[1]
 
 
-def _survivor_needs(doc, dying, p, prop):
-    """The splits on axis `prop` of `p` that a blend OTHER than `dying`
-    still needs -- one per surviving blend, read at that blend's OWN
-    seam end through `_band_split_of`.
+def _survivor_needs(doc, dying, p, letter):
+    """The ENDS of axis `letter` on `p` that a blend OTHER than `dying`
+    still needs -- read off each surviving blend at its OWN seam end
+    through `_band_split_of`, and kept only where the patch really
+    carries an edge there.
 
     The rule is per (patch, axis, end), which is what makes clearing a
     whole band axis safe on a patch that carries several: a patch's
     sides are U0 / U1 / V0 / V1, and two SEAMS can land on the SAME axis
-    at opposite ends -- the tube's TubeA.USplits [0.1, 0.9] is exactly
-    that, and so is a four-patch corner. So the values are READ OFF the
-    surviving blends, never assumed to be the 0.1 / 0.9 defaults: a user
-    width on the surviving seam's end is what comes back.
+    at opposite ends -- the tube's TubeA, carrying 0.1 on its U axis and
+    0.9 on the same one, is exactly that, and so is a four-patch corner.
+    So the ends are read OFF the surviving blends rather than assumed:
+    a user width on the surviving seam's end is what is kept, because the
+    value is left untouched.
 
     A blend that cannot resolve its seam contributes nothing -- it has no
-    band to keep, and inventing one would pin a split that belongs to
+    band to keep, and inventing one would pin an edge that belongs to
     nobody.
     """
-    cur = list(getattr(p, prop) or [])
-    keep = []
+    keep = set()
     for o in doc.Objects:
         if (o is dying
                 or getattr(o, "object_type", "") not in BLEND_TYPES
@@ -184,11 +197,14 @@ def _survivor_needs(doc, dying, p, prop):
         if side is None:
             continue
         prop_o, ss_o = _band_split_of(side)
-        if prop_o != prop:
+        # `_band_split_of` answers with the PROPERTY that names the end
+        # (`USplit1`), so the axis is its first letter and the value to
+        # read is that very property -- no search, no classification.
+        if prop_o[0] != letter:
             continue
-        need = split_at_end(cur, ss_o)
-        if need is not None and need not in keep:
-            keep.append(need)
+        if band_edge(getattr(p, prop_o,
+                             NO_BAND_2 if ss_o else NO_BAND_1)) is not None:
+            keep.add(ss_o)
     return keep
 
 
@@ -208,40 +224,44 @@ def _drop_band_split(doc, dying, p, etype):
 
     #70 kept every split; #71 removed only the ONE this seam owned, by
     value. The human reversed that once more, and the reason is that in
-    the wizard the Band A / Band B editors ARE the patch's USplits /
-    VSplits property -- there is no other place a width can live, so
-    unsetting the blend has to unset them too:
+    the wizard the Band A / Band B editors ARE the patch's band edges --
+    there is no other place a width can live, so unsetting the blend has
+    to unset them too:
 
         "if i unset the blend in the wizard, then also remove the
          corresponding u or v splits value!"
 
-    So the WHOLE band axis goes, the user's own split included, and the
-    axis name comes from `_band_split_of(etype)` -- the same two lines
-    run_blend.ensure_band_split writes through.
+    So the WHOLE band axis goes, the user's own width included: both ends
+    of the axis are put back to their sentinels (Split1 = 0, Split2 = 1),
+    which is #82's "this axis carries no split at all". The axis is the
+    one `_band_split_of(etype)` names for the side this blend took --
+    through `band_edge_prop`, the same expression run_blend.ensure_band_split
+    writes through.
 
     Two things are kept, and only these two:
 
-      * a split a SURVIVING blend still needs (`_survivor_needs`) --
+      * the END a SURVIVING blend still needs (`_survivor_needs`) --
         unblending one of two seams on one axis must not strip the other
-        one's band;
+        one's band, and its stored width is left exactly as it was;
       * the whole axis, untouched, when a CornerBlend still feeds off
         this blend (#28).
 
     The width is the price: re-blending a seam whose axis was cleared
     rebuilds at the default (0.1 / 0.9).
     """
-    prop = _band_split_of(etype)[0]
-    cur = list(getattr(p, prop) or [])
-    if not cur:
-        return False            # the axis carried no split: nothing to do
+    letter = _band_split_of(etype)[0][0]      # e.g. "VSplit1" -> "V"
+    before = split_pair(p, letter)
+    if not axis_splits(*before):
+        return False            # the axis carried no edge: nothing to do
     if _corner_blend_feeds(doc, dying):
         return False
-    # what is left is ONLY what a surviving blend still reads -- read in
-    # `cur`'s own order, so the stored list stays sorted.
-    left = [v for v in cur if v in _survivor_needs(doc, dying, p, prop)]
-    if left == cur:
-        return False            # every split on the axis is still needed
-    setattr(p, prop, left)
+    keep = _survivor_needs(doc, dying, p, letter)
+    after = (before[0] if 0 in keep else NO_BAND_1,
+             before[1] if 1 in keep else NO_BAND_2)
+    if after == before:
+        return False            # every end on the axis is still needed
+    setattr(p, band_edge_prop(letter, 0), after[0])
+    setattr(p, band_edge_prop(letter, 1), after[1])
     return True
 
 
@@ -344,35 +364,35 @@ def run_blend(fp):
 
     # Step 3: set split direction and side
     # Split PERPENDICULAR to the shared edge
-    sd_a = "V" if ea[0] == "U" else "U"  # VSplits if edge along U, USplits if edge along V
+    sd_a = "V" if ea[0] == "U" else "U"  # V axis if seam along U, U axis if seam along V
     sd_b = "V" if eb[0] == "U" else "U"
-    ss_a = 0 if ea[1] == "0" else 1  # split near 0 or near 1 along the perpendicular direction
+    ss_a = 0 if ea[1] == "0" else 1  # which end of the band axis this seam sits at
     ss_b = 0 if eb[1] == "0" else 1
 
-    # Step 4: each patch carries the split that isolates its band at the
-    # shared edge (perpendicular to the seam, on the seam's side). A
-    # corner patch meets two strips, so both USplits and VSplits get set.
+    # Step 4: each patch carries the band edge that isolates its band at
+    # the shared edge (perpendicular to the seam, on the seam's side). A
+    # corner patch meets two strips, so both of its axes get an edge.
     #
     # #64: the blend READS that boundary, it does not assert it. The
-    # patch owns its splits; the blend consumes them. If the patch
-    # already carries a split at THIS seam's end of THIS axis, that split
-    # IS the band's far edge — use it and add nothing. Only when the end
-    # carries no split at all does the blend write the default width
+    # patch owns its band edges; the blend consumes them. If the patch
+    # already carries an edge at THIS seam's end of THIS axis, that edge
+    # IS the band's far edge — use it and write nothing. Only when the
+    # end carries none at all does the blend write the default width
     # (0.1 / 0.9) as before.
     #
-    # "At this end" is SilkMachinery.split_at_end's classification — the
-    # same rule corner_cells uses to decide which interval is a corner
-    # cell, so the band and its corner exclusion can never disagree
-    # about which split is which end's. It is per (patch, axis, side),
-    # never a single global value: a four-patch corner carries one split
-    # per seam side on each axis, and each strip reads its own.
+    # #82 made this one line: the property NAME says which end it is, so
+    # there is no list to search and no value to classify against the
+    # middle of the axis — the very guess that made `[0.2, 0.4]` report
+    # no band at the 1 end (#81) and sent the blend off to write a third
+    # split. It is still per (patch, axis, end), never a single global
+    # value: a four-patch corner carries one edge per seam side on each
+    # axis, and each strip writes only its own.
     def ensure_band_split(p, sd, ss):
-        prop = "VSplits" if sd == "V" else "USplits"
-        cur = list(getattr(p, prop) or [])
-        if split_at_end(cur, ss) is not None:
-            return          # the patch's own split defines this band
-        val = 0.9 if ss else 0.1
-        setattr(p, prop, sorted(cur + [val]))
+        prop = band_edge_prop(sd, ss)
+        sentinel = NO_BAND_1 if ss == 0 else NO_BAND_2
+        if band_edge(getattr(p, prop, sentinel)) is not None:
+            return          # the patch's own edge defines this band
+        setattr(p, prop, 0.9 if ss else 0.1)
         p.recompute()
 
     ensure_band_split(pa, sd_a, ss_a)
@@ -406,9 +426,9 @@ def run_blend(fp):
         if not p.Proxy._subgrids:
             FreeCAD.Console.PrintError(
                 "Silk: blend band on %s: the patch has no subgrid cells at "
-                "all (USplits=%s, VSplits=%s) — the seam %s band needs at "
-                "least the split that isolates it.\n"
-                % (p.Name, list(p.USplits or []), list(p.VSplits or []), ea))
+                "all (USplit1=%g, USplit2=%g, VSplit1=%g, VSplit2=%g) — the "
+                "seam %s band needs at least the edge that isolates it.\n"
+                % (p.Name, *split_pair(p, "U"), *split_pair(p, "V"), ea))
             return None
         return list(p.Proxy._subgrids[idxs[0]])
 
@@ -566,10 +586,11 @@ def _on_delete(fp):
          wizard, because the Band A / Band B editors ARE that property,
          so there is nowhere else a width could live. The axis is the one
          `_band_split_of` names for the side this blend took, and it goes
-         WHOLE, the user's own split included. Two things stay: a split a
+         WHOLE, the user's own width included. Two things stay: the end a
          SURVIVING blend still needs (a patch can carry two seams on one
-         axis -- the tube's TubeA.USplits [0.1, 0.9] -- and unblending
-         one must not strip the other's band), and the whole axis when a
+         axis -- the tube's TubeA, 0.1 on its U axis and 0.9 on that same
+         one -- and unblending one must not strip the other's band), and
+         the whole axis when a
          CornerBlend still feeds off this blend (#28). The width is the
          price: re-blending a cleared seam rebuilds at the default.
       2. the band CELLS -- the hidden-cell set is re-derived by each

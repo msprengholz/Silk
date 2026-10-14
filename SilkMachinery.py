@@ -2,8 +2,9 @@
 SilkMachinery — shared machinery core for Silk surface objects.
 
 One reusable implementation of the machinery every patch fill shares:
-subdivision (USplits/VSplits -> subgrid pole arrays + trimmed surfaces),
-blend-band selection, hidden-cell bookkeeping, and compound display.
+subdivision (the two named band edges per axis -> subgrid pole arrays +
+trimmed surfaces), blend-band selection, hidden-cell bookkeeping, and
+compound display.
 
 Patch44 (the quad fill) consumes this core for all four; BlendStrip and
 the unified Blend resolve their seam (shared_seam) and seam-adjacent
@@ -189,62 +190,149 @@ def loop_order(edges, tol=None):
     return [edges[i] for i in order], None
 
 
-# ---- subdivision -------------------------------------------------------
+# ---- subdivision: TWO NAMED BAND EDGES per axis (#82) -------------------
+#
+# An axis no longer carries a LIST of split parameters. It carries two
+# scalars, named for the END each one belongs to:
+#
+#     <Axis>Split1   this axis's band edge at its parametric-0 end
+#     <Axis>Split2   this axis's band edge at its parametric-1 end
+#
+# A band edge is the FAR edge of the band at that end, so 0.0 on Split1
+# and 1.0 on Split2 are the sentinels for "no band at this end" -- and
+# they ARE the axis endpoints, which is the whole point of naming them:
+# `Split1 = 0, Split2 = 1` reads as "no split on this axis" rather than
+# as a magic number every reader has to interpret.
+#
+# WHY NAMED (#81, and #76's cap along with it). With a list, every reader
+# had to CLASSIFY each value into an end, and the classification was by
+# VALUE: below 0.5 is the parametric-0 end's, above it the
+# parametric-1 end's, exactly 0.5 NEITHER's. That guess is the #81 bug —
+# on [0.2, 0.4] it reports no band at the 1 end, even though 0.4 is
+# plainly the far edge of the [0.4, 1.0] band, so the blend writes a
+# third split which #76's two-entry cap then refuses and the patch goes
+# Invalid. Here there is nothing left to classify: `Split1` IS the 0
+# end's edge by name. #76's cap becomes a TYPE instead of a check --
+# there are two properties, so a third value cannot be written at all --
+# and #75's "a stored width the panel cannot read back" has no failure
+# mode left either, because the property's NAME is what reads it.
 
-def normalize_splits(values):
-    return sorted(set(v for v in values if 0.0 < v < 1.0))
+# The sentinels, per slot: "this end carries no band edge". Exposed so no
+# caller has to remember which endpoint belongs to which property.
+NO_BAND_1 = 0.0
+NO_BAND_2 = 1.0
 
 
-def build_intervals(values):
-    splits = normalize_splits(list(values))
+def band_edge(value):
+    """`value` as a band edge, or None when this end carries none.
+
+    A band edge is a parametric position STRICTLY INSIDE (0, 1); the
+    slot's own endpoint (0.0 on Split1, 1.0 on Split2) is the sentinel,
+    and so is anything else outside the open interval -- a value that is
+    not a position on this axis cannot mark an edge on it."""
+    v = float(value)
+    return v if 0.0 < v < 1.0 else None
+
+
+def axis_splits(s1, s2):
+    """The split values one axis carries, ascending — the DERIVED view of
+    its two named edges, for the interval arithmetic and for messages.
+
+    Deliberately a view and not storage: nothing writes this back as a
+    list, which is what stops a list from creeping in and with it the
+    classify-by-value step #81 was about. An axis whose two ends hold the
+    SAME edge carries one split (the ends are indistinguishable then) --
+    legal to store, degenerate for a band, and the band refusal says so."""
+    edges = [v for v in (band_edge(s1), band_edge(s2)) if v is not None]
+    return sorted(set(edges))
+
+
+def build_intervals(s1, s2):
+    """The intervals one axis is cut into by its two named edges."""
+    splits = axis_splits(s1, s2)
     if not splits:
         return [(0.0, 1.0)]
     return list(zip([0.0] + splits, splits + [1.0]))
 
 
-def normalize_splits_report(values):
-    """(kept, out_of_range, repeated) for one axis.
+def split_pair(p, letter):
+    """`(Split1, Split2)` of axis `letter` ("U" / "V") of object `p`.
 
-    The stored list is normalized ON SET by the Patch (#61), so this is
-    the same rule the Patch applies at write time — the values kept
-    (sorted, deduped, strictly inside (0, 1)) plus, for the console
-    message, what was rejected and WHY: a value outside (0, 1), and a
-    value the input repeated. Both lists are empty for an already-
-    normalized input."""
-    raw = list(values)
-    kept = normalize_splits(raw)
-    kept_set = set(kept)
-    out_of_range = []
-    repeated = []
-    for v in raw:
-        if not 0.0 < v < 1.0:
-            if v not in out_of_range:
-                out_of_range.append(v)
-        elif v in kept_set and raw.count(v) > 1 and v not in repeated:
-            repeated.append(v)
-    return kept, out_of_range, repeated
+    Read by NAME, so a reader cannot attach an edge to the wrong end. An
+    object that has neither property -- one restored from a pre-#82 file,
+    where the USplits / VSplits lists are gone and no migration is
+    shipped (#82: an old document comes back with no splits, which is the
+    correct neutral state), or a test stub -- reads as "no band at
+    either end"."""
+    return (float(getattr(p, letter + "Split1", NO_BAND_1)),
+            float(getattr(p, letter + "Split2", NO_BAND_2)))
 
 
-def build_subgrids(base_surface, u_splits, v_splits):
-    """Subdivide base_surface by the U/V splits.
+def normalize_edge_pair(s1, s2):
+    """`(s1, s2, why)` — the canonical form of two named edges.
+
+    `why` is None when the pair was already canonical, else a clause
+    naming what was corrected. Two rules, both lossless:
+
+      * a value outside [0, 1] becomes its OWN slot's sentinel, so a
+        mistyped edge reads as "no band at this end" instead of
+        silently becoming a position on the other end;
+      * two edges that are both real and out of order are SWAPPED, so
+        Split1 <= Split2 as the interval arithmetic reads them.
+
+    The swap is only applied when BOTH ends carry a real edge: with one
+    end empty, Split1 = 0.9 is a legitimate wide band at the 0 end, and
+    swapping it would hand that band to the 1 end — a silent reassignment
+    of the user's intent rather than a correction of its spelling.
+    Geometry is identical either way (build_intervals sorts), so this is
+    about which end the stored names claim."""
+    v1, v2 = float(s1), float(s2)
+    why = None
+    if not 0.0 <= v1 <= 1.0:
+        why = "%g is outside [0, 1], so this end carries no band edge" % v1
+        v1 = NO_BAND_1
+    elif not 0.0 <= v2 <= 1.0:
+        why = "%g is outside [0, 1], so this end carries no band edge" % v2
+        v2 = NO_BAND_2
+    elif band_edge(v1) is not None and band_edge(v2) is not None \
+            and v1 > v2:
+        v1, v2 = v2, v1
+        why = ("the 0 end's edge (%g) was above the 1 end's (%g); the two "
+               "were swapped, which is the same geometry under the two "
+               "names" % (v2, v1))
+    return v1, v2, why
+
+
+def band_at_end(s1, s2, ss):
+    """The band edge at ONE END of an axis, or None when that end carries
+    none. ss 0 -> Split1, ss 1 -> Split2.
+
+    This is the whole of #64's "which split is this end's band" and of
+    #81's positional reading, in three lines: the PROPERTY NAME says. It
+    replaces `split_at_end`, whose value-threshold guess was the bug."""
+    return band_edge(s1) if ss == 0 else band_edge(s2)
+
+
+def build_subgrids(base_surface, u_pair, v_pair):
+    """Subdivide base_surface by the two named edges on each axis.
+
+    `u_pair` / `v_pair` are `(Split1, Split2)` — see `split_pair`.
 
     Returns (subgrids, subsurfaces, sub_legs):
       - subgrids:    flat 16-pole arrays, one per cell;
                      poles[U][V] == flat[U*4 + V] (FreeCAD convention).
       - subsurfaces: the trimmed sub-shapes (only truthy shapes).
       - sub_legs:    detailed grid lines for the subdivided view.
-    With no splits returns ([], [], []).
+    With no edges on either axis returns ([], [], []).
     """
     subgrids = []
     subsurfaces = []
     sub_legs = []
-    u_splits = list(u_splits) if u_splits else []
-    v_splits = list(v_splits) if v_splits else []
-    if not (u_splits or v_splits):
+    if not (axis_splits(*u_pair) or axis_splits(*v_pair)):
         return subgrids, subsurfaces, sub_legs
     shapes = []
-    for u0, u1 in build_intervals(u_splits):
-        for v0, v1 in build_intervals(v_splits):
+    for u0, u1 in build_intervals(*u_pair):
+        for v0, v1 in build_intervals(*v_pair):
             seg = base_surface.copy()
             seg.segment(u0, u1, v0, v1)
             seg_poles = seg.getPoles()
@@ -326,145 +414,46 @@ def patch_side(pa, pb, tol=0.01):
     return ea, (0 if ea[1] == "0" else 1)
 
 
-def split_end(value):
-    """Which END of its axis ONE split belongs to: 0 (parametric-0), 1
-    (parametric-1), or None when it marks NEITHER -- which is what the
-    exact midpoint 0.5 does. #64, #76.
-
-    This is the classification itself, factored out of `split_at_end` so
-    that every question about a split's end asks THIS function: which
-    split is an end's band boundary (#64), which intervals are corner
-    cells (#61), which panel width can be stored (#75), and how many
-    splits an axis may carry (#76). Two notions of "which end" is how a
-    band comes to measure itself against a cell that was excluded for a
-    different reason.
-    """
-    v = float(value)
-    if v < 0.5:
-        return 0
-    if v > 0.5:
-        return 1
-    return None
+# #76's cap, restated as a TYPE rather than a check (#82).
+#
+# It used to live here as `split_limit_problem`, refusing a three-entry
+# list, because a list could hold three values. There is nothing left to
+# refuse: an axis has two properties, one per end, and a third value
+# cannot be written at all. The reasons the rule existed are now
+# structural rather than enforced -- past two ends there are only two
+# ends -- and the failure it used to prevent (an extra split absorbed in
+# silence, so the corner blend picks a different subgrid cell, or the
+# band spans cells the blend refuses while the patch reports itself
+# Up-to-date and Valid) is no longer expressible. The one degenerate
+# layout that remains, both ends holding the SAME edge, is not a third
+# split: it collapses to one split whose two end cells are both corner
+# cells, and the band refusal names it (see band_diagnosis).
 
 
-def split_at_end(splits, ss):
-    """The split that carves the band at ONE END of an axis, or None.
-
-    A split is not a width marker at a magic number, it is the FAR EDGE
-    of a band at one end of its axis: the lowest split carves [0, s] at
-    the parametric-0 end, the highest carves [s, 1] at the parametric-1
-    end, and a split exactly at 0.5 marks NEITHER end (a plain
-    mid-surface subdivision with no band attached to it). Returns that
-    split's value for the requested end, or None when the end carries
-    none. #64.
-
-    This is the SINGLE end-classification rule, shared on purpose: a
-    band and the corner-cell exclusion that trims it must never disagree
-    about which of a patch's splits is which end's, or the band would
-    measure itself against a cell that was excluded for a different
-    reason (corner_cells drops exactly the interval its end's split
-    carved; SilkBlend reads exactly that split as the band's width).
-
-    With TWO splits on one axis ([0.1, 0.9]) each end gets its own —
-    end 0 takes the lowest, end 1 the highest. That is what lets a
-    four-patch corner carry one split per seam side on the same axis.
-    The membership test is `split_end` (#76), the same one the
-    per-axis limit counts with; only the ORDER within an end is local
-    here, and it is the whole point of this function. An end's band is
-    the interval that reaches from that end: [0, s] at the 0 end, so s
-    is the LOWEST split there, and [s, 1] at the 1 end, so s is the
-    HIGHEST. Any further split at the same end is the middle one, and it
-    is to exactly that middle one that the geometry goes quietly wrong
-    (see split_limit_problem).
-    """
-    s = normalize_splits(list(splits or []))
-    mine = [v for v in s if split_end(v) == ss]
-    if not mine:
-        return None
-    return mine[0] if ss == 0 else mine[-1]
-
-
-def split_limit_problem(values):
-    """Why `values` may not be STORED as one axis' splits, or None. #76.
-
-    THE RULE: at most TWO splits on one axis.
-
-    It was first written FINER -- one below 0.5 and one above -- and the
-    human hit it within minutes, because it refused `[0.2, 0.4]`, two
-    ordinary subdivision values they were simply trying to store. There
-    was no principle behind that refusal. A split list is ordered surface
-    subdivisions, `0 < u1 < u2 < 1`, and `normalize_splits` already
-    enforces range, order and duplicates. `[0.2, 0.4]` is legal, and a
-    regression that rejects ordinary input is worse than the silent case
-    it was meant to prevent.
-
-    Why there is a limit at all: past two, results are invisible rather
-    than wrong. An extra split on the band axis is absorbed without a word
-    and `SilkCorner._corner_cell` quietly starts picking a different
-    subgrid cell; on the seam-parallel axis it makes the band span cells
-    the blend refuses, and that refusal leaves the Blend's Poles
-    byte-identical while the Patch reports itself Up-to-date and Valid --
-    no tree marker, no stale flag. Hence a REFUSAL (SilkPatch puts the
-    axis back and flags the object) rather than a truncation: with three
-    values there is no principled one to drop, and silently dropping one
-    changes the geometry while saying nothing.
-
-    KNOWN GAP -- a full axis cannot gain a band split. `ensure_band_split`
-    writes only where `split_at_end` returns None, and `split_at_end`
-    classifies by VALUE (below 0.5 -> end 0, above -> end 1, exactly 0.5
-    -> neither). So on `[0.2, 0.4]` it reports NO band at the 1 end, even
-    though 0.4 is plainly the far edge of the [0.4, 1.0] band, and the
-    blend then tries to write a third split -- which this rule refuses, and
-    the patch goes Invalid. Tracked as #81: the fix is to make
-    `split_at_end` POSITIONAL for two splits (lower is the 0 end's, upper
-    is the 1 end's, which is what the human's own reading is), but that
-    changes band geometry for every layout containing 0.5 and needs its
-    own review rather than a drive-by fix here.
-    """
-    s = normalize_splits(list(values))
-    if len(s) <= 2:
-        return None
-    return ("%s -- an axis carries at most two splits (0 < u1 < u2 < 1). "
-            "Past two the result is invisible rather than wrong: the corner "
-            "blend picks a different subgrid cell, or the band spans cells "
-            "the blend refuses while this patch still reports itself "
-            "Up-to-date and Valid. With three values there is no principled "
-            "one to drop, so the list was not stored and the axis keeps "
-            "what it had."
-            % ("[%s]" % ", ".join("%g" % v for v in s)))
-def corner_cells(splits, n_intervals):
+def corner_cells(s1, s2, n_intervals):
     """Interval indices along one axis that are CORNER cells — reserved
     for the four-cell corner blend op (#28) and excluded from a band.
 
-    #61: this is the generalized form of the old hard-coded test
-    ("is there a 0.1? drop the first cell / a 0.9? drop the last").
-    A split is not a width marker at a magic number, it is the far edge
-    of a band at one END of its axis: s < 0.5 isolates the band [0, s] at
-    the parametric-0 end, s > 0.5 the band [s, 1] at the parametric-1
-    end (SilkBlend.ensure_band_split writes 0.1 / 0.9 by default, but
-    the width is the user's). So:
-      - the split NEAREST the 0 end (the lowest) carved out the interval
-        [0, s]: that interval is the corner cell -> drop it;
-      - the split NEAREST the 1 end (the highest) carved out [s, 1]:
-        drop it;
-      - a split exactly at 0.5 marks neither end (a plain mid-surface
-        subdivision, no band attached to either end).
+    The exclusion follows the two NAMED edges, one per end:
 
-    A single split marks the one end it is nearest to: [0.1] drops the
-    first cell only and [0.9] the last cell only — which is exactly what
-    the old literal rule did for the two values it knew, and what keeps
-    a 2-interval layout ([0, s], [s, 1]) from collapsing to no band at
-    all. For a split list drawn from {0.1, 0.5, 0.9} — every value the
-    fixtures use — this is provably identical to the old rule; only a
-    user width like 0.2 / 0.85 used to fall through it silently (#61).
-    """
-    s = normalize_splits(list(splits))
-    if not s:
-        return set()
+      - `Split1` carries the far edge of the band that reaches from the
+        parametric-0 end, so it carved out interval [0, s] and that
+        interval is the corner cell -> drop the FIRST one;
+      - `Split2` carries the far edge of the band that reaches from the
+        parametric-1 end, so it carved out [s, 1] -> drop the LAST one;
+      - an end whose property holds its sentinel (0.0 on Split1, 1.0 on
+        Split2) has no band attached to it, so its end cell is not a
+        corner cell.
+
+    This is what #61 generalized ("is there a 0.1? drop the first cell /
+    a 0.9? drop the last"), with the values read from the ends they
+    belong to rather than compared against the middle of the axis, so a
+    user width like 0.2 or 0.85 needs no special case and #81's [0.2,
+    0.4] is just two ends with two edges."""
     out = set()
-    if split_at_end(s, 0) is not None:
+    if band_edge(s1) is not None:
         out.add(0)
-    if split_at_end(s, 1) is not None:
+    if band_edge(s2) is not None:
         out.add(n_intervals - 1)
     return out
 
@@ -473,66 +462,89 @@ def band_cells(p, ea, ss):
     """Subgrid cell indices covered by a strip's band on patch p.
 
     The band runs along the seam in the band interval (0 or last, per
-    ss). A cell at a seam end with a seam-axis split is a corner cell —
-    excluded from the band (reserved for the four-cell corner blend op,
-    #28). Which cells those are follows the axis splits, not a magic
-    0.1/0.9 (see corner_cells, #61).
+    ss). A cell at a seam end whose axis carries that end's band edge is a
+    corner cell — excluded from the band (reserved for the four-cell
+    corner blend op, #28).
+
+    With two named edges per axis this is exactly ONE cell whenever the
+    two ends hold DIFFERENT edges, and that is now structural rather
+    than enforced: the seam-parallel axis is cut into (edges + 1)
+    intervals and drops exactly one interval per edge, so one cell is
+    all that is left. (Before #82 that was the multi-cell refusal #61
+    wrote a message for; the arithmetic no longer produces the case.)
     """
-    us, vs = list(p.USplits or []), list(p.VSplits or [])
-    nu = len(build_intervals(us))
-    nv = len(build_intervals(vs))
+    us = split_pair(p, "U")
+    vs = split_pair(p, "V")
+    nu = len(build_intervals(*us))
+    nv = len(build_intervals(*vs))
     if ea[0] == "U":  # seam along U: band fixes V interval, spans U cells
         b = (nv - 1) if ss else 0
-        keep_u = set(range(nu)) - corner_cells(us, nu)
+        keep_u = set(range(nu)) - corner_cells(us[0], us[1], nu)
         return [a * nv + b for a in sorted(keep_u)]
     # seam along V: band fixes U interval, spans V cells
     a = (nu - 1) if ss else 0
-    keep_v = set(range(nv)) - corner_cells(vs, nv)
+    keep_v = set(range(nv)) - corner_cells(vs[0], vs[1], nv)
     return [a * nv + b for b in sorted(keep_v)]
 
 
-def _splits_str(values):
-    """`[0.1, 0.9]` — the split list the way a user reads it in the
-    property editor (never Python float noise like [0.100000001490116])."""
-    return "[" + ", ".join("%g" % float(v) for v in values) + "]"
+def _edges_str(p, letter):
+    """`USplit1 = 0.1, USplit2 = 0.9` — one axis as the data tab shows it."""
+    s1, s2 = split_pair(p, letter)
+    return "%s = %g, %s = %g" % (letter + "Split1", s1,
+                                 letter + "Split2", s2)
 
 
 def band_diagnosis(p, ea, ss):
     """Actionable, fact-by-fact diagnosis of patch p's band at seam
-    ea/ss — the axis roles, the split values in play, how many intervals
+    ea/ss — the axis roles, both named edges on each, how many intervals
     they make, which cells the corner exclusion drops, and what single
-    split value WOULD leave a one-cell band. Pure data -> string, no
-    console output; SilkBlend owns the message that carries it (#61).
-    """
+    edit would leave a one-cell band. Pure data -> string, no console
+    output; SilkBlend owns the message that carries it (#61)."""
     name = getattr(p, "Name", "?")
-    us, vs = list(p.USplits or []), list(p.VSplits or [])
-    nu, nv = len(build_intervals(us)), len(build_intervals(vs))
+    us = split_pair(p, "U")
+    vs = split_pair(p, "V")
+    nu, nv = len(build_intervals(*us)), len(build_intervals(*vs))
     if ea[0] == "U":  # seam along U: band fixes a V interval, spans U
-        band_prop, along_prop, along, n_along = "VSplits", "USplits", us, nu
-        band_ivs = build_intervals(vs)
+        band_letter, along_letter, n_along = "V", "U", nu
+        along = us
+        band_ivs = build_intervals(*vs)
     else:             # seam along V: band fixes a U interval, spans V
-        band_prop, along_prop, n_along = "USplits", "VSplits", nv
-        along, band_ivs = vs, build_intervals(us)
+        band_letter, along_letter, n_along = "U", "V", nv
+        along = vs
+        band_ivs = build_intervals(*us)
     # the band is the first (side 0) or the last (side 1) interval
     band_iv = band_ivs[0] if ss == 0 else band_ivs[-1]
     width = band_iv[1] - band_iv[0]
-    excluded = sorted(corner_cells(along, n_along))
-    along_set = normalize_splits(along)
-    pick = (along_set[0] if ss == 0 else along_set[-1]) if along_set else None
+    excluded = sorted(corner_cells(along[0], along[1], n_along))
+    left = n_along - len(excluded)
+    if band_at_end(*split_pair(p, band_letter), ss) is None:
+        fix = ("the band axis has no edge at this end, so its band cell is "
+               "the whole surface -- set %s.%sSplit%d to %g to give this "
+               "end a band of its own."
+               % (name, band_letter, ss + 1, 0.9 if ss else 0.1))
+    elif band_edge(along[0]) is not None \
+            and band_edge(along[0]) == band_edge(along[1]):
+        fix = ("both ends of the seam-parallel axis hold the same edge %g, "
+               "so the axis carries ONE split and both of its end cells are "
+               "corner cells -- set %s.%sSplit2 = %g (its default, no band "
+               "at that end) to leave the other end's cell in the band."
+               % (band_edge(along[0]), name, along_letter, NO_BAND_2))
+    else:
+        fix = ("a one-cell band needs the two ends of the seam-parallel "
+               "axis to carry DIFFERENT edges (%s.%sSplit1 = %g and "
+               "%s.%sSplit2 = %g is such a pair); with them the band is "
+               "exactly the cell of width %g."
+               % (name, along_letter, band_edge(along[0]) or NO_BAND_1,
+                  along_letter, along_letter,
+                  band_edge(along[1]) or NO_BAND_2, width))
     return (
-        "seam %s (band at parametric %d): band axis %s = %s -> %d "
+        "seam %s (band at parametric %d): band axis %s -> %d "
         "interval(s), width %g.\n"
-        "      seam-parallel axis %s = %s -> %d interval(s); corner "
+        "      seam-parallel axis %s -> %d interval(s); corner "
         "cell(s) %s excluded, %d left in the band.\n"
-        "      A one-cell band needs at most one split below 0.5 and one "
-        "above 0.5 on the seam-parallel axis: %s.%s = %s gives a single "
-        "band cell of width %g."
-        % (ea, ss, band_prop, _splits_str(getattr(p, band_prop) or []),
-           len(band_ivs), width,
-           along_prop, _splits_str(along), n_along, excluded,
-           n_along - len(excluded),
-           name, along_prop,
-           "[]" if pick is None else "[%g]" % pick, width))
+        "      %s"
+        % (ea, ss, _edges_str(p, band_letter), len(band_ivs), width,
+           _edges_str(p, along_letter), n_along, excluded, left, fix))
 
 
 # ---- hidden-cell bookkeeping ------------------------------------------

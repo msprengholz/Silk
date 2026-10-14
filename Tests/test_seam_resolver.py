@@ -15,7 +15,7 @@ Covered here:
   - create_blend_by_edge: full check_blend oracle (incl. B4) on the
     ground-truth chain; idempotency (second call is a no-op naming the
     first blend, no second object); refuse paths create no blend and
-    write no USplits/VSplits.
+    write no band edges.
   - seam_inventory: blendable before / blended (named) after / blocked
     on the non-manifold edge; one entry per shared edge, so a pair
     sharing two edges gets one status per seam.
@@ -142,9 +142,29 @@ def _blend_objects(doc):
             if getattr(o, "object_type", None) in ("Blend", "BlendStrip")]
 
 
+# #82: an axis carries two NAMED band edges, so "the splits of a patch"
+# is a pair of pairs -- (USplit1, USplit2) and (VSplit1, VSplit2) -- and
+# the neutral pair is the two sentinels, one per end.
+NO_BAND = (0.0, 1.0)
+
+
 def _splits(p):
-    return (sorted(float(v) for v in (list(getattr(p, "USplits", None) or []))),
-            sorted(float(v) for v in (list(getattr(p, "VSplits", None) or []))))
+    """((USplit1, USplit2), (VSplit1, VSplit2)) -- the four band edges."""
+    def pair(letter):
+        return (round(float(getattr(p, letter + "Split1")), 12),
+                round(float(getattr(p, letter + "Split2")), 12))
+    return pair("U"), pair("V")
+
+
+def _fmt_splits(s):
+    return "U=%s V=%s" % ("/".join("%g" % v for v in s[0]),
+                          "/".join("%g" % v for v in s[1]))
+
+
+def _carries_band(p):
+    """True when any of the four band edges is a real position."""
+    u, v = _splits(p)
+    return any(0.0 < x < 1.0 for pair in (u, v) for x in pair)
 
 
 # ---- the two-seams (closed-ring) fixture ----------------------------------
@@ -453,7 +473,7 @@ def test_create_blend_by_edge_idempotent(doc):
 def test_create_blend_by_edge_refusals_leave_no_side_effects(doc):
     """Every refuse path (0 / 1 / 3+ referencing patches) returns None
     with a console error and leaves the document untouched: no blend
-    object, no USplits/VSplits written on any patch."""
+    object, no band edges written on any patch."""
     import SilkWorkflowOps as ops
 
     a = _square_patch(doc, "A")
@@ -476,11 +496,10 @@ def test_create_blend_by_edge_refusals_leave_no_side_effects(doc):
         errors.append("refusals created %d blend object(s)" % n_blends)
     for pname in ("A", "B", "C"):
         p = doc.getObject(pname)
-        u, v = _splits(p)
-        if u or v:
-            errors.append("refusals wrote splits on %s (U=%s V=%s)"
-                          % (pname, u, v))
-    checks.append("no blend objects, no splits on A/B/C")
+        if _carries_band(p):
+            errors.append("refusals wrote band edges on %s (%s)"
+                          % (pname, _fmt_splits(_splits(p))))
+    checks.append("no blend objects, no band edges on A/B/C")
     for want in ("not used by any patch", "adjacent patch",
                  "not a blendable seam"):
         if not any(want in e for e in cap.errors):
@@ -574,8 +593,8 @@ def test_two_shared_edges_pin_picks_the_pinned_seam(doc):
     """#44 risk verification: two patches sharing TWO Edge objects.
     run_blend derives the seam from the pinned Edge's endpoint poles
     (_seam_from_edge), so by-edge blending the SECOND seam:
-      - writes only that seam's band split (A.USplits == [0.9], NOT the
-        [0.1] that re-detecting the first seam or the phantom
+      - writes only that seam's band edge (A.USplit2 == 0.9, NOT the
+        USplit1 = 0.1 that re-detecting the first seam or the phantom
         coincident-corner seam would write),
       - lands its 24 poles on that seam's bands (1e-6 match against an
         independently derived, seam-pinned reference),
@@ -607,16 +626,19 @@ def test_two_shared_edges_pin_picks_the_pinned_seam(doc):
                       % len(b_right.Poles or []))
         return {"pass": False, "errors": errors, "checks": checks}
 
-    # Which side: the second seam is A's "V1" (band at USplits 0.9).
-    # Re-detecting the first seam ("V0") would write USplits [0.1]; the
-    # phantom coincident-corner front seam ("U0") would write VSplits.
+    # Which side: the second seam is A's "V1", so the band is A's U axis
+    # at its parametric-1 end -- USplit2 = 0.9. Re-detecting the first
+    # seam ("V0") would write USplit1 = 0.1; the phantom
+    # coincident-corner front seam ("U0") would write a V edge.
     u_a, v_a = _splits(pa)
     u_b, v_b = _splits(pb)
-    if u_a != [0.9] or v_a or u_b or v_b != [0.9]:
-        errors.append("second-seam splits A(U=%s,V=%s) B(U=%s,V=%s), "
-                      "want A U=[0.9], B V=[0.9]" % (u_a, v_a, u_b, v_b))
-    checks.append("band split written on the pinned seam's side: "
-                  "A(U=%s,V=%s) B(U=%s,V=%s)" % (u_a, v_a, u_b, v_b))
+    if u_a != (0.0, 0.9) or v_a != NO_BAND or u_b != NO_BAND \
+            or v_b != (0.0, 0.9):
+        errors.append("second-seam edges A(%s) B(%s), want A U2=0.9, "
+                      "B V2=0.9 and nothing else"
+                      % (_fmt_splits((u_a, v_a)), _fmt_splits((u_b, v_b))))
+    checks.append("band edge written on the pinned seam's side: A(%s) B(%s)"
+                  % (_fmt_splits((u_a, v_a)), _fmt_splits((u_b, v_b))))
 
     rows = _pinned_reference_rows(pa, pb, "V1", "U1", [(1, 2), (2, 3)])
     dev = _matches_pinned_reference(b_right, rows)
@@ -665,11 +687,12 @@ def test_two_shared_edges_pin_picks_the_pinned_seam(doc):
         errors.append("first-seam blend has %d poles, want 24"
                       % len(b_left.Poles or []))
     u_a, v_a = _splits(pa)
-    if u_a != [0.1, 0.9] or v_a:
-        errors.append("after both seams A(U=%s,V=%s), want U=[0.1,0.9]"
-                      % (u_a, v_a))
-    checks.append("both seams blended: A(U=%s,V=%s), distinct blends "
-                  "%s + %s" % (u_a, v_a, b_left.Name, b_right.Name))
+    if u_a != (0.1, 0.9) or v_a != NO_BAND:
+        errors.append("after both seams A(%s), want U1=0.1 U2=0.9"
+                      % (_fmt_splits((u_a, v_a)),))
+    checks.append("both seams blended: A(%s), distinct blends "
+                  "%s + %s" % (_fmt_splits((u_a, v_a)), b_left.Name,
+                               b_right.Name))
 
     rows = _pinned_reference_rows(pa, pb, "V0", "U0", [(3, 0), (0, 1)])
     dev = _matches_pinned_reference(b_left, rows)

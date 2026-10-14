@@ -17,7 +17,8 @@ import FreeCAD
 import Part
 import ArachNURBS as AN
 
-from SilkMachinery import build_intervals, build_subgrids, build_display
+from SilkMachinery import build_intervals, build_subgrids, build_display, \
+    split_pair, axis_splits, NO_BAND_1, NO_BAND_2
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -42,10 +43,25 @@ class Patch44:
                         "endpoint matching tolerance").tolerance = AN.default_tol
         obj.addProperty("App::PropertyBool", "reverse", "C1 - Inputs",
                         "reverse the grid parameter direction").reverse = False
-        obj.addProperty("App::PropertyFloatList", "USplits", "S1 - Subdivision",
-                        "U split parameters (0-1)").USplits = []
-        obj.addProperty("App::PropertyFloatList", "VSplits", "S1 - Subdivision",
-                        "V split parameters (0-1)").VSplits = []
+        # #82: the two named band edges per axis, exactly as the unified
+        # Patch carries them -- this class shares the whole machinery core
+        # (build_subgrids, band_cells, corner_cells), so it speaks the same
+        # language or it would not subdivide at all. A Patch44 restored
+        # from a pre-#82 file comes back with the four properties at their
+        # sentinels, i.e. with no bands: no migration is shipped.
+        for letter in ("U", "V"):
+            obj.addProperty(
+                "App::PropertyFloat", letter + "Split1", "S1 - Subdivision",
+                "band edge at the parametric-0 end of the %s axis; 0 = no "
+                "band at that end" % letter)
+            obj.addProperty(
+                "App::PropertyFloat", letter + "Split2", "S1 - Subdivision",
+                "band edge at the parametric-1 end of the %s axis; 1 = no "
+                "band at that end" % letter)
+        obj.USplit1 = NO_BAND_1
+        obj.USplit2 = NO_BAND_2
+        obj.VSplit1 = NO_BAND_1
+        obj.VSplit2 = NO_BAND_2
         obj.addProperty("App::PropertyBool", "ShowSurface", "S2 - Display",
                         "show the surface").ShowSurface = True
         obj.addProperty("App::PropertyBool", "ShowGrid", "S2 - Display",
@@ -72,11 +88,25 @@ class Patch44:
         self._base_surface = None
 
     def onDocumentRestored(self, obj):
+        # #82: an old file's Patch44 arrives with the pre-#82 USplits /
+        # VSplits lists and none of the four band edges. No migration is
+        # shipped, so they are created at their sentinels: the object comes
+        # back with no bands, which is the neutral state, and is editable.
+        for letter in ("U", "V"):
+            for n, sentinel in ((1, NO_BAND_1), (2, NO_BAND_2)):
+                name = "%sSplit%d" % (letter, n)
+                if not hasattr(obj, name):
+                    obj.addProperty(
+                        "App::PropertyFloat", name, "S1 - Subdivision",
+                        "band edge at the parametric-%d end of the %s axis; "
+                        "%g = no band at that end" % (n - 1, letter, sentinel))
+                    setattr(obj, name, sentinel)
         obj.recompute()
 
     def onChanged(self, fp, prop):
         # Guard: only recompute if object is fully initialized (has inputs)
-        if prop in ("USplits", "VSplits", "ShowSurface", "ShowGrid", "ShowSubgrids", "reverse"):
+        if prop in ("USplit1", "USplit2", "VSplit1", "VSplit2",
+                    "ShowSurface", "ShowGrid", "ShowSubgrids", "reverse"):
             if 'Restore' not in fp.State and hasattr(fp, "Poly0") and fp.Poly0:
                 fp.touch()
                 fp.recompute()
@@ -182,10 +212,14 @@ class Patch44:
         legs = AN.drawGrid(poles, 4)
         fp.Legs = legs
 
-        # Subdivision (shared core)
+        # Subdivision (shared core), from the two named band edges per axis
+        # (#82) rather than the pre-#82 split lists.
+        u_pair = split_pair(fp, "U")
+        v_pair = split_pair(fp, "V")
+        has_subgrids = bool(axis_splits(*u_pair) or axis_splits(*v_pair))
         self._subgrids, self._subsurfaces, sub_legs = build_subgrids(
-            surf, fp.USplits, fp.VSplits)
-        if fp.USplits or fp.VSplits:
+            surf, u_pair, v_pair)
+        if has_subgrids:
             fp.Legs = sub_legs
 
         # Build display Shape (shared core)
@@ -193,7 +227,7 @@ class Patch44:
         # AutoHideBlend: hide the subgrid cells covered by blends
         # (via _HiddenSubgridIdxs; legacy single _HideSubgridIdx also honoured)
         build_display(fp, surf.toShape(), self._subsurfaces, legs, sub_legs,
-                      bool(fp.USplits or fp.VSplits))
+                      has_subgrids)
 
 
 class Patch44ViewProvider:

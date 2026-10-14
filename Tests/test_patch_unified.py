@@ -10,7 +10,7 @@ U=0 column; pole parity vs the legacy Patch44/Patch33 at 1e-6 (the same
 ControlGrid44_4/_3 layouts, so the unified pipeline reproduces the chain
 later -- the legacy baselines are built by DIRECT restore-shim
 construction, #42: only the ops layer is retired); mutation of
-USplits/VSplits recomputes cleanly on BOTH fills and the oracle stays
+band edges recompute cleanly on BOTH fills and the oracle stays
 green (the 3-edge fill gets the full subgrid machinery the legacy
 Patch33 lacked); the unified Patch survives a save/reopen round trip
 (16 poles, subgrid machinery re-derives, oracle green after reload).
@@ -22,7 +22,7 @@ empty object without crashing.
 
 Display contract (#38 round 2): the six display/subdivision properties
 exist and are editable, and the ShowSurface/ShowGrid/ShowSubgrids x
-USplits/VSplits toggle matrix produces concrete, asserted face/edge
+band-edge toggle matrix produces concrete, asserted face/edge
 counts -- on the flat triangle fixture AND on the curved quarter-cone
 fixture (built through sketch Placements, since bare sketches silently
 drop z and would flatten any 3D control polygon).
@@ -171,7 +171,7 @@ def _check_errors(context, results, errors, checks):
 
 
 # Concrete display-contract counts for a unified pointed patch with
-# USplits=[0.3] / VSplits=[0.7] (4 subgrid cells). Face counts are pure
+# USplit1=0.3 / VSplit2=0.7 (4 subgrid cells). Face counts are pure
 # topology (4 cell faces vs 1 base face). The ShowGrid=False edge counts
 # are exactly the face-boundary edges (4 per face) because every grid-leg
 # edge disappears with the toggle. The grid-ON totals (106 edges with
@@ -182,7 +182,7 @@ def _check_errors(context, results, errors, checks):
 def _assert_pointed_display_contract(doc, patch, edges, errors, checks,
                                      context):
     """Assert the full display toggle contract on a unified pointed
-    patch (sets USplits=[0.3] / VSplits=[0.7] itself). check_patch must
+    patch (sets USplit1=0.3 / VSplit2=0.7 itself). check_patch must
     be green in every surface-visible state; the ShowSurface=False
     states are asserted to fail EXACTLY the display-driven checks (P4
     needs a face to mesh; the empty-all-off shape also fails
@@ -203,8 +203,8 @@ def _assert_pointed_display_contract(doc, patch, edges, errors, checks,
     patch.ShowSubgrids = False
     patch.ShowSurface = True
     patch.ShowGrid = True
-    patch.USplits = [0.3]
-    patch.VSplits = [0.7]
+    patch.USplit1 = 0.3
+    patch.VSplit2 = 0.7
     recompute()
     subgrids = getattr(patch.Proxy, "_subgrids", [])
     expect(len(subgrids) == 4 and all(len(sg) == 16 for sg in subgrids),
@@ -278,8 +278,8 @@ def _assert_pointed_display_contract(doc, patch, edges, errors, checks,
     patch.ShowSurface = True
     patch.ShowGrid = True
     patch.ShowSubgrids = False
-    patch.USplits = []
-    patch.VSplits = []
+    patch.USplit1 = 0.0
+    patch.VSplit2 = 1.0
     recompute()
     expect(not getattr(patch.Proxy, "_subgrids", []),
            "subgrids not cleared after clearing splits")
@@ -395,7 +395,7 @@ def test_unified_oracle_flags_c_boundary(doc):
 
 
 def test_unified_mutation_splits(doc):
-    """Editing USplits/VSplits on a built unified Patch and recomputing
+    """Editing the band edges on a built unified Patch and recomputing
     stays clean: surface valid, subgrids rebuild, oracle still passes."""
     errors, checks = [], []
     from SilkWorkflowOps import create_patch
@@ -404,8 +404,8 @@ def test_unified_mutation_splits(doc):
     edges = _make_loop_edges(doc)
     patch = create_patch(edges, name="PatchU")
 
-    patch.USplits = [0.3]
-    patch.VSplits = [0.7]
+    patch.USplit1 = 0.3
+    patch.VSplit2 = 0.7
     doc.recompute()
 
     if patch.Shape is None or patch.Shape.isNull():
@@ -419,8 +419,8 @@ def test_unified_mutation_splits(doc):
     _check_errors("check_patch after mutation", results, errors, checks)
 
     # restore splits and confirm recompute stays valid
-    patch.USplits = []
-    patch.VSplits = []
+    patch.USplit1 = 0.0
+    patch.VSplit2 = 1.0
     doc.recompute()
     if patch.Shape is None or patch.Shape.isNull():
         errors.append("empty Shape after clearing splits")
@@ -513,7 +513,7 @@ def test_unified_pointed_degenerate_column(doc):
 
 def test_unified_pointed_subgrid_machinery(doc):
     """The 3-edge fill has the full subgrid machinery via the shared core:
-    USplits/VSplits recompute rebuilds the subgrids and a valid display,
+    band-edge recompute rebuilds the subgrids and a valid display,
     the oracle stays green, and clearing the splits recomputes clean."""
     errors, checks = [], []
     from SilkWorkflowOps import create_patch
@@ -522,8 +522,8 @@ def test_unified_pointed_subgrid_machinery(doc):
     edges = _make_triangle_edges(doc)
     patch = create_patch(edges, name="PatchU3")
 
-    patch.USplits = [0.3]
-    patch.VSplits = [0.7]
+    patch.USplit1 = 0.3
+    patch.VSplit2 = 0.7
     doc.recompute()
 
     if patch.Shape is None or patch.Shape.isNull():
@@ -544,8 +544,8 @@ def test_unified_pointed_subgrid_machinery(doc):
 
     # restore splits and confirm recompute stays valid
     patch.ShowSubgrids = False
-    patch.USplits = []
-    patch.VSplits = []
+    patch.USplit1 = 0.0
+    patch.VSplit2 = 1.0
     doc.recompute()
     if getattr(patch.Proxy, "_subgrids", []):
         errors.append("subgrids not cleared after clearing splits")
@@ -641,7 +641,7 @@ def test_unified_pointed_display_contract(doc):
     """The 3-edge fill exposes the full display contract: the six
     display/subdivision properties exist and are editable (not
     read-only), and the ShowSurface/ShowGrid/ShowSubgrids x
-    USplits/VSplits toggle matrix produces the concrete, asserted
+    band-edge toggle matrix produces the concrete, asserted
     face/edge counts at every state, with check_patch green in every
     surface-visible state."""
     errors, checks = [], []
@@ -652,7 +652,7 @@ def test_unified_pointed_display_contract(doc):
 
     # 1. display/subdivision properties exist and are editable
     for prop in ("ShowSurface", "ShowGrid", "ShowSubgrids",
-                 "AutoHideBlend", "USplits", "VSplits"):
+                 "AutoHideBlend", "USplit1", "VSplit2"):
         if not hasattr(patch, prop):
             errors.append("missing display/subdivision property %s" % prop)
         elif tuple(patch.getEditorMode(prop)):
@@ -776,6 +776,98 @@ def test_unified_pointed_cone_display(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_a_pre_82_document_comes_back_with_no_splits(doc):
+    """#82 ships NO migration, so what an old document does on open is the
+    whole of its compatibility story -- and it has to be a deliberate one.
+
+    The human's decision: "we dont need data migration ... right now, no
+    backwards compatability is needed", with the consequence spelled out in
+    the ticket -- an old document comes back with NO SPLITS, which is the
+    correct neutral state. That is a claim about the RESTORE path, so it
+    is asserted there: a Patch whose four band-edge properties are absent
+    (which is exactly what a file saved before #82 restores as) is given
+    them at their sentinels, rebuilds as one whole un-subdivided surface,
+    and is editable again -- no exception, no complaint, no half-migrated
+    state in which the property editor shows nothing.
+
+    The pre-#82 USplits / VSplits lists are NOT read and NOT deleted: no
+    migration was asked for, so they stay as the inert dynamic properties
+    the old file carried, and nothing in the workbench looks at them."""
+    errors, checks = [], []
+    from SilkWorkflowOps import create_patch
+    from SilkChecks import check_patch
+
+    edges = _make_loop_edges(doc)
+    patch = create_patch(edges, name="PatchOld")
+    doc.recompute()
+    save_path = "/tmp/_test_patch_pre82_restore.FCStd"
+    doc.saveAs(save_path)
+    FreeCAD.closeDocument(doc.Name)
+
+    doc2 = FreeCAD.openDocument(save_path)
+    try:
+        p2 = [o for o in doc2.Objects
+              if getattr(o, "object_type", None) == "Patch"][0]
+        # pretend the file was saved before #82: the four properties are
+        # not in it at all
+        for prop in ("USplit1", "USplit2", "VSplit1", "VSplit2"):
+            p2.removeProperty(prop)
+        for prop in ("USplit1", "USplit2", "VSplit1", "VSplit2"):
+            if hasattr(p2, prop):
+                errors.append("%s survived the removal -- the fixture is "
+                              "not a pre-#82 document" % prop)
+        # and that an object with a split history restores as if it had
+        # none: the old file's USplits, if any, must be inert
+        p2.addProperty("App::PropertyFloatList", "USplits", "S1 - Subdivision",
+                       "left over from the pre-#82 file")
+        p2.USplits = [0.9]
+
+        p2.Proxy.onDocumentRestored(p2)      # the real restore hook
+        doc2.recompute()
+
+        for prop, want in (("USplit1", 0.0), ("USplit2", 1.0),
+                           ("VSplit1", 0.0), ("VSplit2", 1.0)):
+            if not hasattr(p2, prop):
+                errors.append("the restore did not create %s -- the object "
+                              "is not editable again" % prop)
+                continue
+            got = round(float(getattr(p2, prop)), 12)
+            if got != want:
+                errors.append("%s = %g after restore, want the sentinel %g"
+                              % (prop, got, want))
+        if p2.Proxy._subgrids:
+            errors.append("a pre-#82 document came back with %d subgrids -- "
+                          "it must come back with no splits"
+                          % len(p2.Proxy._subgrids))
+        if len(p2.Shape.Faces) != 1:
+            errors.append("the restored patch is not one whole surface: %d "
+                          "faces" % len(p2.Shape.Faces))
+        if p2.Shape.isNull() or not p2.Shape.isValid():
+            errors.append("the restored patch's shape is null or invalid")
+        edges2 = sorted(
+            (o for o in doc2.Objects
+             if getattr(o, "object_type", None) == "Edge"),
+            key=lambda e: e.Name)
+        bad = [(n, d) for (n, ok, d) in check_patch(p2, edges2) if not ok]
+        if bad:
+            errors.append("oracle not green on the restored patch: %s" % bad)
+        checks.append("pre-#82 file: four band edges created at their "
+                      "sentinels, 0 subgrids, 1 whole face, oracle green")
+
+        # and it behaves like any other patch from here: the properties
+        # are writable and take effect
+        p2.USplit2 = 0.35
+        doc2.recompute()
+        if len(p2.Proxy._subgrids) != 2:
+            errors.append("a band edge written after the restore did not "
+                          "subdivide: %d cells"
+                          % len(p2.Proxy._subgrids))
+        checks.append("USplit2 = 0.35 on the restored patch: 2 cells")
+    finally:
+        FreeCAD.closeDocument(doc2.Name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 def test_unified_serialization(doc):
     """Save/reopen round trip (ported from the retired
     test_patch44_comprehensive, rebuilt on the unified Patch through
@@ -789,7 +881,7 @@ def test_unified_serialization(doc):
 
     edges = _make_loop_edges(doc)
     patch = create_patch(edges, name="PatchU")
-    patch.USplits = [0.3]
+    patch.USplit1 = 0.3
     doc.recompute()
     poles_before = [tuple(v) for v in patch.Poles]
     weights_before = [round(w, 12) for w in patch.Weights]
@@ -812,7 +904,7 @@ def test_unified_serialization(doc):
         weights_after = [round(w, 12) for w in p2.Weights]
         if weights_before != weights_after:
             errors.append("reload: weights changed")
-        p2.USplits = [0.3]
+        p2.USplit1 = 0.3
         doc2.recompute()
         if len(p2.Proxy._subgrids) != subgrids_before:
             errors.append("reload: expected %d subgrids, got %d"
@@ -849,5 +941,6 @@ ALL_TESTS = [
     test_unified_pointed_cone_build,
     test_unified_pointed_cone_curved,
     test_unified_pointed_cone_display,
+    test_a_pre_82_document_comes_back_with_no_splits,
     test_unified_serialization,
 ]

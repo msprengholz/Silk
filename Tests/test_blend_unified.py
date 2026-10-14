@@ -419,7 +419,7 @@ def test_blend_pointed_live_update(doc):
     # default, so the band stays the SAME cell at a new width -- the
     # hidden-cell liveness is asserted against band_cells below, not
     # against a cell index that no longer has to move.
-    pa.VSplits = [0.95]
+    pa.VSplit1 = 0.95
     doc.recompute()
     doc.recompute()
 

@@ -38,6 +38,16 @@ creates them anymore.
 - **The stored `Edges` list IS the boundary cycle** (#67). You may supply it in any order — panel click order, hand-order in the data tab, an old file's saved order — and `execute()` writes the resolved cycle back with `loop_order` when, and only when, it differs. So `Edges[k]` is boundary side `k` **by construction**: `check_patch(p, list(p.Edges))` is the honest oracle call for any input order. A non-cyclic list is *not* stored (a non-closing one is refused, list untouched). Visible consequence: the data tab shows the normalized cycle, not the raw click order. An already-cyclic list takes the byte-identical no-op path (legacy pole parity `0.00e+00`, chain ground truth), and the write is a one-shot fixed point: one write per execute, then nothing.
 - The 3-edge pointed fill is **not** normalized — its Patch33 parity rides on the list it is handed. Careful with the claim here: it is order-independent only in the sense that **every** ordering builds poles (6/6). Its *output* is not order-independent, and it does **not** satisfy the `Edges[k]`-is-side-`k` invariant above — on a curved corner triple (`Seam_X`/`Seam_Y`/`Seam_Z`) it builds 6/6 but is oracle-red on 6/6 (`C1_corner_order`, `C2_boundary_match`). Pre-existing, untouched by #66/#67, tracked in #68. Do not cite it as a verified invariant.
 - 16 poles + 16 weights (4×4 grid)
+- **Subdivision is two NAMED band edges per axis** (#82), not a split
+  list: `USplit1` / `USplit2` / `VSplit1` / `VSplit2`
+  (`App::PropertyFloat`). `Split1` is the parametric-0 end's band edge
+  and holds `0.0` for "no band at that end"; `Split2` is the
+  parametric-1 end's and holds `1.0`. So `Split1 = 0, Split2 = 1`
+  reads as "no split on this axis" and the SENTINEL IS THE AXIS
+  ENDPOINT. The properties' defaults are the sentinels -- a patch
+  nobody has blended stays one whole surface (0 subgrids, 1 face);
+  0.1 / 0.9 are the widths `ensure_band_split` writes into the ONE end
+  that needs them.
 - Subgrids stored internally in `_subgrids` and `_subsurfaces` (not in FreeCAD tree)
 - Display toggles: ShowSurface, ShowGrid, ShowSubgrids, AutoHideBlend
 - Linked Blends auto-hide the blended subgrid strip via `_HiddenSubgridIdxs`
@@ -48,7 +58,7 @@ creates them anymore.
 - `Part::FeaturePython`; object_type="Blend"
 - Properties: PatchA, PatchB (PropertyLinks), Edge (optional seam pin), tolerance, Poles (24), Weights, Legs
 - Auto-detects shared edge between two patches (robust against degenerate pointed corners)
-- Auto-updates when patches' USplits/VSplits change
+- Auto-updates when a patch's band edges change
 - Fed only patch subgrid cells — never a Blend
 - Custom view provider: `BlendViewProvider` (custom tree icon)
 - Surface built via `AN.CubicSurface_64` (NOT manual knot insertion)
@@ -89,61 +99,60 @@ Compare corner[i] vs corner[j] within tolerance 0.01. Collect matching pairs.
 Each strip reads the perpendicular split on its two patches, additively so both
 splits can coexist on a 4-patch corner patch. With no user choice the defaults
 are written; a width the user already set is READ, not overridden (#64):
-| Shared edge | Split direction | Band location (default) |
-|-------------|-----------------|---------------|
-| U0 (row 0)  | VSplits | U∈[0, s] band, s=0.1 default |
-| U1 (row 3)  | VSplits | U∈[s,1.0] band, s=0.9 default |
-| V0 (col 0)  | USplits | U∈[0, s] band, s=0.1 default |
-| V1 (col 3)  | USplits | U∈[s,1.0] band, s=0.9 default |
+| Shared edge | Band axis | Band edge written (default) |
+|-------------|-----------|-----------------------------|
+| U0 (row 0)  | V | `VSplit1 = 0.1` |
+| U1 (row 3)  | V | `VSplit2 = 0.9` |
+| V0 (col 0)  | U | `USplit1 = 0.1` |
+| V1 (col 3)  | U | `USplit2 = 0.9` |
 
-**The patch owns its splits; the blend consumes them. There is no `Blend`
-property for the band width** (#64). "The split at this seam's end" is
-`SilkMachinery.split_at_end`: the LOWEST split belongs to the parametric-0 end,
-the HIGHEST to the parametric-1 end, one exactly at 0.5 to neither. With two
-splits on ONE axis (`[0.1, 0.9]`) each end gets its own — the rule is per
-(patch, axis, side), so a corner patch's two seams on one axis never collide.
+**The patch owns its band edges; the blend consumes them. There is no `Blend`
+property for the band width** (#64). "This seam's end" is the property's own
+NAME: `SilkBlend.band_edge_prop(letter, end)` is the single naming
+expression, used by the writer (`ensure_band_split`), the survivor lookup
+(`_survivor_needs`) and the remover (`_drop_band_split`), so none of them can
+disagree about which end owns which edge. The rule is per (patch, axis, end),
+so a corner patch's two seams on one axis never collide.
 
-**At most ONE split below 0.5 and ONE above 0.5, per axis** (#76, enforced in
-code, not prose). That is finer than "at most two": `[0.2, 0.8]` is two bands,
-one per end; `[0.2, 0.45, 0.9]` and `[0.2, 0.3]` are two bands that both want
-to be at the SAME end. 0.5 marks neither end, so `[0.1, 0.5, 0.9]` — three
-splits, and what `ensure_band_split` writes onto an axis that already carried a
-plain mid-surface split — is legal and stays legal. One rule, counted through
-`SilkMachinery.split_end` (below 0.5 -> end 0, above -> end 1, exactly 0.5 ->
-neither), which `split_at_end` itself is built from, so the limit cannot
-disagree with the band or `corner_cells` about which end a split is for.
-Enforced on the property-set path (`SilkPatch._normalize_splits_on_set`), so
-the script, panel and expression paths all meet it. An over-limit list is
-REFUSED, not corrected: the axis goes back to the list it last accepted (which
-is why `_accepted_splits` is remembered on the proxy — `onChanged` never sees
-the value it replaced) and `execute()` raises, leaving the object `Invalid`
-until a legal list is stored. Neither writer of a split can trip it —
-`ensure_band_split` and `write_band_split` both write only at an end that
-carries no split.
+**There is no third split, because there is nowhere to put one** (#76's cap
+became a TYPE under #82). Each axis has exactly two properties and each names
+its own end, so the two-entry limit is structural rather than enforced — and
+the classify-by-value guess that made it bite (`split_at_end`, `split_end`,
+`split_limit_problem`: all gone) is gone with it. `[0.2, 0.4]` used to report
+"no band at the 1 end" (#81), so the blend tried to write a third value and
+the cap refused it, leaving the patch `Invalid`. Every value strictly inside
+(0, 1) is now an ordinary band edge at the end that names it, 0.5 included.
+Two corrections remain on the property-set path
+(`SilkPatch._normalize_splits_on_set`, through
+`SilkMachinery.normalize_edge_pair`, so the script, panel and expression paths
+all meet them): a value outside [0, 1] becomes its own slot's sentinel, and a
+pair whose two edges are out of order is swapped. Both are REPORTED on the
+console unless the document is restoring.
 
 ### Step 3b: Band = subgrid cells, NOT re-segmentation (ticket #33)
 The strip band is taken from the patch's pre-computed subgrid cells
-(`p.Proxy._subgrids`, produced by USplits/VSplits) — never by re-segmenting
-`_base_surface` with an ad-hoc trim. `band_cells(p, ea, ss)` selects the band
-cell(s): band interval 0 or last per ss, excluding corner cells at seam ends
-with a seam-axis split — those are reserved for the 4-subgrid corner
-blend object. The exclusion is NOT keyed to the literal 0.1 / 0.9
-(ticket #61): `SilkMachinery.corner_cells` classifies each split by the
-end of the axis it is nearest to (`< 0.5` -> the parametric-0 end,
-`> 0.5` -> the parametric-1 end, `== 0.5` -> neither) and drops that
-end's interval, so a user width of 0.2 / 0.85 excludes its corner cell
-exactly like the default does. `get_strip` returns the selected cell's
-flat poles (single-cell bands only; console error + None otherwise —
-`SilkMachinery.band_diagnosis` builds the actionable message). Auto-hide
-re-derives the FULL `_HiddenSubgridIdxs` set for each patch from ALL
-linked strips with the current splits (cell indices shift when a later
-strip adds a split).
+(`p.Proxy._subgrids`, produced by the two named edges on each axis) — never
+by re-segmenting `_base_surface` with an ad-hoc trim. `band_cells(p, ea, ss)`
+selects the band cell: the band interval at the seam's own end on the
+seam-perpendicular axis, minus the corner cells at the seam ENDS — reserved
+for the 4-subgrid corner blend object. The exclusion is keyed to the NAME,
+not to a value (#82, after #61 dropped the literal 0.1 / 0.9):
+`SilkMachinery.corner_cells` drops the first interval when `Split1` carries an
+edge and the last when `Split2` does, so a user width of 0.2 or 0.85 excludes
+its corner cell exactly as the default does. Each edge therefore drops exactly
+one cell off the axis it is on, so **the band is always ONE cell** — the
+multi-cell refusal is no longer expressible. The one degenerate layout left is
+both ends holding the SAME edge (one split, both end cells corner cells, no
+band), which `get_strip` refuses with `SilkMachinery.band_diagnosis`'s
+message. Auto-hide re-derives the FULL `_HiddenSubgridIdxs` set for each patch
+from ALL linked strips with the current edges (cell indices shift when a later
+strip adds one).
 
 The width IS the user's (#64): `ensure_band_split` writes 0.1 / 0.9 only when
-the seam's end of that axis carries no split at all; otherwise it reads the
-split the patch already has and adds nothing. Because the band and
-`corner_cells` classify ends through the same `split_at_end`, a user width
-excludes its corner cell exactly as the default did.
+the seam's end of that axis carries no band edge at all; otherwise it reads
+the edge the patch already has and writes nothing. Because the band and
+`corner_cells` read the same two properties, a user width excludes its corner
+cell exactly as the default did.
 
 ### Step 4: Extract rows/columns from strips
 Subgrid flat: `poles[U][V]` = `flat[U*4 + V]` (U is first dimension in FreeCAD)
@@ -185,9 +194,9 @@ doc.removeObject(tmp.Name)
 
 ## Auto-Update Chain
 
-When a Patch's USplits/VSplits change, the Blend auto-updates:
+When a Patch's band edges change, the Blend auto-updates:
 
-1. `Patch.onChanged("USplits")` → `fp.touch()` + `fp.recompute()` → `execute()` runs
+1. `Patch.onChanged("USplit1")` (or any of the four) → `fp.touch()` + `fp.recompute()` → `execute()` runs
 2. `execute()` searches doc for Blend objects linked to this patch → calls `blend.touch()`
 3. Next `doc.recompute()` → Blend is touched → `execute()` reads updated subgrids → blend recomputes
 

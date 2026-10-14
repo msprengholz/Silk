@@ -1438,14 +1438,48 @@ def test_blend_confirm_matches_the_resolver(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+# ---- the band's named edges (#82) -----------------------------------------
+
+BAND_PROPS = ("USplit1", "USplit2", "VSplit1", "VSplit2")
+
+
+def _set_width(p, prop, ss, width):
+    """Write a band WIDTH onto the end-specific property `prop`.
+
+    The panel's editors work in widths (distance from the seam) while the
+    property stores the parametric edge at that end, so a test that seeds
+    a patch by hand has to convert exactly the way `write_band_split`
+    does -- and that function is the production path, so the conversion
+    itself is pinned in
+    test_band_split_editor_reads_and_writes_the_patch_split."""
+    setattr(p, prop, width if ss == 0 else 1.0 - width)
+
+
+def _stored_width(p, prop, ss):
+    """The width the end-specific property `prop` currently holds."""
+    v = float(getattr(p, prop))
+    return v if ss == 0 else 1.0 - v
+
+
+def _axis_pair(p, prop):
+    """The `(Split1, Split2)` pair of the axis `prop` belongs to."""
+    from SilkMachinery import split_pair
+    return split_pair(p, prop[0])
+
+
+def _along_of(band_prop):
+    """The OTHER axis of a band property's axis ("VSplit2" -> "U")."""
+    return "U" if band_prop[0] == "V" else "V"
+
+
 # ---- unblend: the untick takes the band's splits with it (#71) -------------
 
 def test_untick_unblends_and_says_the_band_splits_went(doc):
     """Unticking a blended seam must take the band's SPLITS with it, and
     must SAY so.
 
-    In the wizard the Band A / Band B editors ARE the patch's USplits /
-    VSplits property -- the same data, with no second copy anywhere -- so
+    In the wizard the Band A / Band B editors ARE the patch's band-edge
+    properties -- the same data, with no second copy anywhere -- so
     a user who unsets the blend has unset the width, and the patch must go
     back to a plain one. The status line therefore names the axes it
     cleared: an untick is destructive to the user's widths, and a message
@@ -1487,23 +1521,22 @@ def test_untick_unblends_and_says_the_band_splits_went(doc):
             doc.recompute()
             fed = [p for p in (entry["patch_a"], entry["patch_b"])
                    if p is not None]
-            before = {(p.Name, prop): list(getattr(p, prop, None) or [])
-                      for p in fed for prop in ("USplits", "VSplits")}
+            before = {(p.Name, prop): float(getattr(p, prop))
+                      for p in fed for prop in BAND_PROPS}
             checks.append("before the untick: %s"
-                          % ", ".join("%s.%s=%r" % (p.Name, prop, before[
-                              (p.Name, prop)])
-                                      for p in fed
-                                      for prop in ("USplits", "VSplits")))
-            check(any(before.values()),
-                  "the blend wrote no band split at all -- the fixture does "
+                          % ", ".join("%s.%s=%g" % (p.Name, prop,
+                                                    before[(p.Name, prop)])
+                                      for p in fed for prop in BAND_PROPS))
+            check(any(0.0 < v < 1.0 for v in before.values()),
+                  "the blend wrote no band edge at all -- the fixture does "
                   "not exercise the case", errors)
 
             flag = panel.blend_flag(edge)
             check(flag is not None and flag.isChecked(),
                   "the row is not a ticked flag before the untick", errors)
             tip = flag.toolTip() if flag else ""
-            check("splits" in tip,
-                  "the untick's own tooltip does not say the band's splits "
+            check("edges" in tip,
+                  "the untick's own tooltip does not say the band's edges "
                   "go with it: %r" % tip, errors)
 
             with _Capture() as cap2:
@@ -1523,22 +1556,22 @@ def test_untick_unblends_and_says_the_band_splits_went(doc):
             check(edge.Name in status and bl_name in status,
                   "the status line does not name the seam and its blend: %r"
                   % status, errors)
-            check("band splits removed" in status,
-                  "the status line does not report that the band's splits "
+            check("band edges removed" in status,
+                  "the status line does not report that the band's edges "
                   "went -- it reports only the deleted blend: %r" % status,
                   errors)
             for p in fed:
-                for prop in ("USplits", "VSplits"):
+                for prop in BAND_PROPS:
                     was = before[(p.Name, prop)]
-                    left_ = list(getattr(p, prop, None) or [])
-                    check(not left_,
-                          "%s.%s=%r survived the untick -- the band editors "
+                    left_ = float(getattr(p, prop))
+                    check(not 0.0 < left_ < 1.0,
+                          "%s.%s=%g survived the untick -- the band editors "
                           "ARE that property, so unsetting the blend must "
                           "unset it" % (p.Name, prop, left_), errors)
-                    if was:
-                        check("%s.%s" % (p.Name, prop) in status,
-                              "%s.%s held %r before the untick and the status "
-                              "does not name it: %r"
+                    if 0.0 < was < 1.0:
+                        check(("%s.%s" % (p.Name, prop[0])) in status,
+                              "%s.%s held %g before the untick and the status "
+                              "does not name its axis: %r"
                               % (p.Name, prop, was, status), errors)
                 check(len(p.Shape.Faces) == 1,
                       "%s is not one whole surface after the untick: %d "
@@ -1561,30 +1594,34 @@ def test_untick_unblends_and_says_the_band_splits_went(doc):
 # ---- the band split ----------------------------------------------------------
 
 def test_band_split_editor_reads_and_writes_the_patch_split(doc):
-    """The collected row's band editors read each patch's OWN split and
+    """The collected row's band editors read each patch's OWN band edge and
     write straight back onto it -- which since #64 is what the blend
     reads, so a width set here is the width the blend uses on that patch.
     Asserted against the patch properties, not against a panel copy.
+
+    #82 makes the write a single scalar on the property that NAMES the
+    end (`USplit1` / `USplit2` / `VSplit1` / `VSplit2`), so the seeded
+    0.35 and the typed 0.22 are each exactly one property assignment.
 
     #69: TWO editors, one per patch. Editing Band A must move A and leave
     B alone -- the write targets the patch the user touched, not "the
     seam", because the seam has two bands and they are allowed to differ.
     """
     errors, checks = [], []
-    from SilkMachinery import split_at_end
     from SilkTaskPanel import BAND_A, BAND_B
     from Tests.test_seam_resolver import _square_patch, _patch_sharing
 
     a = _square_patch(doc, "A")
     b = _patch_sharing(doc, a.Edges[0], "B")
-    # a pre-existing user split on the seam's band axis of patch A. The
-    # axis is DERIVED, never assumed: _side_of is the panel's own
-    # resolver, so this stays true whichever way the seam happens to run.
+    # a pre-existing user width on the seam's band axis of each patch. The
+    # property is DERIVED, never assumed: _side_of is the panel's own
+    # resolver, so this stays true whichever way the seam happens to run,
+    # and it names the end (#82).
     from SilkTaskPanel import _side_of
     a_prop, a_ss = _side_of(a, b)
     b_prop, b_ss = _side_of(b, a)
-    setattr(a, a_prop, [0.35])
-    setattr(b, b_prop, [0.35])
+    _set_width(a, a_prop, a_ss, 0.35)
+    _set_width(b, b_prop, b_ss, 0.35)
     doc.recompute()
 
     panel = _open_panel(doc)
@@ -1612,23 +1649,23 @@ def test_band_split_editor_reads_and_writes_the_patch_split(doc):
                   "%s shows %g, expected the patch's own 0.35"
                   % (what, spin.value()), errors)
             check(spin.minimum() > 0.0 and spin.maximum() < 1.0,
-                  "%s is not constrained to 0 < u < 1 (range %g..%g)"
+                  "%s is not constrained to 0 < width < 1 (range %g..%g)"
                   % (what, spin.minimum(), spin.maximum()), errors)
 
-        b_before = list(getattr(b, b_prop) or [])
+        b_before = float(getattr(b, b_prop))
         undo_before = _undo_count(doc)
         names_before = list(doc.UndoNames)
         spin_a.setValue(0.22)
         spin_a.editingFinished.emit()
         doc.recompute()
-        after = split_at_end(list(getattr(a, a_prop) or []), a_ss)
-        check(after is not None and abs(after - 0.22) < 1e-9,
-              "patch A still reads %r on %s after the edit -- the editor "
+        after = _stored_width(a, a_prop, a_ss)
+        check(abs(after - 0.22) < 1e-9,
+              "patch A still reads %g on %s after the edit -- the editor "
               "did not write through"
-              % (list(getattr(a, a_prop) or []), a_prop), errors)
-        check(list(getattr(b, b_prop) or []) == b_before,
-              "editing Band A also wrote patch B: %r was %r"
-              % (list(getattr(b, b_prop) or []), b_before), errors)
+              % (float(getattr(a, a_prop)), a_prop), errors)
+        check(float(getattr(b, b_prop)) == b_before,
+              "editing Band A also wrote patch B: %g was %g"
+              % (float(getattr(b, b_prop)), b_before), errors)
         check(abs(panel.split_editor(a.Edges[0], BAND_B).value() - 0.35)
               < 1e-9, "the Band B editor was dragged along by the Band A "
               "edit", errors)
@@ -1680,7 +1717,6 @@ def test_user_band_split_is_honoured_by_the_blend(doc):
                      errors):
             return {"pass": False, "errors": errors, "checks": checks}
         # where the width must land, read from the panel's own resolver
-        from SilkMachinery import split_at_end
         from SilkTaskPanel import read_band_split
         entry = next(e for e in panel.seam_inventory()
                      if e["edge"] is g["E_Shr"])
@@ -1708,12 +1744,12 @@ def test_user_band_split_is_honoured_by_the_blend(doc):
                       "oracle %s failed on the user-width blend: %r"
                       % (name, [(n, d) for n, ok, d in results
                                 if not ok]), errors)
-            from SilkMachinery import split_at_end
             for p, prop, ss in ((pa, pa_prop, pa_ss), (pb, pb_prop, pb_ss)):
-                val = split_at_end(list(getattr(p, prop) or []), ss)
-                check(val is not None and abs(val - 0.2) < 1e-9,
+                width = _stored_width(p, prop, ss)
+                check(abs(width - 0.2) < 1e-9,
                       "the blend rewrote the user's band width on %s.%s: "
-                      "%r" % (p.Name, prop, list(getattr(p, prop) or [])),
+                      "%g (stored edge %g)"
+                      % (p.Name, prop, width, float(getattr(p, prop))),
                       errors)
             checks.append("user width 0.2 honoured on %s.%s / %s.%s; "
                           "oracle structural/B1/B2/B3 green"
@@ -1729,24 +1765,34 @@ def test_user_band_split_is_honoured_by_the_blend(doc):
 
 def test_band_split_multi_cell_is_refused_naming_patch_and_values(doc):
     """A width that would NOT leave exactly one band cell refuses at
-    confirm, naming the patch AND the values that break it -- multi-cell
-    bands are still unsupported, so nothing is built rather than something
-    wrong."""
+    confirm, naming the patch AND the values that break it -- nothing is
+    built rather than something wrong.
+
+    #82 changed which layout can do this. With a named edge per end, each
+    edge drops exactly one corner cell off the axis it is on, so the band
+    is ONE cell whatever the axis carries -- a multi-cell band is no longer
+    expressible. The one layout that still fails is the degenerate pair:
+    both ends of the seam-PARALLEL axis holding the SAME edge, which
+    collapses the axis to one split whose two end cells are BOTH corner
+    cells, leaving the band with none. That is what this fixture now
+    builds, and the refusal still names the patch, the seam and the two
+    values that cause it."""
     errors, checks = [], []
     from Tests.test_seam_resolver import _Capture, _square_patch, \
         _patch_sharing
 
     a = _square_patch(doc, "A")
     b = _patch_sharing(doc, a.Edges[0], "B")
-    # A's seam-PARALLEL axis already carries a plain mid split at 0.5,
-    # which marks NEITHER end: with the band's own split that leaves two
-    # cells along the seam, so there is no single-cell band. The
-    # parallel axis is the one the band does NOT live on, derived here
-    # from the panel's own _side_of so it is right for this seam.
+    # A's seam-PARALLEL axis already carries the SAME edge at both ends
+    # (0.8 / 0.8), so the axis has one split and both of its end cells
+    # are corner cells -- no band cell at all. The parallel axis is the
+    # one the band does NOT live on, derived here from the panel's own
+    # _side_of so it is right for this seam.
     from SilkTaskPanel import _side_of
     band_prop, _band_ss = _side_of(a, b)
-    along_prop = "VSplits" if band_prop == "USplits" else "USplits"
-    setattr(a, along_prop, [0.5])
+    along_letter = _along_of(band_prop)
+    setattr(a, "%sSplit1" % along_letter, 0.8)
+    setattr(a, "%sSplit2" % along_letter, 0.8)
     doc.recompute()
 
     panel = _open_panel(doc)
@@ -1772,9 +1818,11 @@ def test_band_split_multi_cell_is_refused_naming_patch_and_values(doc):
             check("band A" in message,
                   "the refusal does not say WHICH band was judged: %r"
                   % message, errors)
-            check(band_prop in message and along_prop in message,
-                  "the refusal does not name the split values %r/%r: %r"
-                  % (band_prop, along_prop, message), errors)
+            check(band_prop in message
+                  and ("%sSplit1" % along_letter) in message,
+                  "the refusal does not name the band edge and the offending "
+                  "axis values %r/%sSplit: %r"
+                  % (band_prop, along_letter, message), errors)
         with _Capture() as cap:
             applied = panel.panel_confirm()
         doc.recompute()
@@ -1809,11 +1857,15 @@ def test_band_cell_mirror_agrees_with_the_real_band_cells(doc):
     from SilkTaskPanel import BAND_A, BAND_B, band_cell_problem
     from Tests.test_seam_resolver import _square_patch, _patch_sharing
 
-    layouts = [[], [0.1], [0.9], [0.5], [0.1, 0.9], [0.2, 0.85],
-               [0.3, 0.5, 0.7]]
+    # (Split1, Split2) pairs: empty, one edge at either end, the two
+    # defaults, two user widths, and the degenerate same-edge pair whose
+    # band cell count is 0 (#82: the ends share a value, so the axis has
+    # one split and both of its cells are corner cells).
+    layouts = [(0.0, 1.0), (0.1, 1.0), (0.0, 0.9), (0.5, 1.0),
+               (0.1, 0.9), (0.2, 0.85), (0.3, 0.3)]
     compared = 0
     # #72: the patches are built ONCE, not per iteration. The geometry is
-    # the same square every time -- only the SPLITS vary, and splits are a
+    # the same square every time -- only the band edges vary, and those are a
     # property assignment plus a recompute. Rebuilding them per iteration
     # made this test 116s and left 2,352 objects in the document, which
     # also made the NEXT test 73s (measured) and fed the retention the
@@ -1823,12 +1875,15 @@ def test_band_cell_mirror_agrees_with_the_real_band_cells(doc):
     b = _patch_sharing(doc, a.Edges[0], "MirrorB")
     for along_a in layouts:
         for band_a in layouts:
-            for along_b, band_b in ((along_a, band_a), ([], [0.2]),
-                                    ([0.5], [])):
-                a.USplits = list(along_a)
-                a.VSplits = list(band_a)
-                b.USplits = list(along_b)
-                b.VSplits = list(band_b)
+            for along_b, band_b in ((along_a, band_a), ((0.0, 1.0),
+                                                          (0.2, 1.0)),
+                                    ((0.5, 1.0), (0.0, 1.0))):
+                for patch_, along, band in ((a, along_a, band_a),
+                                            (b, along_b, band_b)):
+                    setattr(patch_, "USplit1", along[0])
+                    setattr(patch_, "USplit2", along[1])
+                    setattr(patch_, "VSplit1", band[0])
+                    setattr(patch_, "VSplit2", band[1])
                 doc.recompute()
                 entry = {"edge": a.Edges[0], "patch_a": a, "patch_b": b,
                          "status": "blendable", "blend": None}
@@ -1875,7 +1930,7 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
     (`accepts`), so the collect-then-confirm rule is exactly as before."""
     errors, checks = [], []
     from SilkChecks import check_blend
-    from SilkMachinery import band_cells, patch_side, split_at_end
+    from SilkMachinery import band_cells, patch_side
     from SilkTaskPanel import BAND_A, BAND_B, read_band_split
     from Tests.test_seam_resolver import _Capture
 
@@ -1922,10 +1977,10 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
                   % entry["status"], errors)
             read = read_band_split(entry)
             check(abs(spin_a.value() - read[2]) < 1e-9,
-                  "Band A shows %g, patch A's own band split is %g"
+                  "Band A shows %g, patch A's own band width is %g"
                   % (spin_a.value(), read[2]), errors)
             check(abs(spin_b.value() - read[5]) < 1e-9,
-                  "Band B shows %g, patch B's own band split is %g"
+                  "Band B shows %g, patch B's own band width is %g"
                   % (spin_b.value(), read[5]), errors)
             for spin, what in ((spin_a, "A"), (spin_b, "B")):
                 check("blended" in spin.toolTip(),
@@ -1942,14 +1997,13 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
                   errors)
 
             # --- editing it moves THAT patch's band width -----------
-            # The width lives at ITS end's half of the axis:
-            # split_at_end reads the lowest split for side 0 and the
-            # highest for side 1.
+            # The width lives in the property that NAMES that end (#82):
+            # read[0] is patch A's band-edge property, read[3] patch B's.
             want = 0.2 if read[1] == 0 else 0.8
             before_poles = [Vector(p) for p in bl.Poles]
             before_undo = _undo_count(doc)
             names_before = list(doc.UndoNames)
-            pb_before = list(getattr(pb, read[3]) or [])
+            pb_before = float(getattr(pb, read[3]))
             with _Capture() as cap2:
                 spin_a.setValue(want)
                 spin_a.editingFinished.emit()
@@ -1966,14 +2020,13 @@ def test_blended_seam_row_keeps_a_working_split_editor(doc):
             check([str(n) for n in added] == ["Silk band split"],
                   "the split edit was not its own transaction: %r" % added,
                   errors)
-            check(list(getattr(pb, read[3]) or []) == pb_before,
-                  "editing Band A wrote patch B too: %r was %r"
-                  % (list(getattr(pb, read[3]) or []), pb_before), errors)
-            got = split_at_end(list(getattr(pa, read[0]) or []), read[1])
-            check(got is not None and abs(got - want) < 1e-9,
-                  "patch A.%s reads %r after the edit, expected %g"
-                  % (read[0], list(getattr(pa, read[0]) or []), want),
-                  errors)
+            check(float(getattr(pb, read[3])) == pb_before,
+                  "editing Band A wrote patch B too: %g was %g"
+                  % (float(getattr(pb, read[3])), pb_before), errors)
+            got = _stored_width(pa, read[0], read[1])
+            check(abs(got - want) < 1e-9,
+                  "patch A.%s reads width %g after the edit, expected %g"
+                  % (read[0], got, want), errors)
             # still exactly one band cell per side -- the edit did not turn
             # the seam into an unsupported multi-cell band
             for p, other, what in ((pa, pb, "A"), (pb, pa, "B")):
@@ -2109,19 +2162,24 @@ def test_post_blend_width_that_would_break_the_band_is_refused(doc):
         if not check(spin is not None, "the blended row has no Band A editor",
                      errors):
             return {"pass": False, "errors": errors, "checks": checks}
-        # A plain mid split at 0.5 on the seam-PARALLEL axis marks
-        # neither end, so a band split on top of it spans two cells.
+        # The seam-PARALLEL axis of A carries the SAME edge at both ends
+        # (0.8 / 0.8), so it has one split and both of its end cells are
+        # corner cells: the band has no cell to build from, whatever width
+        # the editor offers (#82; the same fixture
+        # test_band_split_multi_cell_is_refused_naming_patch_and_values
+        # refuses at confirm).
         from SilkTaskPanel import _side_of
         band_prop, band_ss = _side_of(a, b)
-        along_prop = "VSplits" if band_prop == "USplits" else "USplits"
-        setattr(a, along_prop, [0.5])
+        along_letter = _along_of(band_prop)
+        setattr(a, "%sSplit1" % along_letter, 0.8)
+        setattr(a, "%sSplit2" % along_letter, 0.8)
         doc.recompute()
         panel.refresh()
         spin = panel.split_editor(edge, BAND_A)
         spin_b = panel.split_editor(edge, BAND_B)
-        b_before = list(getattr(b, _side_of(b, a)[0]) or [])
+        b_before = float(getattr(b, _side_of(b, a)[0]))
         spin_b_before = spin_b.value()
-        before = list(getattr(a, band_prop) or [])
+        before = float(getattr(a, band_prop))
         with _Capture() as cap:
             spin.setValue(0.2)
             spin.editingFinished.emit()
@@ -2135,18 +2193,19 @@ def test_post_blend_width_that_would_break_the_band_is_refused(doc):
         check("band A" in msgs,
               "the refusal does not say WHICH editor was refused: %r" % msgs,
               errors)
-        check(list(getattr(a, band_prop) or []) == before,
-              "the refused width was written anyway: %s was %s"
-              % (list(getattr(a, band_prop) or []), before), errors)
-        check(abs(spin.value() - (before[0] if before else 0.1)) < 1e-9,
-              "the refused spin was not put back to the stored split (%g)"
+        check(float(getattr(a, band_prop)) == before,
+              "the refused width was written anyway: %g was %g"
+              % (float(getattr(a, band_prop)), before), errors)
+        check(abs(spin.value()
+                  - _stored_width(a, band_prop, band_ss)) < 1e-9,
+              "the refused spin was not put back to the stored width (%g)"
               % spin.value(), errors)
         # ... and only THAT spin was touched: the partner editor keeps the
         # value the user can still see, and patch B is untouched.
         check(abs(spin_b.value() - spin_b_before) < 1e-9,
               "the refused edit moved the other editor (%g -> %g)"
               % (spin_b_before, spin_b.value()), errors)
-        check(list(getattr(b, _side_of(b, a)[0]) or []) == b_before,
+        check(float(getattr(b, _side_of(b, a)[0])) == b_before,
               "the refused edit on A still wrote patch B", errors)
         checks.append("multi-cell width refused on the Band A editor, only "
                       "that spin restored, Band B untouched")
@@ -2273,7 +2332,7 @@ def test_band_edit_validation_is_per_patch(doc):
     edit restores ONLY its own spin, leaves the partner editor showing
     what it showed, and writes neither patch."""
     errors, checks = [], []
-    from SilkTaskPanel import BAND_A, BAND_B, _side_of
+    from SilkTaskPanel import BAND_A, BAND_B, band_side, _side_of
     from Tests.test_seam_resolver import _Capture, _square_patch, \
         _patch_sharing
 
@@ -2281,9 +2340,14 @@ def test_band_edit_validation_is_per_patch(doc):
     b = _patch_sharing(doc, a.Edges[0], "B")
     edge = a.Edges[0]
     band_prop, _ss = _side_of(a, b)
-    along_prop = "VSplits" if band_prop == "USplits" else "USplits"
+    entry = {"edge": edge, "patch_a": a, "patch_b": b,
+             "status": "blendable", "blend": None}
     b_band_prop, b_ss = _side_of(b, a)
-    setattr(a, along_prop, [0.5])          # A: two cells under any width
+    # A's seam-PARALLEL axis: both ends on the same edge -> no band cell at
+    # any width (#82)
+    along_letter = _along_of(band_prop)
+    setattr(a, "%sSplit1" % along_letter, 0.8)
+    setattr(a, "%sSplit2" % along_letter, 0.8)
     doc.recompute()
 
     panel = _open_panel(doc)
@@ -2298,8 +2362,8 @@ def test_band_edit_validation_is_per_patch(doc):
                      % sum(1 for s in (spin_a, spin_b) if s is not None),
                      errors):
             return {"pass": False, "errors": errors, "checks": checks}
-        a_before = list(getattr(a, band_prop) or [])
-        b_before = list(getattr(b, b_band_prop) or [])
+        a_before = float(getattr(a, band_prop))
+        b_before = float(getattr(b, b_band_prop))
 
         # -- refused on A, because A is the one that cannot take it -----
         with _Capture() as cap:
@@ -2310,13 +2374,13 @@ def test_band_edit_validation_is_per_patch(doc):
         check("band A" in msgs and a.Name in msgs and "band cells" in msgs,
               "the refusal on A does not name the editor, the patch and the "
               "reason: %r" % msgs, errors)
-        check(list(getattr(a, band_prop) or []) == a_before,
-              "the refused width was written to A anyway: %r was %r"
-              % (list(getattr(a, band_prop) or []), a_before), errors)
-        check(abs(spin_a.value() - (a_before[0] if a_before else 0.1))
-              < 1e-9,
-              "the refused editor was not put back (%g)" % spin_a.value(),
-              errors)
+        check(float(getattr(a, band_prop)) == a_before,
+              "the refused width was written to A anyway: %g was %g"
+              % (float(getattr(a, band_prop)), a_before), errors)
+        check(abs(spin_a.value() - band_side(entry, BAND_A)[3]) < 1e-9,
+              "the refused editor was not put back to the width the panel "
+              "reports (%g, expected %g)"
+              % (spin_a.value(), band_side(entry, BAND_A)[3]), errors)
 
         # -- ... and B was never dragged into it -----------------------
         b_shown_before = spin_b.value()
@@ -2328,22 +2392,22 @@ def test_band_edit_validation_is_per_patch(doc):
         check("band cells" not in msgs,
               "the same width was refused on the CLEAN patch B: %r" % msgs,
               errors)
-        check(list(getattr(b, b_band_prop) or []) != b_before,
-              "the valid width was not written to B: %r"
-              % list(getattr(b, b_band_prop) or []), errors)
-        check(list(getattr(a, band_prop) or []) == a_before,
-              "the successful edit on B also wrote A: %r"
-              % list(getattr(a, band_prop) or []), errors)
+        check(float(getattr(b, b_band_prop)) != b_before,
+              "the valid width was not written to B: %g"
+              % float(getattr(b, b_band_prop)), errors)
+        check(float(getattr(a, band_prop)) == a_before,
+              "the successful edit on B also wrote A: %g"
+              % float(getattr(a, band_prop)), errors)
         check(abs(spin_b.value() - 0.2) < 1e-9,
               "the Band B editor does not show the width it just wrote "
               "(%g)" % spin_b.value(), errors)
-        check(abs(spin_a.value() - (a_before[0] if a_before else 0.1))
-              < 1e-9,
-              "the successful edit on B moved the Band A editor (%g)"
-              % spin_a.value(), errors)
-        checks.append("0.2 refused on A (two cells), accepted on B (one); "
-                      "only the refused spin restored, neither editor "
-                      "leaked onto the other patch")
+        check(abs(spin_a.value() - band_side(entry, BAND_A)[3]) < 1e-9,
+              "the successful edit on B moved the Band A editor (%g, "
+              "expected %g)" % (spin_a.value(), band_side(entry, BAND_A)[3]),
+              errors)
+        checks.append("0.2 refused on A (its axis has no band cell), "
+                      "accepted on B (one); only the refused spin restored, "
+                      "neither editor leaked onto the other patch")
     finally:
         _close_panel(panel)
         Gui.Selection.clearSelection()
@@ -2396,26 +2460,31 @@ def _stacked_pair(doc):
     return a, b, shared
 
 
-def test_band_width_at_the_middle_is_not_stored_even_at_the_1_end(doc):
-    """#75: a width at or past the middle of the patch has NO end of the
-    axis to be stored at, and the panel's own write path must not store
-    one as if it did.
+def test_a_half_width_is_ordinary_and_the_axis_ends_are_not(doc):
+    """#75 restated by #82: what the panel may store is now a question
+    about the SENTINELS, not about the middle of the axis.
 
-    Driven through `write_band_split` -- the same call the editor makes,
-    not a hand-built split list -- and asserted as a ROUND TRIP: what
-    `band_side` reports after the write is what the editor is seeded
-    from and what the user sees. Before the fix, a written 0.5 stayed on
-    the patch and read back as the 0.1 DEFAULT, so the panel showed a
-    number nobody typed.
+    #75 refused a width at or past 0.5, because a stored value had to be
+    CLASSIFIED into an end by comparing it with the midpoint, and 0.5
+    belonged to neither end -- so half the range was a width nothing
+    could read back, and 0.5 itself was the value that LOOKED storable
+    (it is the identity of the width<->edge mapping at either end). With
+    the edges named per end (#82) there is no classification left, so
+    0.5 -- and 0.9, and every value between -- is an ordinary band edge
+    at either end and round-trips.
+
+    What stays refused is the two ENDS of the interval: `Split1 = 0` and
+    `Split2 = 1` are the properties' own way of saying "no band at this
+    end", so a width of exactly 0 or 1 would store the absence of a band
+    while the panel believed it stored a width -- the display bug #75
+    reports. This is driven through `write_band_split`, the same call the
+    editor makes, and asserted as a ROUND TRIP: what `band_side` reports
+    after the write is what the editor is seeded from and what the user
+    sees.
 
     BOTH ends, which is the point of `_stacked_pair`: patch A shares the
     seam at its parametric-1 end (a width is stored as 1 - width) and
-    patch B at its parametric-0 end (stored as the width), and 0.5 is the
-    identity of that mapping at either end -- so one value that looks
-    perfectly ordinary reaches both editors. `split_at_end` is NOT
-    touched: the midpoint really belongs to neither end, so the write side
-    adapts to it.
-    """
+    patch B at its parametric-0 end (stored as the width)."""
     errors, checks = [], []
     from SilkTaskPanel import BAND_A, BAND_B, band_side, band_width_problem, \
         write_band_split, _side_of
@@ -2426,76 +2495,98 @@ def test_band_width_at_the_middle_is_not_stored_even_at_the_1_end(doc):
     b_prop, b_ss = _side_of(b, a)          # B: the parametric-0 end
     check((a_ss, b_ss) == (1, 0),
           "the stacked fixture gives ends (ss A=%r, ss B=%r); both are "
-          "needed for #75" % (a_ss, b_ss), errors)
+          "needed here" % (a_ss, b_ss), errors)
     entry = {"edge": shared, "patch_a": a, "patch_b": b,
              "status": "blendable", "blend": None}
     sides = ((BAND_A, a, a_prop, a_ss), (BAND_B, b, b_prop, b_ss))
 
-    # -- control: an ordinary width IS written and read back at both ends
+    # -- ordinary AND wide widths both store and read back at both ends
     for which, p, prop, ss in sides:
         stored = 1.0 - 0.45 if ss else 0.45
         check(write_band_split(entry, which, 0.45),
               "%s: the panel refused its own seeding width 0.45" % which,
               errors)
-        check(list(getattr(p, prop)) == [stored],
-              "%s: writing 0.45 stored %r on %s.%s (ss=%d), expected [%g]"
-              % (which, list(getattr(p, prop)), p.Name, prop, ss, stored),
+        check(abs(float(getattr(p, prop)) - stored) < 1e-12,
+              "%s: writing 0.45 stored %g on %s.%s (ss=%d), expected %g"
+              % (which, float(getattr(p, prop)), p.Name, prop, ss, stored),
               errors)
         check(abs(band_side(entry, which)[3] - 0.45) < 1e-9,
-              "%s: a stored 0.45-wide band reads back as %g -- the reader "
-              "is not merely broken in general, only at the middle"
+              "%s: a stored 0.45-wide band reads back as %g"
               % (which, band_side(entry, which)[3]), errors)
+    # ... and 0.5 -- the value #75 used to refuse as unreadable -- is now
+    # an ordinary edge at BOTH ends, and survives a recompute.
+    for which, p, prop, ss in sides:
+        check(write_band_split(entry, which, 0.5),
+              "%s: the panel still refuses a 0.5 width -- #75's refusal was "
+              "about the classification #82 removed" % which, errors)
+        doc.recompute()
+        stored = float(getattr(p, prop))
+        check(abs(stored - (0.5 if ss == 0 else 0.5)) < 1e-12,
+              "%s: a 0.5 width stored %g on %s.%s (end %d)"
+              % (which, stored, p.Name, prop, ss), errors)
+        check(abs(band_side(entry, which)[3] - 0.5) < 1e-9,
+              "%s: a 0.5 width reads back as %g -- the #75 display bug is "
+              "not gone" % (which, band_side(entry, which)[3]), errors)
+    checks.append("0.45 and 0.5 written and read back at BOTH ends -- the "
+                  "midpoint is an ordinary edge now")
 
-    # -- the midpoint, then the half above it: nothing is stored, and the
-    #    refusal is not silent.
-    for which, p, prop, _ss in sides:
-        before = list(getattr(p, prop))
-        for width in (0.5, 0.55, 0.9):
+    # -- the SENTINELS: nothing is stored, and the refusal is not silent
+    for which, p, prop, ss in sides:
+        before = float(getattr(p, prop))
+        for width in (0.0, 1.0):
             with _Capture() as cap:
                 wrote = write_band_split(entry, which, width)
             msgs = "".join(cap.errors)
             check(not wrote,
-                  "%s: write_band_split(0.5) wrote it anyway (%r)"
-                  % (which, list(getattr(p, prop))), errors)
+                  "%s: write_band_split(%g) wrote it anyway (%g)"
+                  % (which, width, float(getattr(p, prop))), errors)
             check("%g" % width in msgs,
                   "%s: the refusal for %g does not name the number it "
                   "refused: %r" % (which, width, msgs), errors)
-            check(list(getattr(p, prop)) == before,
-                  "%s: the refused width %g still moved %s.%s (%r)"
-                  % (which, width, p.Name, prop, list(getattr(p, prop))),
+            check(float(getattr(p, prop)) == before,
+                  "%s: the refused width %g still moved %s.%s (%g)"
+                  % (which, width, p.Name, prop, float(getattr(p, prop))),
                   errors)
-        check(abs(band_side(entry, which)[3] - 0.45) < 1e-9,
+        check(abs(band_side(entry, which)[3] - 0.5) < 1e-9,
               "%s: after the refused write the panel would show %g, not "
-              "the 0.45 the patch holds -- the #75 display bug"
+              "the 0.5 the patch holds -- the #75 display bug"
               % (which, band_side(entry, which)[3]), errors)
 
-    # -- the rule itself, at both ends: 0.5 and everything wider
+    # -- the rule itself, at both ends: only the ends of the interval
     for ss in (0, 1):
-        for width in (0.5, 0.55, 0.9):
+        for width in (0.0, 1.0):
             check(band_width_problem(width, ss) is not None,
-                  "ss=%d: a width of %g is accepted as storable at that end"
-                  % (ss, width), errors)
-        check(band_width_problem(0.45, ss) is None,
-              "ss=%d: a width of 0.45 is refused" % ss, errors)
-    checks.append("0.45 written and read back at both ends; 0.5 / 0.55 / "
-                  "0.9 refused loudly at both ends, patch untouched, "
-                  "round trip intact")
+                  "ss=%d: a width of %g is accepted as storable at that "
+                  "end -- it IS that end's sentinel" % (ss, width), errors)
+        for width in (0.05, 0.45, 0.5, 0.75, 0.95):
+            check(band_width_problem(width, ss) is None,
+                  "ss=%d: a width of %g is refused" % (ss, width), errors)
+    checks.append("0 and 1 refused loudly at both ends (they are the "
+                  "sentinels), patch untouched, round trip intact; 0.05 to "
+                  "0.95 accepted at both")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 def test_band_editor_offers_no_width_the_panel_cannot_read_back(doc):
     """#75, the half the user actually touches: the EDITOR.
 
-    Two reachable paths to the midpoint, both closed by the editor's own
-    domain rather than by a refusal after the fact:
+    Since #82 the editor's domain is the whole open interval (0, 1) --
+    every width in it is an ordinary, readable band edge at either end --
+    and the two values it stops short of are the SENTINELS:
 
-      * TYPING 0.5 (or anything wider) -- an out-of-range number is not
-        accepted at all; the editor keeps showing the width its patch
-        stores, so the display and the property still agree.
-      * ARROW-STEPPING up to it -- the single step is 0.05, so from 0.45
-        the next step lands exactly on 0.50. The range stops below the
-        middle, so the step is clamped at the widest usable width instead
-        of resting on one nothing can read back.
+      * TYPING 0 or 1 -- a band's own endpoint means "no band at this
+        end", so the widget does not accept the number at all; the editor
+        keeps showing the width its patch stores, so the display and the
+        property still agree.
+      * ARROW-STEPPING -- the single step is 0.05, so from 0.95 the next
+        step would land exactly on 1.0. The range stops just short, so
+        the step is clamped at the widest usable width instead of resting
+        on one nothing can read back.
+
+    And the whole middle of the range, which #75 refused and #82 made
+    ordinary, is typed and committed for real, through the keystroke path,
+    and read back off the patch -- so this test proves the domain is
+    genuinely the full interval rather than a narrowed one.
 
     Asserted on BOTH editors of the row (`_stacked_pair`), i.e. at both
     ends of the axis, and as a ROUND TRIP through the panel: the value
@@ -2516,12 +2607,12 @@ def test_band_editor_offers_no_width_the_panel_cannot_read_back(doc):
     # Seed BOTH patches through the panel's own write path BEFORE the
     # panel is opened, so the editors mount already holding a width they
     # can read back -- and assert the probe starts from nothing, since a
-    # leftover split would answer these questions by itself.
+    # leftover edge would answer these questions by itself.
     for which, p, prop, ss in sides:
-        check(not (list(getattr(p, prop) or [])),
-              "%s: the probe does not start clean -- %s.%s already holds %r"
-              % (band_label(which), p.Name, prop,
-                 list(getattr(p, prop) or [])), errors)
+        check(not (0.0 < float(getattr(p, prop)) < 1.0),
+              "%s: the probe does not start clean -- %s.%s already holds %g"
+              % (band_label(which), p.Name, prop, float(getattr(p, prop))),
+              errors)
         with _Capture() as cap:
             seeded = write_band_split(entry, which, 0.45)
         check(seeded and not cap.errors,
@@ -2545,22 +2636,27 @@ def test_band_editor_offers_no_width_the_panel_cannot_read_back(doc):
                 continue
             # -- state is clean before anything is touched ----------------
             if not check(abs(spin.value() - 0.45) < 1e-9,
-                         "%s: the editor opens on %g with the patch at %r"
-                         % (what, spin.value(), list(getattr(p, prop))),
+                         "%s: the editor opens on %g with the patch at %g"
+                         % (what, spin.value(), float(getattr(p, prop))),
                          errors):
                 continue
 
-            # -- the domain: nothing at or past the middle is on offer --
-            check(spin.maximum() < 0.5,
-                  "%s: the editor offers up to %g, which no end of the "
-                  "axis can store (#75)"
+            # -- the domain: the whole open interval, stopping short of
+            #    the sentinels on both sides
+            check(spin.maximum() < 1.0,
+                  "%s: the editor offers up to %g, which is the end's own "
+                  "sentinel and means 'no band here'"
                   % (what, spin.maximum()), errors)
             check(spin.minimum() > 0.0,
-                  "%s: the editor offers %g, a zero-width band"
-                  % (what, spin.minimum()), errors)
+                  "%s: the editor offers %g, which is the other end's own "
+                  "sentinel" % (what, spin.minimum()), errors)
+            check(spin.maximum() >= 0.5,
+                  "%s: the editor still stops below the middle (%g) -- #75's "
+                  "old domain, which #82 removed" % (what, spin.maximum()),
+                  errors)
 
             # -- TYPED: an ordinary width, first, as the CONTROL ---------
-            # If the keystroke path were not live, the midpoint case
+            # If the keystroke path were not live, the sentinel cases
             # below would "pass" because nothing was ever committed.
             _type_width(spin, 0.2)
             with _Capture() as cap:
@@ -2571,18 +2667,18 @@ def test_band_editor_offers_no_width_the_panel_cannot_read_back(doc):
                   and not cap.errors,
                   "%s: typing 0.2 and pressing Enter did not round-trip "
                   "(editor %g, read back %g, console %r) -- the keystroke "
-                  "path the midpoint case relies on is not live"
+                  "path the sentinel cases rely on is not live"
                   % (what, spin.value(), band_side(entry, which)[3],
                      cap.errors), errors)
 
-            # -- TYPED: 0.5, then wider ---------------------------------
-            for typed in (0.5, 0.9):
+            # -- TYPED: the sentinels, which are the only refusals ------
+            for typed in (0.0, 1.0):
                 # the REAL keystroke path again: type it, press Enter,
                 # which is the editor's own commit (`_commit_spin`, so
                 # the typed text is interpreted exactly once) and then
                 # the confirm.
                 _type_width(spin, typed)
-                before = list(getattr(p, prop) or [])
+                before = float(getattr(p, prop))
                 with _Capture() as cap:
                     _enter_key(spin.lineEdit())
                 doc.recompute()
@@ -2590,21 +2686,37 @@ def test_band_editor_offers_no_width_the_panel_cannot_read_back(doc):
                       "%s: typing %g left the editor showing %g, which is "
                       "neither what was typed nor the 0.2 the patch holds"
                       % (what, typed, spin.value()), errors)
-                check(list(getattr(p, prop) or []) == before,
-                      "%s: typing %g was written to %s.%s anyway: %r"
-                      % (what, typed, p.Name, prop,
-                         list(getattr(p, prop))), errors)
+                check(float(getattr(p, prop)) == before,
+                      "%s: typing %g was written to %s.%s anyway: %g"
+                      % (what, typed, p.Name, prop, float(getattr(p, prop))),
+                      errors)
 
-            # -- ARROWS: the step that lands on the midpoint -------------
+            # -- TYPED: the whole middle, which is now ordinary ---------
+            for typed in (0.5, 0.9):
+                _type_width(spin, typed)
+                with _Capture() as cap:
+                    _enter_key(spin.lineEdit())
+                doc.recompute()
+                check(abs(spin.value() - typed) < 1e-9
+                      and abs(band_side(entry, which)[3] - typed) < 1e-9
+                      and not cap.errors,
+                      "%s: typing %g did not round-trip (editor %g, read "
+                      "back %g, console %r) -- the middle of the range is "
+                      "not editable"
+                      % (what, typed, spin.value(),
+                         band_side(entry, which)[3], cap.errors), errors)
+
+            # -- ARROWS: the step that would land on the sentinel ------
             stepped = []
-            spin.setValue(0.45)
+            spin.setValue(spin.maximum() - 0.05)
             for _ in range(8):
                 spin.stepBy(1)
                 stepped.append(spin.value())
             for _ in range(8):
                 spin.stepBy(-1)
                 stepped.append(spin.value())
-            bad = sorted(set(v for v in stepped if v >= 0.5 - 1e-12))
+            bad = sorted(set(v for v in stepped if v >= 1.0 - 1e-12
+                             or v <= 0.0))
             check(not bad,
                   "%s: stepping rested on a width the panel cannot read "
                   "back: %r" % (what, bad), errors)
@@ -2618,13 +2730,14 @@ def test_band_editor_offers_no_width_the_panel_cannot_read_back(doc):
             # it): it becomes the patch's width when something commits the
             # edit in flight -- a refresh, or the OK button. So the round
             # trip is re-read AFTER one, off the re-mounted editor.
-            spin.setValue(0.45)
+            spin.setValue(spin.maximum() - 0.05)
             spin.stepBy(1)
             landed = spin.value()
             check(abs(landed - spin.maximum()) < 1e-9,
-                  "%s: one step up from 0.45 landed on %g, not the top of "
+                  "%s: one step up from %g landed on %g, not the top of "
                   "the range (%g) -- the arrow path was not exercised"
-                  % (what, landed, spin.maximum()), errors)
+                  % (what, spin.maximum() - 0.05, landed, spin.maximum()),
+                  errors)
             panel.refresh()
             remounted = panel.split_editor(shared, which)
             check(remounted is not None
@@ -2637,20 +2750,20 @@ def test_band_editor_offers_no_width_the_panel_cannot_read_back(doc):
                   "%s: the arrow's %g reads back as %g off %s.%s"
                   % (what, landed, band_side(entry, which)[3], p.Name, prop),
                   errors)
-        checks.append("both editors typed 0.5 / 0.9 (not accepted, patch "
-                      "and panel in agreement) and stepped through the "
-                      "midpoint without resting on it; the top of the "
-                      "range round-trips at both ends")
+        checks.append("both editors: the whole open interval is offered and "
+                      "typed (0.2, 0.5, 0.9 round-trip), the two sentinels "
+                      "are not accepted and stepping never rests on them; "
+                      "the top of the range round-trips at both ends")
     finally:
         _close_panel(panel)
         Gui.Selection.clearSelection()
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_panel_band_edits_round_trip_within_the_split_limit(doc):
+def test_panel_band_edits_round_trip_at_both_ends(doc):
     """#76 must not cost the panel anything: band editing is the one place
-    a user writes a split on purpose, so it has to keep working after an
-    over-limit list became a refusal.
+    a user writes a split on purpose, so it has to keep working after the
+    over-limit refusal -- and after #82 made that limit a TYPE.
 
     Driven through `write_band_split` -- the call the editor makes -- at
     BOTH ends (`_stacked_pair`: patch A at its parametric-1 end, patch B at
@@ -2659,17 +2772,15 @@ def test_panel_band_edits_round_trip_within_the_split_limit(doc):
     are the three ways this could have gone wrong:
 
       * a width still round-trips at both ends, including repeated writes
-        at the SAME end (which REPLACE the split there -- the panel's
-        write is an edit of one end's split, never an append);
-      * no editor write can leave an axis over the limit, because the
-        stored parametric split is derived from a width the editor's own
-        range already keeps under the middle;
+        at the SAME end (which REPLACE that end's edge -- the panel's
+        write is an edit of one property, never an append);
+      * no editor write can leave an axis carrying more than the two
+        named edges, because the property it writes IS one end's edge;
       * and on real corner geometry, every strip still resolves to one
-        band cell and keeps its 24 poles -- the geometry the limit is
+        band cell and keeps its 24 poles -- the geometry the limit was
         protecting, not just the property.
     """
     errors, checks = [], []
-    from SilkMachinery import split_limit_problem
     from SilkTaskPanel import BAND_A, BAND_B, band_side, write_band_split, \
         _side_of
     from Tests.test_seam_resolver import _Capture
@@ -2693,20 +2804,23 @@ def test_panel_band_edits_round_trip_within_the_split_limit(doc):
             check(abs(got - width) < 1e-9,
                   "%s: wrote %g, read back %g -- the round trip the #76 "
                   "refusal could have broken" % (what, width, got), errors)
-            vals = [float(v) for v in (getattr(_p, prop) or [])]
-            check(len(vals) <= 1,
+            pair = _axis_pair(_p, prop)
+            check(abs(pair[ss] - (width if ss == 0 else 1.0 - width))
+                  < 1e-9,
                   "%s: after writing %g the axis holds %r -- one editor "
-                  "must never append a second split at the same end"
-                  % (what, width, vals), errors)
-            check(split_limit_problem(vals) is None,
-                  "%s: the panel's own write left an over-limit axis %r"
-                  % (what, vals), errors)
+                  "writes the ONE property that names its end"
+                  % (what, width, pair), errors)
+            check(pair[1 - ss] == (1.0 if ss == 0 else 0.0),
+                  "%s: after writing %g the OTHER end moved to %g -- the "
+                  "editor must write one end only"
+                  % (what, width, pair[1 - ss]), errors)
         check("Invalid" not in _p.State and _p.isValid() is True,
               "%s: the patch is flagged after ordinary band edits (State=%r, "
               "isValid=%r)" % (what, _p.State, _p.isValid()), errors)
     checks.append("band widths 0.05 / 0.2 / 0.45 / 0.3 / 0.45 written and read "
                   "back at BOTH ends through the panel's own write path; each "
-                  "end holds exactly one split and no axis goes over limit")
+                  "write lands on its own end's property and the other end "
+                  "never moves")
 
     # ...and on corner geometry, where a patch really is seamed on both
     # axes, the strips still build.
@@ -2739,16 +2853,17 @@ def test_panel_band_edits_round_trip_within_the_split_limit(doc):
               "%s: %d poles after the width edit, want 24"
               % (what, len(strip.Poles or [])), errors)
     for pname, patch in model["patches"].items():
-        for prop in ("USplits", "VSplits"):
-            vals = [float(v) for v in (getattr(patch, prop) or [])]
-            check(split_limit_problem(vals) is None,
-                  "%s.%s = %r is over the limit after the panel edits"
-                  % (pname, prop, vals), errors)
+        for prop in BAND_PROPS:
+            v = float(getattr(patch, prop))
+            check(0.0 <= v <= 1.0,
+                  "%s.%s = %g is not a position on the axis"
+                  % (pname, prop, v), errors)
             check("Invalid" not in patch.State,
                   "%s.%s left the patch flagged (State=%r)"
                   % (pname, prop, patch.State), errors)
     checks.append("all 4 corner strips still build 24 poles after a panel "
-                  "width edit, and every patch axis stays within the limit")
+                  "width edit, and every patch axis still holds one edge "
+                  "per end")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -2766,7 +2881,6 @@ def test_asymmetric_band_widths_blend_green_and_differ_from_symmetric(doc):
     different widths on two differently-parametrized patches."""
     errors, checks = [], []
     from SilkChecks import check_blend
-    from SilkMachinery import split_at_end
     from SilkTaskPanel import BAND_A, BAND_B, read_band_split
     from Tests.test_seam_resolver import _Capture
 
@@ -2838,16 +2952,12 @@ def test_asymmetric_band_widths_blend_green_and_differ_from_symmetric(doc):
             sb.setValue(0.35)
             sb.editingFinished.emit()
             doc.recompute()
-            check(split_at_end(list(getattr(pa, read[0]) or []), read[1])
-                  is not None
-                  and abs(split_at_end(list(getattr(pa, read[0]) or []),
-                                       read[1]) - 0.2) < 1e-9,
-                  "patch A did not take 0.2: %r"
-                  % list(getattr(pa, read[0]) or []), errors)
-            check(abs(split_at_end(list(getattr(pb, read[3]) or []),
-                                   read[4]) - 0.35) < 1e-9,
-                  "patch B did not take 0.35: %r"
-                  % list(getattr(pb, read[3]) or []), errors)
+            check(abs(_stored_width(pa, read[0], read[1]) - 0.2) < 1e-9,
+                  "patch A.%s did not take 0.2: it holds edge %g"
+                  % (read[0], float(getattr(pa, read[0]))), errors)
+            check(abs(_stored_width(pb, read[3], read[4]) - 0.35) < 1e-9,
+                  "patch B.%s did not take 0.35: it holds edge %g"
+                  % (read[3], float(getattr(pb, read[3]))), errors)
 
             asy_poles = [Vector(p) for p in sym_bl.Poles]
             check(len(asy_poles) == 24,
@@ -2888,7 +2998,6 @@ def test_setting_both_editors_to_the_same_value_writes_both(doc):
     both editors writes BOTH patches, each in its own transaction, and the
     blend reads it on both sides."""
     errors, checks = [], []
-    from SilkMachinery import split_at_end
     from SilkTaskPanel import BAND_A, BAND_B, read_band_split
     from Tests.test_seam_resolver import _square_patch, _patch_sharing
 
@@ -2920,10 +3029,10 @@ def test_setting_both_editors_to_the_same_value_writes_both(doc):
               "per patch)" % (_undo_count(doc) - undo_before), errors)
         for p, prop, ss, what in ((a, read[0], read[1], "A"),
                                   (b, read[3], read[4], "B")):
-            got = split_at_end(list(getattr(p, prop) or []), ss)
-            check(got is not None and abs(got - 0.25) < 1e-9,
-                  "%s.%s reads %r, expected 0.25"
-                  % (what, prop, list(getattr(p, prop) or [])), errors)
+            got = _stored_width(p, prop, ss)
+            check(abs(got - 0.25) < 1e-9,
+                  "%s.%s reads width %g (edge %g), expected 0.25"
+                  % (what, prop, got, float(getattr(p, prop))), errors)
         check(abs(panel.split_editor(edge, BAND_A).value() - 0.25) < 1e-9
               and abs(panel.split_editor(edge, BAND_B).value() - 0.25)
               < 1e-9,
@@ -3022,85 +3131,96 @@ def test_blocked_row_is_not_actionable_and_has_no_editor(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-# ---- the split warning threshold (the #62 follow-up) ----------------------
+# ---- writing a band edge through the panel (#62's threshold, restated) ----
 
-def test_split_warning_only_fires_on_a_wholesale_discard(doc):
-    """#62's "not strictly inside (0, 1)" warning fired on the property
-    editor's TRANSIENT commits: typing 0.2 commits a bare 0 on the way, so
-    `USplits = [0]` briefly normalized to `[]` and printed an error while
-    the user was still typing.
+def test_a_band_write_through_the_panel_is_silent(doc):
+    """What #62 spent a threshold on no longer has a case.
 
-    The threshold is now: a NON-EMPTY input that discards EVERY one of its
-    values is the genuinely suspicious case and is reported (naming the
-    values); anything that keeps at least one is corrected in silence. The
-    normalization itself is untouched -- the stored list always equals what
-    the geometry used, which the cell count proves here."""
+    #62's rule was about a LIST: typing 0.2 in the property editor commits
+    a bare 0 on the way, `USplits = [0]` briefly lost every value, and the
+    console scolded the user mid-keystroke -- so the warning was narrowed
+    to "a non-empty input that discards EVERY value".
+
+    With one named edge per end (#82) there is no list, so there is no
+    partial correction and no wholesale-discard-that-was-really-a-
+    transient: a value outside [0, 1] is either a real mistake (1.5, -0.2)
+    or this slot's own sentinel (0.0 on Split1, 1.0 on Split2), and both
+    are stored, both mean something, and the first kind is REPORTED. So
+    the threshold is gone and the property editor's transient 0 is now a
+    legal write rather than a discarded one.
+
+    What this pins is the other half, which the threshold was protecting:
+    a write that comes from the panel is SILENT. `write_band_split` is the
+    call the editor makes, and it writes a width already inside the
+    editor's own domain, so it must never print an error -- otherwise the
+    console is nagging the user about input the panel produced itself."""
     errors, checks = [], []
-    from Tests.test_seam_resolver import _Capture, _square_patch
+    from SilkTaskPanel import (BAND_A, BAND_B, band_side, write_band_split,
+                               _side_of)
+    from Tests.test_seam_resolver import _Capture, _square_patch, \
+        _patch_sharing
 
-    p = _square_patch(doc, "W")
+    a = _square_patch(doc, "W")
+    b = _patch_sharing(doc, a.Edges[0], "W2")
+    doc.recompute()
+    entry = {"edge": a.Edges[0], "patch_a": a, "patch_b": b,
+             "status": "blendable", "blend": None}
+    sides = ((BAND_A, a) + _side_of(a, b), (BAND_B, b) + _side_of(b, a))
 
-    def stored(prop):
-        return [round(float(v), 12) for v in (getattr(p, prop) or [])]
+    # -- every width the editor can produce: stored exactly, and SILENT
+    for which, p, prop, ss in sides:
+        for width in (0.05, 0.2, 0.25, 0.45, 0.5, 0.8, 0.95):
+            with _Capture() as cap:
+                wrote = write_band_split(entry, which, width)
+            if not wrote:
+                errors.append("%s.%s: the panel refused its own width %g"
+                              % (p.Name, prop, width), errors)
+                continue
+            if cap.errors:
+                errors.append("%s.%s: writing %g through the panel printed "
+                              "%r" % (p.Name, prop, width, cap.errors),
+                              errors)
+            stored = float(getattr(p, prop))
+            want = width if ss == 0 else 1.0 - width
+            if abs(stored - want) > 1e-12:
+                errors.append("%s.%s: width %g stored edge %g (want %g)"
+                              % (p.Name, prop, width, stored, want), errors)
+            if abs(band_side(entry, which)[3] - width) > 1e-9:
+                errors.append("%s.%s: width %g reads back as %g"
+                              % (p.Name, prop, width,
+                                 band_side(entry, which)[3]), errors)
+    checks.append("7 widths at both ends through the panel's own write path: "
+                  "each stored exactly, read back exactly, and silent")
 
-    def cells():
-        return len(p.Proxy._subgrids)
-
-    # -- the transient: an emptied list on the way to 0.2, then 0.2 ------
+    # -- the property editor's TRANSIENT is now a legal write ------------
     with _Capture() as cap:
-        p.USplits = []
-    transient_errors = list(cap.errors)
-    with _Capture() as cap2:
-        p.USplits = [0.2]
-    if transient_errors or cap2.errors:
-        errors.append("the transient 0 -> 0.2 sequence warned: %s %s"
-                      % (transient_errors, cap2.errors))
-    if stored("USplits") != [0.2]:
-        errors.append("after the transient the list reads %s, want [0.2]"
-                      % stored("USplits"))
-    if cells() != 2:
-        errors.append("USplits=[0.2] gave %d cells, want 2" % cells())
-    checks.append("transient 0 then 0.2: silent, list [0.2], 2 cells")
-
-    # -- the partial correction: one bad value among good ones -----------
-    for written, want in (([0.0, 0.2], [0.2]), ([0.2, 0.2], [0.2]),
-                          ([0.3, 0.6], [0.3, 0.6])):
-        with _Capture() as cap:
-            setattr(p, "USplits", list(written))
-        if cap.errors:
-            errors.append("USplits = %s was partly corrected and still "
-                          "reported: %s" % (written, cap.errors))
-        if stored("USplits") != want:
-            errors.append("USplits = %s stored as %s, want %s"
-                          % (written, stored("USplits"), want))
-    checks.append("partial corrections (0 dropped, duplicate, reorder) "
-                  "silent and correctly stored")
-
-    # -- the wholesale discard: still reported, still named ------------
-    for written in ([0.0], [1.0], [1.5], [-0.2, 3.0]):
-        with _Capture() as cap:
-            setattr(p, "USplits", list(written))
-        msg = "".join(cap.errors)
-        if not msg.strip():
-            errors.append("USplits = %s lost every value and said nothing"
-                          % written)
-        if not all(("%g" % v) in msg for v in written):
-            errors.append("USplits = %s: the message does not name every "
-                          "rejected value: %r" % (written, msg))
-        if stored("USplits") != []:
-            errors.append("USplits = %s stored as %s, want []"
-                          % (written, stored("USplits")))
-    checks.append("wholesale discards ([0], [1.0], [1.5], [-0.2, 3.0]) "
-                  "still warn and still name the values")
-
-    # -- and the same on the other axis, through a real panel refresh ----
-    with _Capture() as cap:
-        p.VSplits = [0.0, 0.4]
+        p.USplit1 = 0.0          # what a half-typed 0.2 commits on the way
     if cap.errors:
-        errors.append("a partial VSplits correction reported: %s" % cap.errors)
-    if stored("VSplits") != [0.4]:
-        errors.append("VSplits stored as %s, want [0.4]" % stored("VSplits"))
-    checks.append("the V axis follows the same threshold")
+        errors.append("the sentinel 0.0 on Split1 warned: %s" % cap.errors)
+    if float(p.USplit1) != 0.0:
+        errors.append("Split1 = 0.0 stored %g" % float(p.USplit1))
+    with _Capture() as cap:
+        p.VSplit2 = 1.0
+    if cap.errors:
+        errors.append("the sentinel 1.0 on Split2 warned: %s" % cap.errors)
+    checks.append("the sentinels themselves (Split1 = 0, Split2 = 1) are "
+                  "legal, silent writes -- the transient #62 had to "
+                  "special-case is ordinary now")
+
+    # -- a genuine mistake is still corrected AND named -----------------
+    with _Capture() as cap:
+        p.USplit1 = 1.5
+    msg = "".join(cap.errors)
+    if not msg.strip():
+        errors.append("USplit1 = 1.5 was corrected in silence: %s" % cap.errors)
+    if "1.5" not in msg or "USplit1" not in msg:
+        errors.append("the correction of 1.5 does not name the value and "
+                      "the property: %r" % msg)
+    if float(p.USplit1) != 0.0:
+        errors.append("USplit1 = 1.5 stored %g, want its sentinel 0.0"
+                      % float(p.USplit1))
+    checks.append("an out-of-range edge is still corrected to its sentinel "
+                  "and still reported, naming the value and the property")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -3454,7 +3574,6 @@ def test_enter_in_a_band_editor_commits_then_confirms(doc):
     """
     errors, checks = [], []
     from PySide import QtCore
-    from SilkMachinery import split_at_end
     from SilkTaskPanel import BAND_A, _side_of
     from Tests.test_seam_resolver import _square_patch, _patch_sharing
 
@@ -3517,11 +3636,11 @@ def test_enter_in_a_band_editor_commits_then_confirms(doc):
               % (_undo_count(doc) - undo_before), errors)
 
         a_prop, a_ss = _side_of(a, b)
-        stored = split_at_end(list(getattr(a, a_prop) or []), a_ss)
-        check(stored is not None and abs(stored - 0.2) < 1e-9,
-              "the typed width was not committed to %s.%s (%r) -- the confirm "
-              "rebuilt the row before the value was written"
-              % (a.Name, a_prop, list(getattr(a, a_prop) or [])), errors)
+        stored = _stored_width(a, a_prop, a_ss)
+        check(abs(stored - 0.2) < 1e-9,
+              "the typed width was not committed to %s.%s (edge %g) -- the "
+              "confirm rebuilt the row before the value was written"
+              % (a.Name, a_prop, float(getattr(a, a_prop))), errors)
 
         blends = _blend_objects(doc)
         check(len(blends) == 1,
@@ -3565,7 +3684,6 @@ def test_in_progress_band_edit_is_committed_not_dropped_by_a_refresh(doc):
     So an in-progress edit is committed BEFORE the rows are torn down.
     """
     errors, checks = [], []
-    from SilkMachinery import split_at_end
     from SilkTaskPanel import BAND_A, _side_of
     from Tests.test_seam_resolver import _square_patch, _patch_sharing
 
@@ -3602,11 +3720,11 @@ def test_in_progress_band_edit_is_committed_not_dropped_by_a_refresh(doc):
         panel.refresh()
         doc.recompute()
 
-        stored = split_at_end(list(getattr(a, a_prop) or []), a_ss)
-        check(stored is not None and abs(stored - 0.25) < 1e-9,
-              "the refresh dropped the in-progress edit: %s.%s = %r, "
+        stored = _stored_width(a, a_prop, a_ss)
+        check(abs(stored - 0.25) < 1e-9,
+              "the refresh dropped the in-progress edit: %s.%s = %g, "
               "expected 0.25"
-              % (a.Name, a_prop, list(getattr(a, a_prop) or []),), errors)
+              % (a.Name, a_prop, float(getattr(a, a_prop))), errors)
         live = panel.split_editor(edge, BAND_A)
         check(live is not None and live is not spin,
               "the refresh did not rebuild the row", errors)
@@ -3619,10 +3737,10 @@ def test_in_progress_band_edit_is_committed_not_dropped_by_a_refresh(doc):
         _type_width(live, 0.3)
         panel.panel_confirm()
         doc.recompute()
-        stored = split_at_end(list(getattr(a, a_prop) or []), a_ss)
-        check(stored is not None and abs(stored - 0.3) < 1e-9,
+        stored = _stored_width(a, a_prop, a_ss)
+        check(abs(stored - 0.3) < 1e-9,
               "the confirm applied without committing the in-flight edit: "
-              "%s.%s = %r" % (a.Name, a_prop, list(getattr(a, a_prop) or [])),
+              "%s.%s = %g" % (a.Name, a_prop, float(getattr(a, a_prop))),
               errors)
         blends = _blend_objects(doc)
         check(len(blends) == 1 and len(blends[0].Poles or []) == 24,
@@ -3810,13 +3928,13 @@ ALL_TESTS = [
     test_two_band_editors_start_equal_and_name_their_own_patch,
     test_band_edit_validation_is_per_patch,
     # #75
-    test_band_width_at_the_middle_is_not_stored_even_at_the_1_end,
+    test_a_half_width_is_ordinary_and_the_axis_ends_are_not,
     test_band_editor_offers_no_width_the_panel_cannot_read_back,
-    test_panel_band_edits_round_trip_within_the_split_limit,
+    test_panel_band_edits_round_trip_at_both_ends,
     test_asymmetric_band_widths_blend_green_and_differ_from_symmetric,
     test_setting_both_editors_to_the_same_value_writes_both,
     test_blocked_row_is_not_actionable_and_has_no_editor,
-    test_split_warning_only_fires_on_a_wholesale_discard,
+    test_a_band_write_through_the_panel_is_silent,
     test_hint_is_out_of_the_way_and_still_reachable,
     # #73
     test_complete_chain_hides_the_footer_hint,

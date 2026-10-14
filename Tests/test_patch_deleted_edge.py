@@ -230,7 +230,7 @@ def test_healthy_patch_prints_nothing(doc):
             doc.recompute()
             p.touch()
             doc.recompute()
-        p.USplits = [0.5]          # a user-style edit -> live recompute
+        p.USplit1 = 0.5            # a user-style edit -> live recompute
         doc.recompute()
     if cap.errors:
         errors.append("a healthy patch printed errors: %s" % cap.errors)

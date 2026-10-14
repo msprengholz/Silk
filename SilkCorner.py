@@ -26,7 +26,7 @@ import Part
 import ArachNURBS as AN
 
 from SilkBlend import _patch_side, band_cells
-from SilkMachinery import build_intervals as _build_intervals
+from SilkMachinery import build_intervals, split_pair
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -78,11 +78,18 @@ class CornerBlend:
 
     @staticmethod
     def _corner_cell(p, strips, tol):
-        """(iu_c, iv_c, nu, nv) of the 0.1x0.1 corner cell at the
-        4-patch junction of patch p. The U-direction seam gives the V
-        side of the corner, the V-direction seam gives the U side."""
-        nu = len(_build_intervals(list(p.USplits or [])))
-        nv = len(_build_intervals(list(p.VSplits or [])))
+        """(iu_c, iv_c, nu, nv) of the corner cell at the 4-patch junction
+        of patch p. The U-direction seam gives the V side of the corner,
+        the V-direction seam gives the U side.
+
+        `nu` / `nv` are the interval counts of the two named band edges
+        each (#82) -- `len(splits) + 1` used to say "how many splits does
+        this axis carry", and what an axis carries is now, per end, the
+        question "does this end have an edge?". So the count is the
+        number of EDGES on the axis plus one, read off the two properties
+        by name."""
+        nu = len(build_intervals(*split_pair(p, "U")))
+        nv = len(build_intervals(*split_pair(p, "V")))
         iu_c = iv_c = None
         for s in strips:
             other = s.PatchB if s.PatchA is p else s.PatchA

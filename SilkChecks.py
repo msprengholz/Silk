@@ -603,11 +603,11 @@ def _pinned_seam(a_c, b_c, ep0, ep1, tol):
     return None
 
 
-def _oracle_corner_cells(splits, n_intervals):
+def _oracle_corner_cells(s1, s2, n_intervals):
     """Interval indices along one axis that are CORNER cells — reserved
     for the four-cell corner blend op (#28) and excluded from a band.
 
-    Mirror of SilkMachinery.corner_cells (#61), written out again HERE on
+    Mirror of SilkMachinery.corner_cells, written out again HERE on
     purpose: this oracle re-derives the object code's tables instead of
     importing them, so a bug in the object code cannot satisfy the oracle
     (the reason the whole copy exists, since #39). Importing
@@ -616,52 +616,75 @@ def _oracle_corner_cells(splits, n_intervals):
     SilkBlend, which does `from FreeCAD import Gui` and would drag GUI
     dependencies into headless oracle runs.
 
-    The rule: a split is not a width marker at a magic number, it is the
-    far edge of a band at one END of its axis. The split nearest the 0
-    end (the lowest) carved out [0, s] — that interval is the corner cell,
-    drop it; the split nearest the 1 end (the highest) carved out [s, 1] —
-    drop it; a split exactly at 0.5 marks neither (a plain mid-surface
-    subdivision, no band attached to either end). ensure_band_split writes
-    0.1 / 0.9 by default, but the width is the user's, so the literals
-    the pre-#63 oracle hard-coded matched neither 0.2 nor 0.85 and let a
-    corner cell into the band (#61).
+    The rule (#82): each axis carries TWO NAMED band edges, `Split1` for
+    the parametric-0 end and `Split2` for the parametric-1 end, and each
+    end's property holds its own endpoint as the "no band here" sentinel
+    (0.0 on Split1, 1.0 on Split2). An end with an edge carved out the
+    interval that reaches from that end — [0, s] for the 0 end, [s, 1]
+    for the 1 end — and that interval is the corner cell, so drop the
+    first one for Split1 and the last one for Split2. An end holding its
+    sentinel has no band attached, and its end cell is not a corner cell.
 
-    For a split list drawn from {0.1, 0.5, 0.9} — every value the current
-    fixtures use — this is provably identical to the old literal rule (see
-    Tests/test_oracle_band_cells.py); only a user width used to fall
-    through it silently."""
-    s = sorted(set(float(v) for v in (splits or []) if 0.0 < v < 1.0))
-    if not s:
-        return set()
+    Written against the NAMES, not against a value threshold, which is
+    what removes the pre-#82 guess that made a user's 0.2 or 0.85 fall
+    through (#61) and made `[0.2, 0.4]` claim the 1 end had no band (#81).
+    """
+    def has_edge(value):
+        v = float(value)
+        return 0.0 < v < 1.0
     out = set()
-    if s[0] < 0.5:
+    if has_edge(s1):
         out.add(0)
-    if s[-1] > 0.5:
+    if has_edge(s2):
         out.add(n_intervals - 1)
     return out
+
+
+def _oracle_axis(p, letter):
+    """`(Split1, Split2)` of axis `letter` of `p`, read by name.
+
+    Mirrors SilkMachinery.split_pair rather than importing it (same
+    reason as _oracle_corner_cells), and reads an object that has neither
+    property — a pre-#82 file, where the split lists are gone — as the
+    neutral "no band at either end"."""
+    if letter == "U":
+        return (float(getattr(p, "USplit1", 0.0)),
+                float(getattr(p, "USplit2", 1.0)))
+    return (float(getattr(p, "VSplit1", 0.0)),
+            float(getattr(p, "VSplit2", 1.0)))
+
+
+def _oracle_intervals(s1, s2):
+    """The intervals one axis is cut into by its two named band edges.
+
+    Mirrors SilkMachinery.build_intervals rather than importing it (same
+    reason as _oracle_corner_cells)."""
+    s = sorted(set(v for v in (float(s1), float(s2)) if 0.0 < v < 1.0))
+    if not s:
+        return [(0.0, 1.0)]
+    return list(zip([0.0] + s, s + [1.0]))
 
 
 def _oracle_band_cells(p, etype, ss):
     """The oracle's own re-derivation of the subgrid cells a blend's band
     covers on patch p — the #33 "band = pre-computed subgrid cells" rule,
-    with the #61 corner-cell exclusion (see _oracle_corner_cells).
+    with the corner-cell exclusion (see _oracle_corner_cells).
 
     The band runs along the seam in the band interval (0 or last, per ss),
-    spanning the seam-PARALLEL axis' cells; cells at a seam end that carry
-    a seam-axis split are the corner cells and stay out.
+    spanning the seam-PARALLEL axis' cells; a cell at a seam end whose end
+    carries a band edge is a corner cell and stays out.
     """
-    from SilkMachinery import build_intervals as _build_intervals
-
-    us, vs = list(p.USplits or []), list(p.VSplits or [])
-    nu = len(_build_intervals(us))
-    nv = len(_build_intervals(vs))
+    us = _oracle_axis(p, "U")   # the two named band edges per axis (#82)
+    vs = _oracle_axis(p, "V")
+    nu = len(_oracle_intervals(*us))
+    nv = len(_oracle_intervals(*vs))
     if etype[0] == "U":  # seam along U: band fixes V interval, spans U cells
         b = (nv - 1) if ss else 0
-        keep_u = set(range(nu)) - _oracle_corner_cells(us, nu)
+        keep_u = set(range(nu)) - _oracle_corner_cells(us[0], us[1], nu)
         return [a * nv + b for a in sorted(keep_u)]
     # seam along V: band fixes U interval, spans V cells
     a = (nu - 1) if ss else 0
-    keep_v = set(range(nv)) - _oracle_corner_cells(vs, nv)
+    keep_v = set(range(nv)) - _oracle_corner_cells(vs[0], vs[1], nv)
     return [a * nv + b for b in sorted(keep_v)]
 
 
@@ -864,7 +887,6 @@ def _corner_reference_rows(strips, tol=0.01):
     corner_cells) or (None, None) on any inconsistency.
     """
     from SilkBlend import band_cells, _patch_side
-    from SilkMachinery import build_intervals as _build_intervals
     rows = []
     corner_cells = {}
     for s in strips:
@@ -881,8 +903,8 @@ def _corner_reference_rows(strips, tol=0.01):
             return None, None
         li_map = {}
         for pth, e, bc in ((pa, e_a, bca), (pb, e_b, bcb)):
-            nu = len(_build_intervals(list(pth.USplits or [])))
-            nv = len(_build_intervals(list(pth.VSplits or [])))
+            nu = len(_oracle_intervals(*_oracle_axis(pth, "U")))
+            nv = len(_oracle_intervals(*_oracle_axis(pth, "V")))
             iu_c = iv_c = None
             for t in strips:
                 other = t.PatchB if t.PatchA is pth else t.PatchA

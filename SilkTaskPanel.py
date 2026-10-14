@@ -62,10 +62,10 @@
 #    it saved is what pays for the two editors below.
 #
 #    Those editors are TWO, one per patch (#69), because a seam is
-#    bounded by one split on EACH patch and those two are already free to
-#    disagree -- measured on the human's own file, one patch carries
-#    USplits=[0.3] and VSplits=[0.1] for two different seams. Each spin is
-#    seeded from its OWN patch's split, so the ordinary symmetric seam
+#    bounded by one band edge on EACH patch and those two are already free
+#    to disagree -- measured on the human's own file, one patch carries
+#    USplit1 = 0.3 and VSplit1 = 0.1 for two different seams. Each spin is
+#    seeded from its OWN patch's edge, so the ordinary symmetric seam
 #    still shows the same number twice (symmetry stays one gesture) while
 #    a seam that already diverges shows its divergence instead of a
 #    flattering lie about it. One edit validates against its own patch
@@ -96,7 +96,7 @@ except ImportError:  # pragma: no cover - console-only FreeCAD
 from SilkGuide import compute_guide_state
 from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge
 from SilkMachinery import patch_side, build_intervals, \
-    corner_cells, split_at_end, loop_order
+    corner_cells, split_pair, axis_splits, band_at_end, loop_order
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -123,32 +123,26 @@ PATCH_MIN, PATCH_MAX = 3, 4
 BLEND_MIN = 1
 
 # The default band width SilkBlend.ensure_band_split writes when the
-# patch's end of that axis carries no split at all (ss 0 -> 0.1,
-# ss 1 -> 0.9). Shown for an UNSET split so the row is editable before
+# patch's end of that axis carries no band edge at all (ss 0 -> 0.1,
+# ss 1 -> 0.9). Shown for an UNSET edge so the row is editable before
 # the blend writes anything.
 DEFAULT_BAND = (0.1, 0.9)
 
-# The middle of the patch's parametric axis, which belongs to NEITHER
-# end's band (#75). `split_at_end` -- the ONE rule that decides which of
-# a patch's splits is which end's band -- reads a split below it as the
-# parametric-0 end's band and one above it as the parametric-1 end's, so
-# the midpoint itself is not a band marker at all. A width of 0.5 is the
-# identity of `_stored_from_width` at EITHER end, which is exactly what
-# makes it look storable: it is not, and on a patch bounded by seams at
-# both ends of one axis (the four-patch corner patch) 0.5 for each end
-# would leave no middle band -- a degenerate patch, not a display quirk.
-# So the value is EXCLUDED (the write side adapts), and split_at_end is
-# deliberately left alone: the coordinate system is right.
-BAND_MIDPOINT = 0.5
-
-# The band editors' domain: 0 < width < BAND_MIDPOINT, i.e. the half of
-# the axis this end's band can safely occupy without reaching into the
-# other end's. The top of the range is the widest width the editors' own
-# granularity (BAND_SPIN_DECIMALS) can express below the midpoint -- a
-# range that reached 0.5 would offer a value nothing can read back.
+# The band editors' domain: 0 < width < 1, the whole open interval of the
+# axis. #75 capped it below the middle because a stored value had to be
+# CLASSIFIED into an end by comparing it with 0.5, and 0.5 belonged to
+# neither -- so half the range was a width nothing could read back. #82
+# removed the classification (the property NAME is the end), so the whole
+# interval is storable and readable, and 0.5 is an ordinary band edge.
+#
+# The bounds that remain are the SENTINELS: an end's own endpoint (0.0 on
+# Split1, 1.0 on Split2) is how a patch says "no band at this end", so a
+# width of exactly 0 or 1 would store "no band" while the panel believes
+# it stored a width. The top of each range is the widest value the
+# editors' own granularity (BAND_SPIN_DECIMALS) can express inside it.
 BAND_SPIN_DECIMALS = 3
-BAND_SPIN_MIN = 0.001
-BAND_SPIN_MAX = BAND_MIDPOINT - 10 ** -BAND_SPIN_DECIMALS
+BAND_SPIN_MIN = 10 ** -BAND_SPIN_DECIMALS
+BAND_SPIN_MAX = 1.0 - 10 ** -BAND_SPIN_DECIMALS
 BAND_SPIN_STEP = 0.05
 
 # How tall a collection list may grow. The stages collect at most 2
@@ -218,7 +212,7 @@ HINT_TOOLTIP = (
     "Patch: click 3 or 4 edges (4 read a quad fill, 3 the pointed one).\n"
     "Blend: click a seam to collect it, click again to remove it; Enter or "
     "OK blends every collected seam in one undo step. A seam is bounded by "
-    "one band split on EACH of its two patches, so a blended row has an "
+    "one band edge on EACH of its two patches, so a blended row has an "
     "editor per patch (Band A / Band B) -- they start equal, and setting "
     "them apart is deliberate.")
 
@@ -1469,14 +1463,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         """Untick: delete the Blend on this seam, as its own transaction
         (one undo step).
 
-        The band splits DO NOT survive the unblend (#71, reversing #70):
-        in the wizard the Band A / Band B editors ARE the patch's
-        USplits / VSplits property, so there is no other place a width
-        could live -- "if i unset the blend in the wizard, then also
-        remove the corresponding u or v splits value!". The whole band
-        axis therefore goes, the user's own width included, and re-blending
-        rebuilds at the default. A split a SURVIVING blend still needs
-        stays (a patch can carry two seams on one axis).
+        The band edges DO NOT survive the unblend (#71, reversing #70):
+        in the wizard the Band A / Band B editors ARE the patch's band
+        edges, so there is no other place a width could live -- "if i
+        unset the blend in the wizard, then also remove the corresponding
+        u or v splits value!". The whole band axis therefore goes (both
+        ends back to their sentinels, #82), the user's own width included,
+        and re-blending rebuilds at the default. The end a SURVIVING
+        blend still needs stays (a patch can carry two seams on one axis).
 
         The status line says WHICH axes were cleared, read back off the
         patches after the delete -- an untick is destructive to the user's
@@ -1498,8 +1492,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                if p is not None
                and getattr(p, "object_type", None) in ("Patch", "Patch44",
                                                        "Patch33")]
-        before = {p.Name: (list(getattr(p, "USplits", None) or []),
-                           list(getattr(p, "VSplits", None) or []))
+        before = {p.Name: (split_pair(p, "U"), split_pair(p, "V"))
                   for p in fed}
         doc.openTransaction("Silk unblend")
         try:
@@ -1507,12 +1500,13 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         finally:
             doc.commitTransaction()
         self.refresh()
-        cleared = ["%s.%s" % (p.Name, prop)
+        cleared = ["%s.%s" % (p.Name, letter)
                    for p in fed
-                   for prop, idx in (("USplits", 0), ("VSplits", 1))
-                   if before[p.Name][idx]
-                   and not list(getattr(p, prop, None) or [])]
-        tail = ("; band splits removed: %s" % ", ".join(cleared)
+                   for letter in ("U", "V")
+                   if any(axis_splits(*before[p.Name][0 if letter == "U"
+                                                       else 1]))
+                   and not axis_splits(*split_pair(p, letter))]
+        tail = ("; band edges removed: %s" % ", ".join(cleared)
                 if cleared else "")
         self.status_lbl.setText(
             "unblended %s (%s deleted)%s" % (edge.Name, blend_name, tail))
@@ -1532,15 +1526,15 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self.blend_table.setMaximumHeight(wanted)
 
     def _mount_split_editors(self, row, entry):
-        """Expose the band's split on EVERY seam row -- and there are TWO
-        of them now (#69), because a seam is bounded by one split on EACH
+        """Expose the band's edge on EVERY seam row -- and there are TWO
+        of them now (#69), because a seam is bounded by one edge on EACH
         patch.
 
-        Each value comes straight off its OWN patch's USplits/VSplits and
-        each write goes straight back onto that property, which is exactly
-        what #64's blend reads. So an editor is a width, a width is a
-        band, and a band is a cross-section -- there is no panel-side copy
-        to drift.
+        Each value comes straight off its OWN patch's band-edge property
+        (`USplit1` / `USplit2` / `VSplit1` / `VSplit2`, #82) and each write
+        goes straight back onto that same property, which is exactly what
+        #64's blend reads. So an editor is a width, a width is a band, and
+        a band is a cross-section -- there is no panel-side copy to drift.
 
         Blended rows included (#62 follow-up): the seam's band IS the
         blend's cross-section, so a width set here re-drives an existing
@@ -1565,14 +1559,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             spin = QtWidgets.QDoubleSpinBox()
             spin.setDecimals(BAND_SPIN_DECIMALS)
             spin.setSingleStep(BAND_SPIN_STEP)
-            # #75: the range is the half of the axis this end's band can
-            # safely occupy. A value at or past the middle is one the
-            # panel could not read back (`split_at_end` owns the midpoint
-            # for NEITHER end), so it is not offered at all -- a width
-            # typed or stepped to 0.5 is then refused by the widget
-            # itself instead of being stored and silently misread. The
-            # 1-end is not a special case: both ends map width 0.5 to a
-            # split of 0.5, so one range closes both editors.
+            # #82: the range is the whole open interval of the axis, since
+            # an edge is named per end and every position inside (0, 1) is
+            # an ordinary, readable one. Only the ENDS are excluded: 0 and
+            # 1 are the sentinels that mean "no band at this end", so a
+            # width typed or stepped onto them is refused by the widget
+            # itself instead of being stored and silently misread as the
+            # absence of a band. One range closes both editors: both ends
+            # map the same width to mirrored edges.
             spin.setRange(BAND_SPIN_MIN, BAND_SPIN_MAX)
             # No up/down buttons (#69): two editors must fit a 380px dock
             # side by side, and the steppers are ~30px of chrome on each
@@ -1610,7 +1604,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
 
         The per-patch wording (#69) is the point: an editor says WHICH
         patch's property it moves, because after this there are two and
-        "the band split" alone would not say which of them a number is
+        "the band edge" alone would not say which of them a number is
         about."""
         patch, prop, ss, value = band_side(entry, which, read)
         other = BAND_B if which == BAND_A else BAND_A
@@ -1618,10 +1612,10 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         same = abs(o_value - value) < 1e-12
         return (
             "Band width on %s.%s (this seam's %s end).\n"
-            "The blend reads this split, so this is the width the band is "
+            "The blend reads this edge, so this is the width the band is "
             "cut at on that patch.\n"
             "The number shown is the WIDTH from the seam; %s stores the "
-            "parametric split (%g at this end), which is what the "
+            "parametric edge (%g at this end), which is what the "
             "property editor shows -- the two never disagree about what "
             "is stored."
             % (patch.Name, prop, "parametric-0" if ss == 0
@@ -1634,9 +1628,9 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                "symmetric." % (o_patch.Name, o_prop, o_value))
             + ("\nThis seam is blended: editing the width re-drives that "
                "blend." if entry["status"] == "blended" else "")
-            + ("\nThe width stops below %g: at or past the middle of the "
-               "patch no end of the axis owns the split, so it could not "
-               "be read back (#75)." % BAND_MIDPOINT))
+            + ("\nThe width stops short of 1: a band's own end IS the "
+               "'no band at this end' sentinel, so a width of exactly 0 "
+               "or 1 would store the absence of a band instead (#75)."))
 
     def _on_split_edited(self, entry, which=BAND_A, edited=None):
         """One split edit: validate against ITS OWN patch, then write
@@ -1654,8 +1648,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         stops B being edited; each editor owns its own verdict.
 
         Only the refused spin is put back, and from its own patch's
-        stored split, so the panel and the property never disagree and
-        the partner editor is not yanked to a value the user never typed.
+        stored edge, so the panel and the property never disagree and the
+        partner editor is not yanked to a value the user never typed.
         """
         spins = self._split_widgets.get(entry["edge"].Name) or {}
         spin = spins.get(which)
@@ -1677,7 +1671,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             if before is not None:
                 spin.setValue(band_side(entry, which, before)[3])
             self._refuse("Silk: cannot set the band width on %s for %s -- "
-                         "%s. That split was left as it was."
+                         "%s. That edge was left as it was."
                          % (entry["edge"].Name, band_label(which), problem))
             return False
         if not write_band_split(entry, which, value):
@@ -2118,7 +2112,7 @@ def status_reason(entry):
         made = ("%s" % entry["blend"].Name if entry["blend"] is not None
                 else "another blend")
         return ("Blended by %s.\nUntick to unblend it (deletes %s, one "
-                "undo step) -- and that takes the band's splits with it, "
+                "undo step) -- and that takes the band's edges with it, "
                 "so a re-blend starts from the default width. Its band "
                 "editors still work -- a width set here re-drives that "
                 "blend." % (made, made))
@@ -2134,8 +2128,14 @@ def status_reason(entry):
 # ---- band split: read / write / validate ----------------------------------
 
 def _side_of(p, other):
-    """(property_name, side) of the band p contributes to the seam it
+    """(property_name, end) of the band edge p contributes to the seam it
     shares with `other`, or (None, None) when they share no edge.
+
+    #82: the property NAME carries the end. A seam along U fixes a V
+    interval, so the band lives on the V axis; the seam's side is the
+    axis end, so it is the 1 or the 2 of `VSplit1` / `VSplit2`. There is
+    nothing left to look up and nothing to classify by value -- which is
+    exactly what #81 was about.
 
     Tolerates an unresolved pair: a patch that never built (its fill
     failed, or it is mid-recompute) carries no poles to compare, and seam
@@ -2147,24 +2147,36 @@ def _side_of(p, other):
         return None, None
     if etype is None:
         return None, None
-    # A seam along U fixes a V interval, so the band lives in VSplits.
-    return ("VSplits" if etype[0] == "U" else "USplits"), ss
+    letter = "V" if etype[0] == "U" else "U"
+    return "%sSplit%d" % (letter, ss + 1), ss
+
+
+def _axis_of(prop):
+    """The axis letter a band-edge property belongs to (`VSplit2` -> "V")
+    and its end (`VSplit2` -> 1). The inverse of `_side_of`'s naming."""
+    return prop[0], int(prop[-1]) - 1
+
+
+def _pair_of(p, prop):
+    """The `(Split1, Split2)` pair of the axis `prop` belongs to."""
+    letter, _end = _axis_of(prop)
+    return split_pair(p, letter)
 
 
 def _width_from_stored(value, ss):
     """The band WIDTH as the user reads it: the distance from the seam.
 
-    The stored split is a PARAMETRIC position -- 0.1 at the parametric-0
-    end, 0.9 at the parametric-1 end -- so the 1-end reads upside down
-    (a stored 0.9 is a band 0.1 wide). The panel shows the width; the
-    property keeps the parametric split (#70). Module level because the
-    read / write / validate helpers all convert through it."""
+    The stored band edge is a PARAMETRIC position -- 0.1 at the
+    parametric-0 end, 0.9 at the parametric-1 end -- so the 1-end reads
+    upside down (a stored 0.9 is a band 0.1 wide). The panel shows the
+    width; the property keeps the parametric edge (#70). Module level
+    because the read / write / validate helpers all convert through it."""
     return value if ss == 0 else 1.0 - value
 
 
 def _stored_from_width(width, ss):
-    """The parametric split a band WIDTH of `width` means at end `ss`:
-    `width` at the 0-end, 1 - width at the 1-end. The exact inverse of
+    """The band EDGE a band WIDTH of `width` means at end `ss`: `width`
+    at the 0-end, 1 - width at the 1-end. The exact inverse of
     _width_from_stored, so display -> typed -> stored -> display is a
     round-trip at both ends."""
     return width if ss == 0 else 1.0 - width
@@ -2172,55 +2184,49 @@ def _stored_from_width(width, ss):
 
 def band_width_problem(value, ss):
     """Why a band WIDTH of `value` cannot be stored at end `ss` of a
-    patch, or None when it can. #75.
+    patch, or None when it can. #75, restated by #82.
 
-    A width is only a width if the panel can read it back, and it reads
-    back through `split_at_end` -- the single rule that decides which of
-    a patch's splits is which end's band, deliberately the same object
-    the blend and the corner-cell exclusion classify ends with. That rule
-    owns the midpoint for NEITHER end (a split below 0.5 is the
-    parametric-0 end's band, one above it the parametric-1 end's), so the
-    representable widths are the half below the midpoint and the test for
-    one of them is the rule itself: ask `split_at_end` about the split
-    this width would store, and a refusal means the patch would hold a
-    split no reader can attach to this end -- the panel would show
-    DEFAULT_BAND instead, which is the #75 display bug.
+    #75 refused a width at or past the middle of the patch, because a
+    stored value had to be CLASSIFIED into an end by comparing it with
+    0.5 and 0.5 belonged to neither: a width the panel could not read
+    back is a width the panel would silently show as DEFAULT_BAND, and on
+    a patch seamed at both ends of one axis 0.5 for each end left no
+    middle band at all.
 
-    0.5 is the value everyone notices (the identity of
-    `_stored_from_width` at either end, so it looks perfectly ordinary),
-    but every width above it fails the same way, and 0.5 is worse than
-    unreadable: on a patch bounded by seams at BOTH ends of one axis --
-    the four-patch corner patch -- 0.5 for each end leaves no middle
-    band, i.e. a degenerate patch. Hence exclusion rather than a second
-    meaning for the midpoint, and `split_at_end` untouched: the
-    coordinate system is right, the WRITE side has to live with it.
-    """
-    stored = _stored_from_width(float(value), ss)
-    if split_at_end([stored], ss) is not None:
+    With the edges NAMED per end there is no classification left, so the
+    whole class of failure #75 was about is gone: a width of 0.5 -- or
+    0.7, or 0.05 -- is an ordinary position strictly inside (0, 1), is
+    stored on the end that owns it and is read back from that same
+    property. What remains is one narrow case, and it is about the
+    SENTINEL rather than the middle: the endpoints themselves.
+    `USplit1 = 0` and `USplit2 = 1` mean "no band at that end", so a
+    width of exactly 1 would store the sentinel and read back as "no
+    band here" -- the panel would show DEFAULT_BAND, the very display
+    bug #75 reports. Hence the strict upper bound, and no other rule."""
+    width = float(value)
+    if 0.0 < width < 1.0:
         return None
-    return ("a width of %g is at or past the middle of the patch, so it "
-            "is not a width this end can hold: the split that would "
-            "store it (%g here) belongs to neither end, which means it "
-            "could not be read back -- the panel would show the %g "
-            "default instead -- and a patch seamed at both ends of one "
-            "axis would keep no middle band at all. A band width must "
-            "stay under %g."
-            % (float(value), stored,
-               _width_from_stored(DEFAULT_BAND[ss], ss), BAND_MIDPOINT))
+    return ("a width of %g is not a position inside the patch: the edge "
+            "it would store is %g, and a band's own end IS the 'no band "
+            "at this end' sentinel, so the panel could not read it back "
+            "and would show the %g default instead. A band width must "
+            "stay between 0 and 1."
+            % (width, _stored_from_width(width, ss),
+               _width_from_stored(DEFAULT_BAND[ss], ss)))
 
 
 def read_band_split(entry):
-    """BOTH patches' band splits for one seam, as
-    (pa_prop, pa_ss, pa_value, pb_prop, pb_ss, pb_value): which split
+    """BOTH patches' band edges for one seam, as
+    (pa_prop, pa_ss, pa_value, pb_prop, pb_ss, pb_value): which band-edge
     property on each patch carves this seam's band, at which end, and what
-    the value is now. A value the patch does not carry yet reads as the
-    DEFAULT the blend would write (#64 leaves the patch's own split alone
+    the width is now. A value the patch does not carry yet reads as the
+    DEFAULT the blend would write (#64 leaves the patch's own edge alone
     when there is one). Returns None when the pair shares no edge.
 
     The values are WIDTHS (distance from the seam, #70), not the raw
-    parametric splits: a stored 0.9 at the parametric-1 end reads as the
-    0.1-wide band it actually is. The stored USplits/VSplits keep their
-    parametric meaning -- only the panel's display converts.
+    parametric edges: a stored 0.9 at the parametric-1 end reads as the
+    0.1-wide band it actually is. The stored edges keep their parametric
+    meaning -- only the panel's display converts.
 
     Both were always here -- what #69 changes is not the read but what is
     DONE with it: the two halves were being collapsed into one spin box
@@ -2233,7 +2239,7 @@ def read_band_split(entry):
         return None
 
     def value(p, prop, ss):
-        v = split_at_end(list(getattr(p, prop) or []), ss)
+        v = band_at_end(*_pair_of(p, prop), ss)
         v = DEFAULT_BAND[ss] if v is None else float(v)
         return _width_from_stored(v, ss)
     return (pa_prop, pa_ss, value(pa, pa_prop, pa_ss),
@@ -2267,12 +2273,13 @@ def band_label(which):
 
 
 def write_band_split(entry, which, value):
-    """Write `value` onto ONE patch's band split for this seam.
+    """Write `value` onto ONE patch's band edge for this seam.
 
-    Since #64 the blend READS the split rather than asserting a default,
+    Since #64 the blend READS the edge rather than asserting a default,
     so this is the band width -- the panel's stand-in for a fillet
-    radius. The patch keeps it on its own axis and at its own end, and
-    #61 normalizes each list on set.
+    radius. The patch keeps it on its own axis, at its own end, in its
+    own property (#82: `VSplit2` IS the parametric-1 end's edge, so a
+    width is one scalar write and can never grow the axis a second value).
 
     ONE patch, and it is named (`which`) rather than implied: since #69 a
     seam carries two independently sized bands, so "write the width" no
@@ -2282,53 +2289,50 @@ def write_band_split(entry, which, value):
     One transaction -- one undo step per edit -- and it stays OUT of the
     confirm transaction, so a width edit is always undoable on its own.
 
-    #75: a width at or past the middle of the patch is REFUSED, on the
-    console, and nothing is written. The editor's own range cannot
+    #75/#82: a width that is not strictly inside (0, 1) is REFUSED, on
+    the console, and nothing is written. The editor's own range cannot
     produce one, so this is the guard for the paths that do not come
     through the editor -- a script, a property-editor paste, a future
-    expression (#74). Storing it would put a split on the patch that no
-    reader can attach to that end, which is the display bug #75 reports
-    and, on a corner patch, a degenerate source patch."""
+    expression (#74). Storing it would put the band's own end sentinel on
+    the patch, which no reader can attach to this end -- the panel would
+    then show DEFAULT_BAND for it, the display bug #75 reports."""
     p, prop, ss = band_side(entry, which)[:3]
     if p is None or prop is None:
         return False
     unreadable = band_width_problem(value, ss)
     if unreadable:
         FreeCAD.Console.PrintError(
-            "Silk: cannot set the band width on %s.%s -- %s. That split "
-            "was left as it was.\n" % (p.Name, prop, unreadable))
+            "Silk: cannot set the band width on %s.%s -- %s. That edge was "
+            "left as it was.\n" % (p.Name, prop, unreadable))
         return False
-    cur = list(getattr(p, prop) or [])
-    old = split_at_end(cur, ss)
-    new = [v for v in cur if old is None or v != old]
     # `value` is the width the user typed; the property stores the
-    # parametric split at this end (#70).
-    new = sorted(set(new + [_stored_from_width(float(value), ss)]))
+    # parametric edge at this end (#70, #82).
     doc = entry["edge"].Document
     doc.openTransaction("Silk band split")
     try:
-        setattr(p, prop, new)
+        setattr(p, prop, _stored_from_width(float(value), ss))
     finally:
         doc.commitTransaction()
     doc.recompute()
     return True
 
 
-def _band_cell_count(splits_along, splits_band, etype, ss):
-    """How many subgrid cells the band covers, from a CANDIDATE split
+def _band_cell_count(along_pair, band_pair, etype, ss):
+    """How many subgrid cells the band covers, from a CANDIDATE axis
     layout -- the arithmetic of SilkMachinery.band_cells, expressed on
-    lists instead of on a live patch so a width can be checked before it
-    is written.
+    `(Split1, Split2)` pairs instead of on a live patch so a width can be
+    checked before it is written.
 
     Only the shared pure helpers are used (build_intervals, corner_cells);
     Tests/test_task_panel.py pins this against the real band_cells on a
     patch after the write, so the two can never drift apart silently.
     """
-    n_along = len(build_intervals(splits_along))
-    n_band = len(build_intervals(splits_band))
+    n_along = len(build_intervals(*along_pair))
+    n_band = len(build_intervals(*band_pair))
     if etype[0] == "U":     # seam along U: band fixes a V interval
-        return n_along - len(corner_cells(splits_along, n_along))
-    return n_band - len(corner_cells(splits_band, n_band))
+        return n_along - len(corner_cells(along_pair[0], along_pair[1],
+                                          n_along))
+    return n_band - len(corner_cells(band_pair[0], band_pair[1], n_band))
 
 
 def band_cell_problem(entry, which, value=None):
@@ -2337,20 +2341,24 @@ def band_cell_problem(entry, which, value=None):
     and the values that break it.
 
     Per-PATCH since #69. The count is a property of a single patch's
-    split layout -- `along` intervals minus the corner cells, on that
-    patch's own two axes -- so checking it against the pair was never
-    more than checking each patch with a shared candidate. With one spin
-    that was harmless. With two, applying one candidate to both would
-    refuse a width that is perfectly good on the patch it was typed into
-    because the OTHER patch happens to subdivide differently. So `which`
-    is not a convenience: it is the only honest question to ask.
+    layout -- `along` intervals minus the corner cells, on that patch's
+    own two axes -- so checking it against the pair was never more than
+    checking each patch with a shared candidate. With one spin that was
+    harmless. With two, applying one candidate to both would refuse a
+    width that is perfectly good on the patch it was typed into because
+    the OTHER patch happens to subdivide differently. So `which` is not a
+    convenience: it is the only honest question to ask.
 
     #75 adds the question that comes BEFORE the count: is this width one
-    the panel can read back at all (`band_width_problem`)? A width at or
-    past the middle of the patch is refused here rather than stored,
-    because writing it would put a split on the patch that no reader can
-    attach to that end -- the panel would then show DEFAULT_BAND for it,
-    and a corner patch seamed at both ends would lose its middle band.
+    the panel can read back at all (`band_width_problem`)? Since #82 that
+    is only the sentinel case (a width of 0 or 1), because the midpoint
+    and everything above it is now an ordinary, readable edge -- so the
+    count is what still does the work here. It is, however, not a
+    formality: the two ends of ONE axis holding the SAME edge collapse to
+    a single split, and then BOTH end cells are corner cells and the band
+    has none at all. That is the one degenerate layout left, and it comes
+    out of this count as 0.
+
     Judged only when there is a value to judge: `None` is the "just tell
     me what the current layout gives" case (the mirror test, and
     invalid_bands' missing-spin case), where no width is on offer."""
@@ -2364,31 +2372,41 @@ def band_cell_problem(entry, which, value=None):
                                            pb_prop, pb_ss, 0.0))[:3]
     if p is None:
         return ("unknown band side %r" % (which,))
-    # A seam along U fixes a V interval, so the band lives in VSplits:
-    # the direction follows from the property, no second resolution.
-    etype = ("U" if prop == "VSplits" else "V", ss)
-    along_prop = "USplits" if prop == "VSplits" else "VSplits"
+    # A seam along U fixes a V interval, so the band lives on the V axis:
+    # the direction follows from the property's own letter, no second
+    # resolution.
+    letter, end = _axis_of(prop)
+    etype = ("U" if letter == "V" else "V", ss)
+    along_letter = "U" if letter == "V" else "V"
 
     if value is not None:
         unreadable = band_width_problem(value, ss)
         if unreadable:
             return unreadable
 
-    cur = list(getattr(p, prop) or [])
-    old = split_at_end(cur, ss)
-    band = [v for v in cur if old is None or v != old]
-    if value is not None:
-        # `value` is a width; the layout is judged in parametric terms
-        # (#70).
-        band = sorted(set(band + [_stored_from_width(float(value), ss)]))
-    along = list(getattr(p, along_prop) or [])
-    n = _band_cell_count(along, band, etype, ss)
+    # the candidate layout: this end's edge replaced by the typed width,
+    # the OTHER end of the same axis exactly as the patch holds it (#70).
+    band_pair = list(_pair_of(p, prop))
+    band_pair[end] = _stored_from_width(float(value), ss) \
+        if value is not None else band_pair[end]
+    along_pair = split_pair(p, along_letter)
+    n = _band_cell_count(along_pair, band_pair, etype, ss)
     if n != 1:
-        return ("patch %s.%s = %s with %s = %s covers %d band cells "
-                "(exactly 1 is required; multi-cell bands are not "
-                "supported yet)"
-                % (p.Name, prop, ["%g" % v for v in band],
-                   along_prop, ["%g" % v for v in along], n))
+        # the axis the CELL COUNT came from: the seam-parallel one for a
+        # seam along U, the band one otherwise.
+        used_letter, used = ((along_letter, along_pair) if etype[0] == "U"
+                             else (letter, band_pair))
+        same = used[0] == used[1] and 0.0 < used[0] < 1.0
+        return ("patch %s.%s = %g (its other end, %s%s%d, holds %g) covers "
+                "%d band cells with its %s axis at %sSplit1 = %g, %sSplit2 = "
+                "%g (exactly 1 is required)%s"
+                % (p.Name, prop, band_pair[end], letter, "Split", 2 - end,
+                   band_pair[1 - end], n, used_letter, used_letter,
+                   used[0], used_letter, used[1],
+                   " -- both ends of the %s axis hold the same edge, so the "
+                   "axis has one split and both of its end cells are corner "
+                   "cells; give the other end a different width"
+                   % used_letter if same else ""))
     return None
 
 

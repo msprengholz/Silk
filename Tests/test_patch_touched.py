@@ -5,7 +5,7 @@ auto-hide.
 
 Part 1 (the defect): Blend.execute -> run_blend -> ensure_band_split
 writes the band split on both covered Patches. That write fires
-Patch.onChanged's USplits/VSplits branch (`fp.touch(); fp.recompute()`),
+Patch.onChanged's band-edge branch (`fp.touch(); fp.recompute()`),
 and run_blend additionally recomputes both feeds up front. Because
 FreeCAD's DocumentObject.recompute() touches the object it recomputes,
 and Patch.execute itself touches every linked Blend, Patch <-> Blend
@@ -17,7 +17,7 @@ recompute-loop hazard.
 The fix is in SilkPatch.execute: the Patch now purges its own Touched
 flag once its geometry is rebuilt. Nested/forced recomputes from a Blend
 therefore settle, while the #41 live-update chain is untouched: a user
-USplits/VSplits edit still triggers onChanged's touch + recompute (which
+band-edge edit still triggers onChanged's touch + recompute (which
 IS this execute), and execute still touches the linked blends so they
 refresh on the next doc.recompute().
 
@@ -138,9 +138,9 @@ def test_user_split_edit_still_refreshes_blend(doc):
     split assignment (what the property editor does) still recomputes
     the Patch immediately AND still refreshes the linked Blend.
 
-    The perpendicular axis of PA is swept: changing PA.USplits moves
+    The perpendicular axis of PA is swept: changing PA's USplit2 moves
     PA's band-cell indexing, so the blend's 24 poles must change and
-    the oracle stay green. `obj.X = [...]` + recompute is the headless
+    the oracle stay green. `obj.X = value` + recompute is the headless
     equivalent of the property-editor round trip."""
     errors, checks = [], []
     from SilkWorkflowOps import create_blend_by_edge
@@ -157,17 +157,17 @@ def test_user_split_edit_still_refreshes_blend(doc):
                            % len(base_poles)], "checks": checks}
 
     # a user edit on the axis PARALLEL to the seam. PA's seam runs along
-    # U (the blend wrote its band split onto VSplits), so USplits is the
-    # seam-parallel axis and controls the band's cell COUNT -- per #33
-    # only the corner-exclusion values 0.1/0.9 keep it a single cell
-    # (see Tests.test_mutation_unified.SEAM_AXIS_SAFE).
+    # U (the blend wrote its band edge onto the V axis), so the U axis is
+    # seam-parallel and controls the band's cell COUNT -- per #33 only an
+    # edge on one end keeps it a single cell (see
+    # Tests.test_mutation_unified.SEAM_AXIS_SAFE).
     n_before = len(pa.Proxy._subgrids)
-    pa.USplits = [0.9]
+    pa.USplit2 = 0.9
     doc.recompute()
 
     n_cells = len(pa.Proxy._subgrids)
     if n_cells != 2 * n_before:
-        errors.append("pa.USplits=[0.9] produced %d subgrids, expected "
+        errors.append("pa.USplit2=0.9 produced %d subgrids, expected "
                       "%d (one more U interval)" % (n_cells, 2 * n_before))
     new_poles = [tuple(p) for p in blend.Poles]
     if new_poles == base_poles:
@@ -176,7 +176,7 @@ def test_user_split_edit_still_refreshes_blend(doc):
     else:
         dev = max((Vector(*a) - Vector(*b)).Length
                   for a, b in zip(base_poles, new_poles))
-        checks.append("pa.USplits=[0.9] refreshed the blend: 24 poles "
+        checks.append("pa.USplit2=0.9 refreshed the blend: 24 poles "
                       "moved, max dev %.4f mm" % dev)
     if abs(blend.Shape.Area - base_area) > 1e-6:
         checks.append("blend Shape rebuilt: area %.3f -> %.3f"
@@ -222,16 +222,16 @@ def test_headless_property_edit_recomputes_immediately(doc):
     n0 = len(p.Proxy._subgrids)
     legs0 = len(p.Legs)
 
-    p.USplits = [0.5]        # onChanged -> touch + recompute, no doc.recompute
+    p.USplit1 = 0.5          # onChanged -> touch + recompute, no doc.recompute
     n1 = len(p.Proxy._subgrids)
     if n1 != 2:
-        errors.append("USplits write did not recompute: %d subgrids "
+        errors.append("USplit1 write did not recompute: %d subgrids "
                       "(expected 2), no doc.recompute() called"
                       % n1)
     elif n1 == n0:
         errors.append("subgrid count unchanged")
     else:
-        checks.append("USplits write recomputed the patch immediately: "
+        checks.append("USplit1 write recomputed the patch immediately: "
                       "%d -> %d subgrids, legs %d -> %d"
                       % (n0, n1, legs0, len(p.Legs)))
 
@@ -245,12 +245,14 @@ def test_headless_property_edit_recomputes_immediately(doc):
     else:
         checks.append("patch settles on the next doc.recompute")
 
-    p.VSplits = [0.25, 0.75]
+    p.VSplit1 = 0.25
+    p.VSplit2 = 0.75
     if len(p.Proxy._subgrids) != 6:
-        errors.append("VSplits write did not recompute: %d subgrids "
+        errors.append("the two V edges did not recompute: %d subgrids "
                       "(expect 6)" % len(p.Proxy._subgrids))
     else:
-        checks.append("VSplits write recomputed immediately: 6 subgrids")
+        checks.append("two V edges written: recomputed immediately, 6 "
+                      "subgrids")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 

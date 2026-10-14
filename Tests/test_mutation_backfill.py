@@ -123,8 +123,9 @@ def test_mutation_pipeline_shared_edge(doc):
 
 
 def test_mutation_pipeline_change_splits(doc):
-    """Set / remove / sweep USplits on both patches; subgrid cells rebuild
-    and the blend band stays the correct seam-adjacent cell (op 2)."""
+    """Set / remove / sweep the band edges on both patches; subgrid cells
+    rebuild and the blend band stays the correct seam-adjacent cell
+    (op 2)."""
     errors, checks = mo.run_mutations(
         doc, lambda: _build_corner_pair_model(doc), _oracle_corner_pair,
         [functools.partial(mo.change_splits, patch="Patch44"),

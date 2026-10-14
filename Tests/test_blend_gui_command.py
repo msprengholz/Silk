@@ -168,7 +168,7 @@ def test_create_blend_gui_edge_idempotent(doc):
 def test_create_blend_gui_edge_refusals(doc):
     """0 / 1 / 3+ referencing patches: the command routes to the #44
     resolver's refusals -- each message reaches the console, and the
-    document is untouched: no Blend object, no USplits/VSplits
+    document is untouched: no Blend object, no band edges
     written on any patch."""
     errors, checks = [], []
     from SilkBlend import CreateBlend
@@ -193,10 +193,12 @@ def test_create_blend_gui_edge_refusals(doc):
     n = len(_blend_objects(doc))
     check(n == 0,
           "refusing selections created %d blend object(s)" % n, errors)
+    from Tests.test_seam_resolver import _carries_band, _fmt_splits
     for pname in ("A", "B", "C"):
-        u, v = _splits(doc.getObject(pname))
-        check(not u and not v,
-              "refusal wrote splits on %s (U=%s V=%s)" % (pname, u, v),
+        p = doc.getObject(pname)
+        check(not _carries_band(p),
+              "refusal wrote band edges on %s (%s)"
+              % (pname, _fmt_splits(_splits(p))),
               errors)
     expected = ("not used by any patch", "adjacent patch",
                 "not a blendable seam")

@@ -51,7 +51,8 @@ import ArachNURBS as AN
 from popup import tipsDialog
 
 from SilkMachinery import build_subgrids, build_display, \
-    normalize_splits_report, split_limit_problem, _splits_str, loop_order
+    normalize_edge_pair, split_pair, axis_splits, NO_BAND_1, NO_BAND_2, \
+    loop_order
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -88,10 +89,29 @@ class Patch:
                         "endpoint matching tolerance").tolerance = AN.default_tol
         obj.addProperty("App::PropertyBool", "reverse", "C1 - Inputs",
                         "reverse the grid parameter direction").reverse = False
-        obj.addProperty("App::PropertyFloatList", "USplits", "S1 - Subdivision",
-                        "U split parameters (0-1)").USplits = []
-        obj.addProperty("App::PropertyFloatList", "VSplits", "S1 - Subdivision",
-                        "V split parameters (0-1)").VSplits = []
+        # #82: subdivision is TWO NAMED BAND EDGES per axis, not a list of
+        # split parameters. `Split1` is the far edge of the band at the
+        # parametric-0 end, `Split2` the far edge at the parametric-1
+        # end, and each property's OWN ENDPOINT is its "no band here"
+        # sentinel: Split1 = 0 and Split2 = 1 means the axis carries no
+        # split at all. That is why the DEFAULTS are the sentinels and
+        # not 0.1 / 0.9 -- a patch nobody has blended must stay in one
+        # piece (0 subgrid cells, 1 face). 0.1 / 0.9 are the widths
+        # SilkBlend.ensure_band_split writes into the ONE end that needs
+        # them, which is a different thing and has always been.
+        for letter, axis in (("U", "U"), ("V", "V")):
+            obj.addProperty(
+                "App::PropertyFloat", letter + "Split1", "S1 - Subdivision",
+                "band edge at the parametric-0 end of the %s axis; 0 = no "
+                "band at that end" % axis)
+            obj.addProperty(
+                "App::PropertyFloat", letter + "Split2", "S1 - Subdivision",
+                "band edge at the parametric-1 end of the %s axis; 1 = no "
+                "band at that end" % axis)
+        obj.USplit1 = NO_BAND_1
+        obj.USplit2 = NO_BAND_2
+        obj.VSplit1 = NO_BAND_1
+        obj.VSplit2 = NO_BAND_2
         obj.addProperty("App::PropertyBool", "ShowSurface", "S2 - Display",
                         "show the surface").ShowSurface = True
         obj.addProperty("App::PropertyBool", "ShowGrid", "S2 - Display",
@@ -135,61 +155,75 @@ class Patch:
         # #67: re-entrancy guard for the Edges-cycle write. See
         # _store_boundary_cycle.
         self._normalizing_edges = False
-        # #76: the last split list each axis ACCEPTED, and the refusal
-        # that is currently outstanding. A refused write puts the axis
-        # back, which needs a "before" the object no longer has (onChanged
-        # sees the new value, not the old one), and the refusal has to
-        # outlive the write that caused it so execute() can flag the
-        # object. Both live here rather than on a property: they are
-        # bookkeeping about writes, not inputs, and a stale refusal must
-        # never survive into a saved file as geometry.
-        self._accepted_splits = {"USplits": [], "VSplits": []}
-        self._split_refusal = None
+        # #82: re-entrancy guard for the split-normalization write below.
+        # Writing the canonical value re-enters onChanged, which is a
+        # no-op the second time round (the pair is already canonical), but
+        # the flag makes that structural instead of incidental.
+        self._normalizing_splits = False
 
     def onDocumentRestored(self, obj):
+        # #82: a Patch saved before the band edges existed comes back
+        # without any of the four properties -- __init__ does not run on
+        # restore, and no migration is shipped, so the old USplits /
+        # VSplits lists stay behind as inert dynamic properties and this
+        # object has to be given the four properties to be editable at
+        # all. They are created at their SENTINELS, so such a document
+        # comes back with no bands: the neutral state, exactly what the
+        # human asked for ("no backwards compatibility is needed").
+        self._ensure_split_properties(obj)
         obj.recompute()
 
+    @staticmethod
+    def _ensure_split_properties(fp):
+        """Give `fp` the four named band edges if it has none (#82).
+
+        Same shape as `_ensure_last_edge_names` (#46): the property has to
+        exist before anything can read or write it, and the case that
+        needs this is a document saved before #82, whose Patch arrives
+        with the old split lists and none of these."""
+        for letter in ("U", "V"):
+            for n, sentinel in ((1, NO_BAND_1), (2, NO_BAND_2)):
+                name = "%sSplit%d" % (letter, n)
+                if not hasattr(fp, name):
+                    fp.addProperty(
+                        "App::PropertyFloat", name, "S1 - Subdivision",
+                        "band edge at the parametric-%d end of the %s axis; "
+                        "%g = no band at that end"
+                        % (n - 1, letter, sentinel))
+                    setattr(fp, name, sentinel)
+
     def onChanged(self, fp, prop):
-        # #61: normalize the split lists ON SET, so the stored value is
+        # #61/#82: normalize the band edges ON SET, so the stored value is
         # always the one the geometry actually used. Before this, a
         # rejected entry (0.0, 1.0, a negative, >1, a repeat) stayed
-        # visible in the property editor while build_subgrids silently
+        # visible in the property editor while the geometry silently
         # dropped it — property and geometry disagreed, and nothing in
         # the UI said so (#53 display residue).
         #
         # Both halves, deliberately:
         #   - rewrite the property with what is actually used, so the
-        #     stored list can never show a value that would be
-        #     discarded;
-        #   - say what was dropped, so a mistyped width is not silently
+        #     stored value can never show a position the geometry would
+        #     discard;
+        #   - say what was corrected, so a mistyped width is not silently
         #     swallowed. Normalizing alone would hide the mistake;
         #     messaging alone would leave the residue the ticket is
         #     about.
         #
-        # ...but only when the write lost EVERYTHING. Typing 0.2 into the
-        # property editor commits a bare 0 on the way (the line edit fires
-        # before the text is finished), so `USplits = [0]` normalizes to
-        # `[]` and used to print an error while the user was still typing
-        # -- a warning for input the editor never meant to send. Warning on
-        # the genuinely suspicious case only, a non-empty input that
-        # discards every one of its values ([0], [1.5], [-0.1, 2.0]), keeps
-        # the mistyped-width report and drops the noise. The normalization
-        # itself is untouched: the stored list still always equals what the
-        # geometry used.
-        #
-        # The rule is unchanged (SilkMachinery.normalize_splits):
-        # strictly inside (0, 1), strictly increasing, no repeats. It is
-        # idempotent, and the write is guarded, so onChanged cannot
-        # re-enter: the second pass sees an already-normalized list and
-        # writes nothing.
-        if prop in ("USplits", "VSplits"):
+        # With #82 the correction is much narrower than the list rule it
+        # replaces: a scalar outside [0, 1] becomes its slot's sentinel
+        # ("no band at this end"), and a pair whose two edges are out of
+        # order is swapped. Both are lossless, both are what the geometry
+        # used, and #76's over-limit refusal is GONE rather than moved --
+        # a third split cannot be written, so there is nothing to refuse
+        # (see the note at SilkMachinery.corner_cells).
+        if prop in ("USplit1", "USplit2", "VSplit1", "VSplit2"):
             try:
                 self._normalize_splits_on_set(fp, prop)
             except Exception:
                 pass   # never let housekeeping break the object
         # Guard: only recompute if object is fully initialized (has inputs)
-        if prop in ("USplits", "VSplits", "ShowSurface", "ShowGrid",
-                    "ShowSubgrids", "reverse"):
+        if prop in ("USplit1", "USplit2", "VSplit1", "VSplit2",
+                    "ShowSurface", "ShowGrid", "ShowSubgrids", "reverse"):
             if 'Restore' not in fp.State and hasattr(fp, "Edges") and fp.Edges:
                 fp.touch()
                 fp.recompute()
@@ -220,135 +254,51 @@ class Patch:
             fp.purgeTouched()
 
     def _normalize_splits_on_set(self, fp, prop):
-        """Rewrite `fp.<prop>` as its normalized form (see onChanged).
+        """Put `fp`'s axis into canonical form after a write to `prop`
+        (see onChanged).
 
-        Writes only when the incoming value is not already normalized, so
-        the common path (a blend's 0.1 / 0.9 band split, a user's 0.3)
-        costs nothing and the guard makes the re-entrant onChanged that
-        the write triggers a no-op. Nothing writes a split during a
-        recompute, so this corrective write cannot open the Patch <-> Blend
-        cycle #59 closed -- it only ever accompanies a user/ops write that
-        already recomputes the patch.
+        One axis is ONE property and its partner, so this normalizes the
+        PAIR: `SilkMachinery.normalize_edge_pair` clamps anything outside
+        [0, 1] to that slot's own sentinel and swaps two real edges that
+        were written the wrong way round. Writes only when the pair is not
+        already canonical, so the common path (a blend's 0.1 / 0.9, a
+        user's 0.3) costs nothing, and the guard makes the re-entrant
+        onChanged that the write triggers a no-op. Nothing writes a band
+        edge during a recompute, so this corrective write cannot open the
+        Patch <-> Blend cycle #59 closed -- it only ever accompanies a
+        user/ops write that already recomputes the patch.
 
-        On a document restore the residue is fixed silently: an old file
-        carrying a 0.0 split should not greet the user with a complaint
-        every time it opens. The next real edit reports again.
-
-        The same silence covers a PARTIAL correction -- a reorder, a
-        duplicate, one mistyped value among good ones. Those are corrected
-        and the stored list is right, so there is nothing for the user to
-        act on; only a write that loses every value is worth a word (see
-        onChanged for why the property editor's transient `0` must not
-        raise one).
-
-        #76: an OVER-LIMIT list is the one input that is NOT corrected.
-        At most one split below 0.5 and one above it may be stored per
-        axis (`SilkMachinery.split_limit_problem`, the rule the band, the
-        corner-cell exclusion and the panel already share through
-        `split_end`). Past that, deciding which of two same-side splits
-        to keep would be a guess about a band WIDTH -- and the failure it
-        replaces is not a wrong surface but an INVISIBLE one: the blend
-        refuses a multi-cell band, returns early, and leaves its Poles
-        byte-identical while this patch reports itself Up-to-date and
-        Valid. So the axis goes back to the last list it accepted, which
-        moves no cell and therefore leaves nothing downstream stale, and
-        the object is flagged (see _refuse_splits).
+        A correction is reported, because a mistyped width that silently
+        became "no band here" is the #53 residue all over again -- except
+        on a document restore, where it is fixed quietly: an old file
+        should not greet the user with a complaint every time it opens.
+        The next real edit reports again.
         """
-        current = list(getattr(fp, prop, None) or [])
-        kept, out_of_range, repeated = normalize_splits_report(current)
-        over = split_limit_problem(kept)      # #76
-        if over is not None:
-            self._refuse_splits(fp, prop, current, over)
+        letter = prop[0]                      # "USplit1" -> "U"
+        slot = int(prop[-1]) - 1              # "USplit1" -> 0
+        before = split_pair(fp, letter)
+        after = normalize_edge_pair(before[0], before[1])
+        kept, why = (after[0], after[1])[slot], after[2]
+        if before == (after[0], after[1]):
+            return                            # already canonical
+        if self._normalizing_splits:
             return
-        self._remember_accepted(prop, kept)
-        # A legal list clears an outstanding refusal: the object is only
-        # flagged while the axis still holds what the user cannot act on.
-        self._split_refusal = None
-        if list(kept) == [float(v) for v in current]:
-            return
-        setattr(fp, prop, list(kept))
-        if 'Restore' in fp.State:
-            return
-        if not current or kept:
-            return      # a partial correction: correct it, do not scold
-        why = []
-        if out_of_range:
-            why.append("outside (0, 1): %s"
-                       % ", ".join("%g" % v for v in out_of_range))
-        if repeated:
-            why.append("repeated: %s"
-                       % ", ".join("%g" % v for v in repeated))
-        FreeCAD.Console.PrintError(
-            "Silk: Patch '%s': %s = %s has no value strictly inside (0, 1) "
-            "(%s) -- every entry was discarded, so no split is set. Enter "
-            "a width between 0 and 1 if that was meant.\n"
-            % (fp.Name, prop, ", ".join("%g" % v for v in current),
-               "; ".join(why)))
-
-    # ---- #76: the one-split-per-end limit --------------------------------
-
-    def _remember_accepted(self, prop, values):
-        """`prop` now holds `values` -- the last list this axis accepted.
-
-        The record is what a later over-limit write is put back to. It is
-        read from the proxy rather than from the object because onChanged
-        only ever sees the NEW value; the "before" is gone by then. Seeded
-        lazily because a Proxy restored from an old file has whatever
-        __dict__ that file pickled, which may predate this."""
-        hist = getattr(self, "_accepted_splits", None)
-        if hist is None:
-            hist = self._accepted_splits = {}
-        hist[prop] = [float(v) for v in values]
-
-    def _refuse_splits(self, fp, prop, current, problem):
-        """#76: refuse an over-limit split list, and make that visible.
-
-        Two halves, and the second is the point of the ticket:
-
-        1. Put the axis back to the last list it accepted (see
-           `_remember_accepted`), so the stored property, the geometry
-           and every blend built from it all still agree -- a refusal
-           changes NOTHING except that the value you asked for is not
-           there any more.
-        2. Leave the object INVALID, carrying the message, until a legal
-           write clears it. A console line is not a refusal the user can
-           find again: the failure being prevented is a blend that keeps
-           stale poles while everything reports itself fine, so the tree
-           entry itself has to say so. Raising out of execute() is how
-           FreeCAD surfaces a property error -- it puts 'Invalid' in
-           State, `isValid()` False and the message in
-           `getStatusString()`, and the tree draws its error marker --
-           while the already-built Shape stays on screen, which is right
-           here because the geometry did not move.
-
-        On a document restore it is done quietly (PrintMessage, not an
-        error): an old file must not greet the user with a complaint every
-        time it opens, exactly as for the out-of-range residue above.
-        """
-        restoring = 'Restore' in fp.State
-        hist = getattr(self, "_accepted_splits", {}) or {}
-        before = [float(v) for v in hist.get(prop, [])]
-        if before != [float(v) for v in current]:
-            try:
-                setattr(fp, prop, list(before))
-            except Exception:
-                pass
-        message = ("Silk: Patch '%s': %s = %s is refused -- %s The axis "
-                   "keeps %s, and the patch is marked invalid until a "
-                   "legal list is stored.\n"
-                   % (fp.Name, prop,
-                      ", ".join("%g" % float(v) for v in current),
-                      problem, _splits_str(before)))
-        if restoring:
-            FreeCAD.Console.PrintMessage(message)
-            self._split_refusal = None
-            return
-        FreeCAD.Console.PrintError(message)
-        # Set AFTER the write above: restoring the accepted list runs
-        # _normalize_splits_on_set again (the accepted path), which would
-        # otherwise clear the refusal this write just earned.
-        self._split_refusal = ("Silk: Patch '%s'.%s refused: %s"
-                               % (fp.Name, prop, problem))
+        self._normalizing_splits = True
+        try:
+            setattr(fp, prop, kept)
+            # a swap moves BOTH names, so the partner is rewritten too; a
+            # clamp is this property's business alone.
+            if after[1 - slot] != before[1 - slot]:
+                setattr(fp, "%sSplit%d" % (letter, 2 - slot),
+                        after[1 - slot])
+        finally:
+            self._normalizing_splits = False
+        if why and 'Restore' not in fp.State:
+            FreeCAD.Console.PrintError(
+                "Silk: Patch '%s': %s = %g -- %s, so the axis now stores "
+                "%s = %g and %s = %g.\n"
+                % (fp.Name, prop, before[slot], why, prop, after[0],
+                   letter + "Split2", after[1]))
 
     def _rebuild_display(self, fp):
         """Recompose the display Shape from the cached base surface,
@@ -358,7 +308,8 @@ class Patch:
         set)."""
         if self._base_surface is None:
             return
-        has_subgrids = bool(fp.USplits or fp.VSplits)
+        has_subgrids = bool(axis_splits(*split_pair(fp, "U"))
+                             or axis_splits(*split_pair(fp, "V")))
         base_legs = AN.drawGrid(list(fp.Poles), 4) if fp.Poles else []
         sub_legs = self._sub_legs if has_subgrids else []
         build_display(fp, self._base_surface.toShape(), self._subsurfaces,
@@ -664,21 +615,6 @@ class Patch:
     # ---- execute ---------------------------------------------------------
 
     def execute(self, fp):
-        # #76: a refused split write leaves the object flagged until a
-        # legal one arrives. Raising here is how FreeCAD surfaces a
-        # property error -- 'Invalid' in State, isValid() False, the
-        # message in getStatusString(), and the tree's error marker on
-        # the object itself. The alternative (a console line) is what
-        # #76 measured as the failure: a blend that refused a band and
-        # kept its stale poles while every object reported itself fine.
-        #
-        # Raising BEFORE the try, so the purgeTouched() below cannot
-        # clear the flag FreeCAD sets on a failed recompute -- and
-        # before any work, because the splits did not change: the surface
-        # already on screen is the right one and must survive.
-        refusal = getattr(self, "_split_refusal", None)
-        if refusal:
-            raise RuntimeError(refusal)
         # #59, part 1 -- the Patch half of the Blend <-> Patch recompute
         # cycle. A settled document.recompute() used to leave the two
         # covered Patches of a freshly blended pair ['Touched'] forever
@@ -705,10 +641,15 @@ class Patch:
         # claimed (the #59 part-2 overlay), because the blend writes the
         # hidden set after it last recomputed the patch.
         #
-        # The #41 live-update chain is untouched: a user's USplits/
-        # VSplits edit still runs onChanged's touch + recompute (that IS
-        # this execute), and a blend that is not mid-execute is still
-        # touched below so it refreshes on the next doc.recompute().
+        # The #41 live-update chain is untouched: a user's band-edge edit
+        # still runs onChanged's touch + recompute (that IS this execute),
+        # and a blend that is not mid-execute is still touched below so it
+        # refreshes on the next doc.recompute().
+        #
+        # #82 removed the #76 refusal that used to raise out of here: a
+        # third split on an axis is no longer expressible, so there is no
+        # input that can leave the patch holding something the geometry
+        # will not use.
         try:
             self._execute(fp)
         finally:
@@ -812,16 +753,20 @@ class Patch:
         legs = AN.drawGrid(poles, 4)
         fp.Legs = legs
 
-        # Subdivision (shared machinery core)
+        # Subdivision (shared machinery core). The axis pair is read by
+        # NAME (#82): each edge belongs to the end that names it.
+        u_pair = split_pair(fp, "U")
+        v_pair = split_pair(fp, "V")
+        has_subgrids = bool(axis_splits(*u_pair) or axis_splits(*v_pair))
         self._subgrids, self._subsurfaces, sub_legs = build_subgrids(
-            surf, fp.USplits, fp.VSplits)
+            surf, u_pair, v_pair)
         self._sub_legs = sub_legs   # cached for _rebuild_display (#59)
-        if fp.USplits or fp.VSplits:
+        if has_subgrids:
             fp.Legs = sub_legs
 
         # Compound display (shared machinery core)
         build_display(fp, surf.toShape(), self._subsurfaces, legs, sub_legs,
-                      bool(fp.USplits or fp.VSplits))
+                      has_subgrids)
 
 
 class PatchViewProvider:

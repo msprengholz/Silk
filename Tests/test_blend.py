@@ -85,7 +85,7 @@ def _flat_blend_strip(doc):
     check(len(right.Poles) == 16, "Right patch 16 poles", err)
 
     # Subdivide at shared edge
-    left.USplits = [0.9]; right.USplits = [0.1]
+    left.USplit2 = 0.9; right.USplit1 = 0.1
     doc.recompute()
 
     l_sg = left.Proxy._subgrids[1]   # U=0.9→1.0

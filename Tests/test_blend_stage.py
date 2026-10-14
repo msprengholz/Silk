@@ -47,6 +47,29 @@ class _CaptureConsole:
         FreeCAD.Console.PrintError = self._orig
 
 
+# #82: an axis carries two NAMED band edges, so "the splits of a patch"
+# is a pair of pairs -- (USplit1, USplit2) and (VSplit1, VSplit2) -- with
+# the neutral pair, one sentinel per end, meaning "no band on this axis".
+NO_BAND = (0.0, 1.0)
+
+
+def _edges(p):
+    """((USplit1, USplit2), (VSplit1, VSplit2)) -- the four band edges."""
+    def pair(letter):
+        return (round(float(getattr(p, letter + "Split1")), 12),
+                round(float(getattr(p, letter + "Split2")), 12))
+    return pair("U"), pair("V")
+
+
+def _real_edges(pair):
+    """The band edges of one axis that are real positions, ascending."""
+    return sorted(v for v in pair if 0.0 < v < 1.0)
+
+
+def _carries_band(p):
+    return any(0.0 < v < 1.0 for pair in _edges(p) for v in pair)
+
+
 def _build_gt_chain(doc, fixture_doc):
     """Rebuild all 7 fixture edges + both patches in the test doc.
 
@@ -173,11 +196,11 @@ def test_unblend_restores_the_patches(doc):
         # (an unblended patch should look like a plain patch), so the split
         # is removed -- which is why the cell comes back AND the patch goes
         # back to one unsplit surface. The width is the price.
-        splits_a = (list(patch_a.USplits), list(patch_a.VSplits))
-        splits_b = (list(patch_b.USplits), list(patch_b.VSplits))
-        checks.append("splits removed: %s %s" % (splits_a, splits_b))
-        if splits_a[0] or splits_a[1] or splits_b[0] or splits_b[1]:
-            errors.append("unblend left the band splits behind: %s %s -- the "
+        splits_a = _edges(patch_a)
+        splits_b = _edges(patch_b)
+        checks.append("band edges removed: %s %s" % (splits_a, splits_b))
+        if any(_carries_band(p) for p in (patch_a, patch_b)):
+            errors.append("unblend left the band edges behind: %s %s -- the "
                           "patch still renders subdivided"
                           % (splits_a, splits_b))
         cells = (len(patch_a.Proxy._subgrids), len(patch_b.Proxy._subgrids))
@@ -197,12 +220,12 @@ def test_unblend_restores_the_patches(doc):
         # DEFAULT width, because the old one was given back
         again = create_blend(patch_a, patch_b, name="BlendAgain")
         doc.recompute()
-        from SilkMachinery import split_at_end
-        re_w = (split_at_end(list(patch_a.USplits) or list(patch_a.VSplits), 0),
-                split_at_end(list(patch_a.USplits) or list(patch_a.VSplits), 1))
-        checks.append("re-blend: poles=%d null=%s splits=%s/%s"
+        checks.append("re-blend: poles=%d null=%s edges=%s"
                       % (len(again.Poles or []), again.Shape.isNull(),
-                         list(patch_a.USplits), list(patch_a.VSplits)))
+                         _edges(patch_a)))
+        re_w = [float(getattr(patch_a, prop))
+                for prop in ("USplit1", "USplit2")
+                if 0.0 < float(getattr(patch_a, prop)) < 1.0]
         if not list(again.Poles or []) or again.Shape.isNull():
             errors.append("re-blending after an unblend produced nothing")
         if re_w[0] is not None and abs(re_w[0] - 0.1) > 1e-9:
@@ -216,20 +239,20 @@ def test_unblend_restores_the_patches(doc):
 
 
 def test_unblend_removes_only_the_seams_own_split(doc):
-    """#71: on a patch carrying SEVERAL splits, unblending one seam removes
-    that seam's split and NOTHING else.
+    """#71: on a patch carrying SEVERAL band edges, unblending one seam
+    removes that seam's axis and NOTHING else.
 
-    A patch can carry up to four splits (one per side) and meet several
-    seams, so "remove the splits" would be wrong -- it would take a
-    surviving seam's band boundary with it and leave that blend feeding
-    cells that no longer exist. The rule is per (patch, boundary side):
-    the dying blend's OWN seam is re-resolved the way run_blend resolved
-    it (pinned Edge, else auto-detect), and exactly the split that seam
-    owned is dropped.
+    A patch can carry an edge per side and meet several seams, so "remove
+    the edges" would be wrong -- it would take a surviving seam's band
+    boundary with it and leave that blend feeding cells that no longer
+    exist. The rule is per (patch, boundary side): the dying blend's OWN
+    seam is re-resolved the way run_blend resolved it (pinned Edge, else
+    auto-detect), and exactly the axis that seam banded is given back --
+    keeping the end a surviving blend still reads.
 
     The tube fixture is the case that makes the rule necessary: two
-    patches sharing TWO edges, so each patch carries two splits from two
-    different seams, and the auto-detect alone cannot say which seam a
+    patches sharing TWO edges, so each patch carries two band edges from
+    two different seams, and the auto-detect alone cannot say which seam a
     blend took (it returns the first matching corner pair for both).
     """
     from SilkWorkflowOps import create_blend_by_edge
@@ -248,33 +271,34 @@ def test_unblend_removes_only_the_seams_own_split(doc):
                 "errors": ["fixture: the two-seam pair did not blend "
                            "(left %d poles, right %d)"
                            % (len(left.Poles or []), len(right.Poles or []))]}
-    before = {p.Name: (list(p.USplits), list(p.VSplits)) for p in (pa, pb)}
+    before = {p.Name: _edges(p) for p in (pa, pb)}
     checks.append("blended: %s" % before)
     for p in (pa, pb):
-        if len([v for pair in before[p.Name] for v in pair]) != 2:
-            errors.append("fixture: %s carries %r, expected one split per "
-                          "seam" % (p.Name, before[p.Name]))
+        if len([v for pair in before[p.Name] for v in pair
+                if 0.0 < v < 1.0]) != 2:
+            errors.append("fixture: %s carries %r, expected one band edge "
+                          "per seam" % (p.Name, before[p.Name]))
 
     # -- unblend ONE seam: its split goes, the other seam's stays --------
     right_edge = right.Edge.Name
     doc.removeObject(right.Name)
     doc.recompute()
-    after = {p.Name: (list(p.USplits), list(p.VSplits)) for p in (pa, pb)}
+    after = {p.Name: _edges(p) for p in (pa, pb)}
     checks.append("after unblending %s: %s" % (right_edge, after))
-    # the dying seam's band split is the HIGH one on both patches (the
-    # right side is the parametric-1 end of that axis), the left seam's
-    # is the LOW one -- so "the unblend took the wrong seam's split" is
-    # exactly "the wrong one of the two survived"
+    # the dying seam's band edge is at the parametric-1 END on both
+    # patches (the right side is that end of the axis), the left seam's
+    # at the parametric-0 end -- so "the unblend took the wrong seam's
+    # edge" is exactly "the wrong one of the two survived"
     for p in (pa, pb):
-        kept = [v for pair in after[p.Name] for v in pair]
+        kept = [v for pair in after[p.Name] for v in _real_edges(pair)]
         if len(kept) != 1:
-            errors.append("unblending one seam left %d split(s) on %s (%r), "
-                          "expected only the other seam's"
+            errors.append("unblending one seam left %d band edge(s) on %s "
+                          "(%r), expected only the other seam's"
                           % (len(kept), p.Name, after[p.Name]))
         elif abs(kept[0] - 0.1) > 1e-9:
-            errors.append("the surviving split on %s is %g, expected the LEFT "
+            errors.append("the surviving edge on %s is %g, expected the LEFT "
                           "seam's 0.1 -- the unblend took the WRONG seam's "
-                          "split (%r)" % (p.Name, kept[0], after[p.Name]))
+                          "edge (%r)" % (p.Name, kept[0], after[p.Name]))
         # the surviving blend is untouched and still hides its own cells
         hidden = list(getattr(p, "_HiddenSubgridIdxs", []) or [])
         if not hidden:
@@ -288,12 +312,12 @@ def test_unblend_removes_only_the_seams_own_split(doc):
     # -- unblend the last one: no splits, no subgrids, whole surfaces -----
     doc.removeObject(left.Name)
     doc.recompute()
-    last = {p.Name: (list(p.USplits), list(p.VSplits)) for p in (pa, pb)}
+    last = {p.Name: _edges(p) for p in (pa, pb)}
     checks.append("after the last unblend: %s" % last)
     for p in (pa, pb):
-        if any(last[p.Name]):
-            errors.append("%s still carries splits %r after every blend is "
-                          "gone" % (p.Name, last[p.Name]))
+        if _carries_band(p):
+            errors.append("%s still carries band edges %r after every blend "
+                          "is gone" % (p.Name, last[p.Name]))
         if p.Proxy._subgrids:
             errors.append("%s still builds %d subgrids with no splits"
                           % (p.Name, len(p.Proxy._subgrids)))
@@ -323,25 +347,25 @@ def test_unblend_clears_the_users_own_band_split(doc):
     patch: an unblended patch that still renders subdivided. Measured
     before the change:
 
-        set VSplits=[0.35] by hand -> blend -> unblend
-            => VSplits=[0.35] remains, 2 subgrids
+        set VSplit1 = 0.35 by hand -> blend -> unblend
+            => VSplit1 = 0.35 remains, 2 subgrids
 
     The human's reason is that in the wizard the Band A / Band B editors
-    ARE the patch's USplits / VSplits property -- they are equivalent and
-    there is no other data the patch can hold -- so unsetting the blend
-    must unset them too.
+    ARE the patch's band edges -- they are equivalent and there is no
+    other data the patch can hold -- so unsetting the blend must unset
+    them too.
 
     The axis under test is DERIVED from the seam, not hardcoded, so this
     asserts the rule on whichever axis the seam actually bands (the
-    ground-truth chain's seam runs along U, so it bands VSplits -- but the
-    test says so because it measured it).
+    ground-truth chain's seam runs along U, so it bands the V axis -- but
+    the test says so because it measured it).
 
-    TWO splits are placed on that axis, and BOTH must go:
+    BOTH ENDS of that axis are set, and BOTH must go:
 
       * the USER's own width, AT the seam's end -- the exact shape #71's
         value filter already handled, so it alone would not tell the two
         rules apart;
-      * a second split at the OTHER end that no blend reads -- the shape
+      * a second edge at the OTHER end that no blend reads -- the shape
         that survives #71's filter and leaves the patch still subdivided,
         which is what the human is complaining about. (`band_cells` picks
         the band on the band's OWN axis and drops corner cells on the
@@ -363,28 +387,31 @@ def test_unblend_clears_the_users_own_band_split(doc):
         if etype is None:
             return {"pass": False, "errors": ["fixture: the chain's seam did "
                                               "not resolve"], "checks": checks}
-        prop = "VSplits" if etype[0] == "U" else "USplits"
+        letter = "V" if etype[0] == "U" else "U"
+        prop = "%sSplit%d" % (letter, ss + 1)     # this seam's own end
+        other = "%sSplit%d" % (letter, 2 - ss)     # the end nobody reads
         width = 0.35 if ss == 0 else 0.65        # the user's own width ...
         spare = 0.65 if ss == 0 else 0.35       # ... and an end nobody reads
-        setattr(patch_a, prop, sorted([width, spare]))
+        setattr(patch_a, prop, width)
+        setattr(patch_a, other, spare)
         patch_a.recompute()
         doc.recompute()
-        checks.append("user splits: %s.%s=%r (seam %s, end %d)"
-                      % (patch_a.Name, prop, list(getattr(patch_a, prop)),
-                         etype, ss))
+        checks.append("user edges: %s.%s=%g and %s.%s=%g (seam %s, end %d)"
+                      % (patch_a.Name, prop, width, patch_a.Name, other,
+                         spare, etype, ss))
 
         with _Capture() as cap:
             blend = create_blend(patch_a, patch_b, name="BlendUser")
         doc.recompute()
         errors += ["console error: %s" % e for e in cap.errors]
         # the blend READS the user's width (#64) and adds nothing
-        if [round(float(v), 9) for v in getattr(patch_a, prop)] \
-                != sorted([width, spare]):
-            errors.append("the blend moved the user's own splits %s.%s: %r "
+        got_pair = (round(float(getattr(patch_a, prop)), 9),
+                    round(float(getattr(patch_a, other)), 9))
+        want_pair = ((width, spare) if ss == 0 else (spare, width))
+        if got_pair != want_pair:
+            errors.append("the blend moved the user's own edges %s: %r "
                           "(want %r) -- the fixture does not exercise the "
-                          "case" % (patch_a.Name, prop,
-                                    list(getattr(patch_a, prop)),
-                                    sorted([width, spare])))
+                          "case" % (patch_a.Name, got_pair, want_pair))
         if not list(blend.Poles or []):
             return {"pass": False,
                     "errors": errors + ["fixture: the blend built nothing"],
@@ -393,18 +420,17 @@ def test_unblend_clears_the_users_own_band_split(doc):
         doc.removeObject(blend.Name)
         doc.recompute()
 
-        left = list(getattr(patch_a, prop))
+        left = _edges(patch_a)
         cells = len(patch_a.Proxy._subgrids)
-        checks.append("after unblend: %s.%s=%r subgrids=%d faces=%d"
-                      % (patch_a.Name, prop, left, cells,
-                         len(patch_a.Shape.Faces)))
-        if left:
-            errors.append("unblending a seam left the USER's own split on %s: "
-                          "%s.%s=%r -- it still renders subdivided"
-                          % (patch_a.Name, patch_a.Name, prop, left))
+        checks.append("after unblend: %s edges=%r subgrids=%d faces=%d"
+                      % (patch_a.Name, left, cells, len(patch_a.Shape.Faces)))
+        if _carries_band(patch_a):
+            errors.append("unblending a seam left the USER's own edge on %s: "
+                          "%r -- it still renders subdivided"
+                          % (patch_a.Name, left))
         if cells:
-            errors.append("%s still builds %d subgrids with %s=%r"
-                          % (patch_a.Name, cells, prop, left))
+            errors.append("%s still builds %d subgrids with edges %r"
+                          % (patch_a.Name, cells, left))
         if len(patch_a.Shape.Faces) != 1:
             errors.append("%s is not one whole surface after the unblend: "
                           "%d faces" % (patch_a.Name,
@@ -416,16 +442,15 @@ def test_unblend_clears_the_users_own_band_split(doc):
         # and the seam can be blended again, at the DEFAULT width
         again = create_blend(patch_a, patch_b, name="BlendUserAgain")
         doc.recompute()
-        checks.append("re-blend: %s.%s=%r poles=%d"
-                      % (patch_a.Name, prop, list(getattr(patch_a, prop)),
+        checks.append("re-blend: %s.%s=%g poles=%d"
+                      % (patch_a.Name, prop, float(getattr(patch_a, prop)),
                          len(again.Poles or [])))
         if not list(again.Poles or []) or again.Shape.isNull():
             errors.append("re-blending after the unblend produced nothing")
         else:
             default = 0.1 if ss == 0 else 0.9
-            from SilkMachinery import split_at_end
-            got = split_at_end(list(getattr(patch_a, prop)), ss)
-            if got is None or abs(got - default) > 1e-9:
+            got = float(getattr(patch_a, prop))
+            if abs(got - default) > 1e-9:
                 errors.append("re-blending rebuilt the band at %r, expected "
                               "the default %g -- the user's width %g came "
                               "back" % (got, default, width))
@@ -441,16 +466,16 @@ def test_unblend_keeps_the_split_a_surviving_blend_needs(doc):
     blend is still feeding on.
 
     A patch can be bounded by TWO seams on the same axis -- the tube's
-    TubeA carries one split per seam (both on USplits, one at each end),
-    and so does a four-patch corner patch. Unblending ONE of them must not
-    strip the split the SURVIVING blend needs, or that blend silently
-    loses its band and feeds on cells that no longer exist.
+    TubeA carries one band edge per seam (both on its U axis, one at each
+    end), and so does a four-patch corner patch. Unblending ONE of them
+    must not strip the edge the SURVIVING blend needs, or that blend
+    silently loses its band and feeds on cells that no longer exist.
 
     The kept value is read back from the SURVIVING blend's own seam side
     (through the same `_band_split_of` mapping the writer uses) rather
     than hardcoded to 0.1, so this also pins the case where the surviving
-    seam's width is the USER's (see the second half: the survivor's own
-    end is set to 0.2 by hand, and 0.2 must be what comes back)."""
+    seam's width is the USER's (the survivor's own end is set to 0.2 by
+    hand, and 0.2 must be what comes back)."""
     from SilkWorkflowOps import create_blend_by_edge
     from SilkBlend import _band_split_of, _side_on
     from Tests.test_seam_resolver import _build_tube
@@ -471,31 +496,32 @@ def test_unblend_keeps_the_split_a_surviving_blend_needs(doc):
     # the split the SURVIVING blend is built on, read from its own seam
     keep_prop, keep_ss = _band_split_of(_side_on(left, pa))
     dropped_prop, _ = _band_split_of(_side_on(right, pa))
-    if keep_prop != dropped_prop:
+    # the two seams must band the same AXIS -- and since #82 that does not
+    # mean the same PROPERTY: they are its two opposite ends, USplit1 and
+    # USplit2, which is the whole point of naming them.
+    if keep_prop[0] != dropped_prop[0]:
         return {"pass": False, "checks": checks,
                 "errors": ["fixture: the two seams band DIFFERENT axes on "
                            "%s (%s vs %s) -- this test needs them on one"
                            % (pa.Name, keep_prop, dropped_prop)]}
+    checks.append("the two seams band the same axis from opposite ends: "
+                  "%s and %s" % (keep_prop, dropped_prop))
     # a user width on the survivor's own end, so "0.1 came back" cannot
     # pass by accident on the default
     user = 0.2 if keep_ss == 0 else 0.8
-    from SilkMachinery import split_at_end
-    cur = list(getattr(pa, keep_prop))
-    old = split_at_end(cur, keep_ss)
-    setattr(pa, keep_prop,
-            sorted([v for v in cur if old is None or v != old] + [user]))
+    setattr(pa, keep_prop, user)
     pa.recompute()
     doc.recompute()
-    checks.append("two seams on %s.%s: %r (survivor's own width set to %g)"
-                  % (pa.Name, keep_prop, list(getattr(pa, keep_prop)), user))
+    checks.append("two seams on %s: %r (survivor's own width set to %g)"
+                  % (pa.Name, _edges(pa), user))
 
     doc.removeObject(right.Name)
     doc.recompute()
 
     for p in (pa, pb):
-        kept = list(getattr(p, keep_prop))
-        checks.append("after unblending the right seam: %s.%s=%r"
-                      % (p.Name, keep_prop, kept))
+        pair = _edges(p)[0 if keep_prop[0] == "U" else 1]
+        checks.append("after unblending the right seam: %s %r"
+                      % (p.Name, _edges(p)))
         prop_p, ss_p = _band_split_of(_side_on(left, p))
         if prop_p != keep_prop:
             continue
@@ -504,11 +530,11 @@ def test_unblend_keeps_the_split_a_surviving_blend_needs(doc):
             errors.append("%s: the surviving blend's seam resolved to end %r, "
                           "the width was set at end %d" % (p.Name, ss_p,
                                                             keep_ss))
-        elif len(kept) != 1 or abs(kept[0] - want) > 1e-9:
-            errors.append("%s.%s=%r after unblending the OTHER seam -- the "
-                          "surviving blend's band split %g did not survive "
-                          "(it must be the one split the surviving blend "
-                          "reads)" % (p.Name, keep_prop, kept, want))
+        elif abs(pair[ss_p] - want) > 1e-9:
+            errors.append("%s holds %r after unblending the OTHER seam -- the "
+                          "surviving blend's band edge %g did not survive "
+                          "(it must be the one edge the surviving blend "
+                          "reads)" % (p.Name, pair, want))
         hidden = list(getattr(p, "_HiddenSubgridIdxs", []) or [])
         if not hidden:
             errors.append("%s hides no cells after the other seam's blend "
@@ -532,12 +558,12 @@ def test_unblend_keeps_the_split_a_surviving_blend_needs(doc):
     # with it a moment later: unblending the survivor too leaves nothing
     doc.removeObject(left.Name)
     doc.recompute()
-    last = {p.Name: (list(p.USplits), list(p.VSplits)) for p in (pa, pb)}
+    last = {p.Name: _edges(p) for p in (pa, pb)}
     checks.append("after the last unblend: %s" % (last,))
     for p in (pa, pb):
-        if any(last[p.Name]):
-            errors.append("%s still carries splits %r with no blend alive"
-                          % (p.Name, last[p.Name]))
+        if _carries_band(p):
+            errors.append("%s still carries band edges %r with no blend "
+                          "alive" % (p.Name, last[p.Name]))
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -566,25 +592,25 @@ def test_unblend_with_no_user_split_leaves_a_plain_patch(doc):
     if not list(blend.Poles or []):
         return {"pass": False, "checks": checks,
                 "errors": ["fixture: the blend built nothing"]}
-    before = {p.Name: (list(p.USplits), list(p.VSplits)) for p in (a, b)}
+    before = {p.Name: _edges(p) for p in (a, b)}
     checks.append("blended: %s" % before)
-    if not any(v for pair in before.values() for v in [pair[0], pair[1]]):
-        errors.append("fixture: the blend wrote no band split at all (%r), so "
+    if not any(_carries_band(p) for p in (a, b)):
+        errors.append("fixture: the blend wrote no band edge at all (%r), so "
                       "there is nothing for this test to clear" % before)
 
     doc.removeObject(blend.Name)
     doc.recompute()
 
     for p in (a, b):
-        after = (list(p.USplits), list(p.VSplits))
+        after = _edges(p)
         cells = len(p.Proxy._subgrids)
-        checks.append("after unblend: %s splits=%r subgrids=%d faces=%d"
+        checks.append("after unblend: %s edges=%r subgrids=%d faces=%d"
                       % (p.Name, after, cells, len(p.Shape.Faces)))
-        if any(after[0]) or any(after[1]):
-            errors.append("%s still carries splits %r after the unblend"
+        if _carries_band(p):
+            errors.append("%s still carries band edges %r after the unblend"
                           % (p.Name, after))
         if cells:
-            errors.append("%s still builds %d subgrids with no splits"
+            errors.append("%s still builds %d subgrids with no band edges"
                           % (p.Name, cells))
         if len(p.Shape.Faces) != 1:
             errors.append("%s is not one whole surface: %d faces"
