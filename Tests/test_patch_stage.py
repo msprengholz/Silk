@@ -1125,6 +1125,29 @@ def test_patch_non_closing_selection_creates_nothing(doc):
     checks.append("create_patch: refused, no object, message %r"
                   % msgs.strip()[:110])
 
+    # #85, edge-release lock (#55 Q2): a refusal must never consume an
+    # edge. Assert the SEMANTIC, not just "no Patch object left behind":
+    # after the refused create_patch, no Edge object in the document is
+    # referenced by ANY Patch's `Edges` link list -- so every edge used in
+    # the refused selection is still FREE (claimed by nothing). This locks
+    # the round-1 defect ("a failed patch held its links, so every edge was
+    # claimed and none were free"). #66's refuse-before-construct makes it
+    # trivially true today, but a build-then-refuse regression must go red
+    # here even if it left no visible Patch object behind.
+    claimed = {}
+    for p in _patches(doc):
+        for e in (list(getattr(p, "Edges", None) or [])):
+            claimed.setdefault(e.Name, []).append(p.Name)
+    for e in doc.Objects:
+        if getattr(e, "object_type", None) != "Edge":
+            continue
+        if e.Name in claimed:
+            errors.append("the refused create_patch left the edge %s "
+                          "claimed by %s's Edges list (edge not free)"
+                          % (e.Name, claimed[e.Name]))
+    checks.append("edge-release: no Edge in the doc is claimed by any "
+                  "Patch after the refusal")
+
     # and the GUI command refuses the same way
     before = len(_patches(doc))
     Gui.Selection.clearSelection()
