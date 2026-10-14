@@ -46,7 +46,11 @@ Exit codes: 0 = all passed, 1 = test failures, 2 = could not reach FreeCAD.
 
 import os
 import re
+import json
+import os
 import sys
+import threading
+import time
 
 try:
     sys.stdout.reconfigure(line_buffering=True)
@@ -93,6 +97,16 @@ def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir,
     rss_before = helper.rss_mb()
     helper.ensure_fresh(force=force_reload, namespace=globals(),
                         keep_namespace=keep_namespace)
+    # #79: cap the Report View BEFORE the suite prints into it. Its
+    # QTextDocument is uncapped (maximumBlockCount 0), so a long-lived GUI
+    # keeps every message ever printed -- ~20 MB per run, measured, no
+    # plateau. Only on this path: this is the launcher that leaves a
+    # FreeCAD running afterwards. The in-process launcher exits at the end
+    # of the run, so there the cap would cost the user their report
+    # history and buy nothing.
+    for _line in helper.describe_memory(
+            report_view=helper.cap_report_view()):
+        print(_line)
     import FreeCADGui as Gui
     try:
         Gui.activateWorkbench("Silk")
@@ -130,6 +144,12 @@ def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir,
     # #72: leave no reference to this run behind, and report memory.
     helper.clear_runner_namespace(globals())
     helper.clear_exception_state()
+    # #79: trim AFTER the release. glibc keeps freed memory in its arena,
+    # so a trim only returns what is already free: run before the release
+    # it reclaimed 6 MB, run after it, 162 MB. The two changes are one
+    # fix -- the cap gives the trim something to return.
+    for _line in helper.describe_memory(trim=helper.malloc_trim()):
+        print(_line)
     rss_after = helper.rss_mb()
     if rss_before is not None and rss_after is not None:
         print("[rss] FreeCAD pid %%d resident memory: before %%.1f MB, "
@@ -181,6 +201,16 @@ def _run_in_process(inspect, save_dir, test_filter, test_modules=None):
     summary = run_tests(*funcs, close_docs=not (inspect or save_dir))
     if save_dir:
         _save_inspect_docs(save_dir)
+    # #79: deliberately NOT capping the Report View on this path. This
+    # FreeCAD exits when the run does, so an unbounded buffer costs
+    # nothing, and truncating the only copy of the user's report history
+    # would cost something. The cap belongs to the launcher that leaves a
+    # long-lived GUI behind. The trim is still worth doing (it reports
+    # what this run freed, and this FreeCAD may be kept open by --inspect).
+    print("[report] Report View left uncapped here (in-process run: this "
+          "FreeCAD exits when the run does)")
+    for line in silk_reload.describe_memory(trim=silk_reload.malloc_trim()):
+        print(line)
     rss_after = silk_reload.rss_mb()
     if rss_before is not None and rss_after is not None:
         print("[rss] FreeCAD pid %d resident memory: before %.1f MB, after %.1f MB "
@@ -188,6 +218,14 @@ def _run_in_process(inspect, save_dir, test_filter, test_modules=None):
                                    rss_after - rss_before))
     return 0 if summary["failed"] == 0 else 1
 
+
+# The stall watchdog lives in its own module on purpose -- see its docstring.
+# run_all.py itself cannot be imported inside FreeCAD (it runs main()
+# unconditionally, which re-enters the RPC server and segfaults the GUI
+# thread), so anything testable about the watchdog has to live elsewhere.
+from Tests.watchdog import (  # noqa: E402
+    PROGRESS_FILE, STALL_SECONDS, _Watchdog,
+)
 
 def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
                  keep_namespace=False, test_modules=None):
@@ -219,6 +257,10 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
         print("Open FreeCAD first -- its MCP RPC server is the test target.")
         return 2
 
+    try:
+        os.remove(PROGRESS_FILE)      # never trust a previous run's record
+    except OSError:
+        pass
     print("Running Silk tests in the running FreeCAD (port %d)..." % port)
     if inspect:
         print("--inspect: test documents will be left open for inspection.")
@@ -230,18 +272,29 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
         print("--force-reload: reimporting Silk modules even if unchanged.")
     if keep_namespace:
         print("--keep-namespace: leaving stale RPC namespace bindings alone.")
-    res = proxy.execute_code(
+    _wd = _Watchdog()
+    _wd.start()
+    try:
+        res = proxy.execute_code(
         # Order must match _silk_run's signature inside _REMOTE_CODE:
         # (force, keep_ns, test_filter, close_docs, save_dir, test_modules).
         # Getting this wrong passes test_modules in save_dir's slot, which
         # does not crash -- it just runs the whole suite, which is the
         # worst possible failure for a speed flag.
-        _REMOTE_CODE % (_SILK_DIR, str(bool(force_reload)),
-                        str(bool(keep_namespace)), test_filter,
-                        str(not (inspect or save_dir)), save_dir,
-                        list(test_modules) if test_modules else None),
-        _call_timeout,
-    )
+            _REMOTE_CODE % (_SILK_DIR, str(bool(force_reload)),
+                            str(bool(keep_namespace)), test_filter,
+                            str(not (inspect or save_dir)), save_dir,
+                            list(test_modules) if test_modules else None),
+            _call_timeout,
+        )
+    except Exception:
+        raise
+    finally:
+        # The watchdog is a daemon and dies with the process; this only
+        # makes the lifetime explicit.
+        _wd.interval = 1e9
+    if _wd.stalled:
+        return 3
     if not isinstance(res, dict) or not res.get("success"):
         print("FreeCAD reported an error:\n%s" % res)
         return 2
@@ -288,7 +341,7 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
     rss_after = None
     for line in out.splitlines():
         # The first captured line carries the RPC server's "Output: " prefix.
-        if "[reload]" in line or "[leak]" in line:
+        if "[reload]" in line or "[leak]" in line or "[report]" in line:
             print(line)
         elif line.startswith("[rss]"):
             print(line)

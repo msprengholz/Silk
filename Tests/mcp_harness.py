@@ -8,8 +8,36 @@ The harness collects results and prints a JSON summary line the agent can parse.
 
 import FreeCAD
 import json
+import os
 import sys
 import time
+
+# ---- run progress, so a CLIENT can see a stall and name the test ------
+#
+# Why this exists: the runner used to block silently on one long RPC call.
+# A wedged FreeCAD looked exactly like a slow suite, so both were waited out
+# (this project lost ~4 minutes to an O(n^2) probe and ~5 to a run started by
+# accident, both times by "waiting it out"). The client cannot ask the server
+# anything while the server is busy -- it is single-threaded on the GUI
+# thread -- so the server has to TELL it, out of band, before it blocks.
+#
+# The record is written atomically (tmp + os.replace) so a reader can never
+# catch it half-written and think the run advanced when it did not.
+PROGRESS_FILE = os.environ.get("SILK_PROGRESS_FILE", "/tmp/silk_progress.json")
+
+
+def write_progress(phase, name="", index=None, total=None):
+    """Record what the remote side is doing RIGHT NOW, for the client's
+    stall watchdog. Best effort: never let progress reporting fail a run."""
+    try:
+        rec = {"phase": phase, "name": name, "index": index, "total": total,
+               "pid": os.getpid(), "t": time.time()}
+        tmp = PROGRESS_FILE + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(rec, fh)
+        os.replace(tmp, PROGRESS_FILE)
+    except Exception:
+        pass
 
 
 def _quiet_dialog(label, msg):
@@ -76,9 +104,15 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
     saved = _patch_dialogs()
     func = doc = outcome = None
     try:
-        for func in test_funcs:
+        for _i, func in enumerate(test_funcs):
             doc = None
             _t0 = time.time()
+            # Announce BEFORE the test runs, flushed: a test that wedges
+            # must still be attributable, and an unflushed print that sits
+            # in a buffer tells the client nothing.
+            write_progress("running", func.__name__, _i + 1, len(test_funcs))
+            print("  [..] %d/%d %s" % (_i + 1, len(test_funcs), func.__name__),
+                  flush=True)
             try:
                 doc_name = "_mcp_test_" + func.__name__
                 doc = FreeCAD.newDocument(doc_name)
@@ -100,6 +134,7 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
                     "traceback": traceback.format_exc()
                 })
             finally:
+                write_progress("done", func.__name__, _i + 1, len(test_funcs))
                 timings.append((func.__name__, time.time() - _t0))
                 if doc is not None:
                     if close_docs:

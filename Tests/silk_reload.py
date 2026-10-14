@@ -24,9 +24,11 @@ Two jobs, both of them test infrastructure:
    because the FreeCAD process -- not this runner -- outlives the run,
    so a module global in run_all.py would not survive.
 
-Also here: resident-memory reading (/proc/<pid>/status VmRSS) and a
-report of orphaned module generations (module objects that are alive
-but no longer in sys.modules -- the fingerprint of a pinner).
+Also here: resident-memory reading (/proc/<pid>/status VmRSS), a report
+of orphaned module generations (module objects that are alive but no
+longer in sys.modules -- the fingerprint of a pinner), and the two
+run-hygiene calls the long-lived GUI needs (ticket #79): capping the
+uncapped Report View, and glibc malloc_trim at the end of a run.
 
 Nothing in this module imports FreeCAD, so it is safe to import from
 anywhere, including before the purge.
@@ -515,3 +517,226 @@ def orphan_generations(mod_dir=None, modules=None, collect=True):
         for o in extra:
             out.append((name, id(o)))
     return sorted(out)
+
+
+# ----------------------------------------------------------------------
+# the Report View (#79)
+# ----------------------------------------------------------------------
+#
+# FreeCAD's Report View is a QTextEdit whose objectName is "Report view",
+# and its QTextDocument has maximumBlockCount() == 0 -- UNCAPPED. That
+# means it retains every console message the process has ever printed, for
+# the life of the process. Measured in #79: after five runs of one test
+# module it held 2,293,056 characters across 30,789 blocks, and RSS grew
+# ~20 MB per run, linearly, with no plateau. That is the leak.
+#
+# It was nearly missed twice over. Clearing the Report View on its own
+# moved RSS by 0 MB -- glibc keeps the freed memory in its arena, so the
+# honest measurement is a malloc_trim(0) AFTER the release, which
+# returned 162 MB. And the trim alone, run while the buffer was still
+# full, reclaimed 6 MB and looked like a dead end.
+#
+# 2000 is the value verified by hand in #79: with the cap in place, four
+# further runs of the same module went 593 -> 621 -> 638 -> 641 -> 643 MB
+# (+28, +17, +3, +2) -- growth stops after three runs.
+#
+# This is a DELIBERATE, VISIBLE compromise. A long run will scroll the
+# Report View's history off the top: the oldest messages are dropped and
+# cannot be recovered. That is the price of not adding ~20 MB per run to
+# the user's own long-lived GUI. Do NOT "restore" the cap to 0 thinking it
+# looks more polite -- uncapped is the bug, and it is the single largest
+# thing this runner was growing.
+REPORT_VIEW_BLOCK_CAP = 2000
+
+# "No opinion" sentinel, distinct from an explicit None. cap_report_view
+# has to be able to say "there is no Gui at all" (None) as well as "go
+# and look one up" (unset).
+_UNSET = object()
+
+
+def cap_report_view(block_cap=REPORT_VIEW_BLOCK_CAP, gui=_UNSET,
+                    main_window=_UNSET):
+    """Cap the Report View's buffer. Returns a status dict, never raises.
+
+    The Report View is the biggest thing a big suite grows in a long-lived
+    GUI (#79), and its document is uncapped by default. This sets
+    maximumBlockCount to *block_cap* so old blocks are dropped instead of
+    retained for the life of the process.
+
+    Deliberately total: no main window, no Gui (a console FreeCAD), no
+    Report view, several of them, or a widget whose C++ half has already
+    been deleted all produce a status and a return. A memory-hygiene fix
+    that can abort a test run is worse than the leak it prevents.
+
+    *gui* / *main_window* exist so the test can exercise every one of
+    those paths without a GUI; leave them unset to use the real ones.
+
+    Returns {"status", "cap", "changed", "kept", "detail"} where status is
+    one of: capped, already-capped, no-gui, no-main-window, no-qt,
+    not-found, error. "capped" means at least one widget was changed;
+    "already-capped" means every Report view found was already capped at
+    or below *block_cap*.
+    """
+    report = {"status": "error", "cap": block_cap, "changed": [], "kept": [],
+              "detail": ""}
+
+    if gui is _UNSET:
+        try:
+            import FreeCADGui as gui  # noqa: F811 -- deliberate rebinding
+        except Exception:
+            gui = None
+    if gui is None:
+        report["status"] = "no-gui"
+        return report
+    try:
+        window = gui.getMainWindow() if main_window is _UNSET else main_window
+    except Exception as exc:
+        report["status"] = "error"
+        report["detail"] = "getMainWindow: %r" % (exc,)
+        return report
+    if window is None:
+        report["status"] = "no-main-window"
+        return report
+
+    try:
+        from PySide import QtWidgets
+    except Exception:
+        try:
+            from PySide2 import QtWidgets  # FreeCAD < 0.21
+        except Exception as exc:
+            report["status"] = "no-qt"
+            report["detail"] = repr(exc)
+            return report
+
+    try:
+        edits = list(window.findChildren(QtWidgets.QTextEdit))
+    except Exception as exc:
+        report["status"] = "error"
+        report["detail"] = "findChildren: %r" % (exc,)
+        return report
+
+    problems = []
+    for widget in edits:
+        try:
+            if widget.objectName() != "Report view":
+                continue
+        except Exception as exc:
+            # A C++ object deleted since findChildren ran.
+            problems.append("objectName: %r" % (exc,))
+            continue
+        try:
+            document = widget.document()
+            current = document.maximumBlockCount()
+            if 0 < current <= block_cap:
+                # Already capped at least this tightly. A cap somebody
+                # chose is not ours to loosen.
+                report["kept"].append(current)
+                continue
+            document.setMaximumBlockCount(block_cap)
+            report["changed"].append(block_cap)
+        except Exception as exc:
+            problems.append("setMaximumBlockCount: %r" % (exc,))
+
+    if problems:
+        report["status"] = "error"
+        report["detail"] = "; ".join(problems)
+        return report
+    report["status"] = "capped" if report["changed"] else (
+        "already-capped" if report["kept"] else "not-found")
+    return report
+
+
+# ----------------------------------------------------------------------
+# malloc_trim (#79)
+# ----------------------------------------------------------------------
+
+def malloc_trim(loader=None, platform=None):
+    """Ask glibc to return free heap memory to the OS. Never raises.
+
+    ORDER MATTERS, and this is the whole trick (#79). glibc holds freed
+    memory in its arena rather than giving it back, so a trim only
+    reclaims what is actually free: trimming while the Report View is
+    still holding its buffer returned 6 MB, and trimming right after
+    that buffer was released returned 162 MB. The trim is the second
+    half of cap_report_view, not a substitute for it -- it has nothing
+    to return unless something was released first.
+
+    *loader* and *platform* are injection points for the test. Guarded on
+    every path: not glibc, no ctypes, no libc, no symbol, or a raising
+    call all return {"trimmed": False, "reason": ...}.
+    """
+    if not str(sys.platform if platform is None else platform).startswith("linux"):
+        return {"trimmed": False, "reason": "not glibc (%s)"
+                % (platform if platform is not None else sys.platform,)}
+    try:
+        import ctypes
+    except ImportError as exc:
+        return {"trimmed": False, "reason": "no ctypes: %r" % (exc,)}
+    try:
+        libc = (loader or (lambda: ctypes.CDLL("libc.so.6")))()
+        trim = libc.malloc_trim
+    except Exception as exc:
+        return {"trimmed": False, "reason": "no libc malloc_trim: %r" % (exc,)}
+    rss_before = rss_mb()
+    try:
+        rc = trim(0)
+    except Exception as exc:
+        return {"trimmed": False, "reason": "malloc_trim raised: %r" % (exc,),
+                "rss_before": rss_before}
+    rss_after = rss_mb()
+    out = {"trimmed": True, "reason": "", "rc": rc,
+           "rss_before": rss_before, "rss_after": rss_after}
+    if rss_before is not None and rss_after is not None:
+        out["reclaimed_mb"] = rss_before - rss_after
+    return out
+
+
+# ----------------------------------------------------------------------
+# reporting
+# ----------------------------------------------------------------------
+
+_CAP_NOTE = ("maximumBlockCount 0 means KEEP EVERY MESSAGE EVER PRINTED "
+             "-- see silk_reload.REPORT_VIEW_BLOCK_CAP")
+
+
+def describe_memory(report_view=None, trim=None):
+    """[report] lines: what was capped, and what the trim gave back.
+
+    Separate from describe(), which reports on module generations: a
+    future session has to be able to see this fix working from the run
+    output rather than re-derive the measurement from scratch.
+    """
+    lines = []
+    if report_view:
+        status = report_view.get("status")
+        cap = report_view.get("cap")
+        detail = report_view.get("detail") or ""
+        if status == "capped":
+            lines.append(
+                "[report] capped the Report View at %d blocks -- %s (%d widget(s))"
+                % (cap, _CAP_NOTE, len(report_view.get("changed") or [])))
+        elif status == "already-capped":
+            lines.append("[report] Report View already capped at %s (at or below "
+                         "%d), left alone" % (report_view.get("kept"), cap))
+        else:
+            lines.append("[report] no Report View to cap: %s%s"
+                         % (status, " (%s)" % detail if detail else ""))
+    if trim is not None:
+        if not trim.get("trimmed"):
+            lines.append("[report] malloc_trim(0) skipped: %s"
+                         % (trim.get("reason") or "unknown reason",))
+        else:
+            before = trim.get("rss_before")
+            after = trim.get("rss_after")
+            gave = trim.get("reclaimed_mb")
+            if gave is None:
+                lines.append("[report] malloc_trim(0) ran (rss unavailable)")
+            elif gave > 0:
+                lines.append("[report] malloc_trim(0) ran: rss %.1f -> %.1f MB "
+                             "(%.1f MB back to the OS)" % (before, after, gave))
+            else:
+                # Honest, not omitted: a trim that returns nothing is the
+                # normal case when the run freed little.
+                lines.append("[report] malloc_trim(0) ran: rss %.1f -> %.1f MB "
+                             "(nothing new returned)" % (before, after))
+    return lines
