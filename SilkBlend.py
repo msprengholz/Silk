@@ -606,11 +606,39 @@ class _DeleteWatcher:
         self._fired = False
 
     def slotDeletedObject(self, obj):
+        # #80: `_fired` is set FIRST, unconditionally. Two reasons, and the
+        # second is the one that mattered:
+        #
+        # 1. `getattr(x, "Name", None)` does NOT swallow ReferenceError --
+        #    the default only covers AttributeError. Once the document is
+        #    being torn down, `self._fp` is a DELETED object and reading
+        #    `.Name` raises. The old order set `_fired` after that read, so
+        #    the exception escaped before the one-shot flag was ever set...
+        # 2. ...and the observer is therefore never removed from the
+        #    document. Every subsequent deletion re-enters this slot and
+        #    raises again: measured at 959,399 tracebacks in one session,
+        #    each printed in full because it was raised inside a C++ slot.
+        #
+        # A dangling document observer outlives the Python object it wraps,
+        # and this project then crashed with SIGSEGV inside the 3D-view
+        # paint path (QOpenGLFramebufferObject::bind), which is consistent
+        # with the observer still being called from the GUI thread after
+        # the object it references is gone. So this ordering is not
+        # tidiness: the flag-first shape is what stops the spin, and the
+        # spin is a stability problem, not a logging one.
         if self._fired:
             return
-        if getattr(obj, "Name", None) != getattr(self._fp, "Name", None):
-            return
         self._fired = True
+        try:
+            mine = getattr(self._fp, "Name", None)
+        except ReferenceError:
+            return          # our own object is already gone: nothing to do
+        try:
+            theirs = getattr(obj, "Name", None)
+        except ReferenceError:
+            return
+        if theirs != mine:
+            return
         try:
             FreeCAD.removeDocumentObserver(self)
         except Exception:
