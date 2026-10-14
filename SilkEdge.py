@@ -1,7 +1,8 @@
 """
 SilkEdge — single FeaturePython.
 Sketch(es) in → 4 poles out → cubic curve + polygon for display.
-Sketches linked via Sketches property (not tree children, since Part::FeaturePython doesn't nest).
+Sketches linked via Sketches property (a Part::FeaturePython cannot nest at
+object level; the GUI tree groups them under the Edge via EdgeViewProvider.claimChildren, #52).
 Display toggles: ShowCurve, ShowPolygon
 """
 
@@ -151,6 +152,18 @@ class EdgeViewProvider:
 
     def attach(self, vobj):
         self.ViewObject = vobj
+        self.Object = vobj.Object
+
+    def claimChildren(self):
+        """Ticket #52: group this Edge's sketches under it in the tree.
+
+        FreeCAD renders tree parent-child through the view provider's
+        claimChildren (DocumentModel/Tree in the 1.x core), not through
+        document-level grouping -- the datas-level Sketches link list is
+        unchanged, so the Edge/Patch identity model is untouched. Only the
+        Edge claims: an edge owns 1-2 sketches, while an edge can serve two
+        patches, so a Patch must never claim a sketch here."""
+        return list(self.Object.Sketches or [])
 
     def updateData(self, obj, prop):
         return True
