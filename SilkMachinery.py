@@ -84,7 +84,38 @@ def _endpoint_adjacency(edges, tol):
     return adj
 
 
-def _walk_cycle(adj, start):
+def _ends_touching(ends, i, j, tol):
+    """The ends of edge i that touch edge j: a subset of {0, 1}.
+
+    End-indexed, not point-indexed: the question the closure proof
+    (#68) asks is WHICH END of an edge a neighbour arrives at, so a
+    set per (i, j) pair is what the cycle check consumes."""
+    return {e for e in (0, 1)
+            if any(_meets(ends[i][e], ends[j][f], tol) for f in (0, 1))}
+
+
+def _cycle_joins_corner_to_corner(order, ends, tol):
+    """True when every edge of the cycle joins its two neighbours at
+    its two DIFFERENT ends (#68).
+
+    Adjacency alone cannot say the loop closes: three edges fanned out
+    of ONE point are pairwise-adjacent (every pair meets at that
+    point), so for n=3 the "meets exactly 2 of the other 2" check is
+    vacuous and any permutation walks as a cycle — while geometrically
+    no ordering chains corner to corner. The distinguishing fact is
+    per-edge: in a real loop each edge is entered at one end and left
+    at the other; in a fan both neighbours arrive at the SAME end and
+    the edge's far end plays no part in the loop."""
+    n = len(order)
+    for k, i in enumerate(order):
+        p = _ends_touching(ends, i, order[k - 1], tol)
+        s = _ends_touching(ends, i, order[(k + 1) % n], tol)
+        if p == s and len(p) == 1:
+            return False
+    return True
+
+
+def _walk_cycle(adj, start, ok=None):
     """The edge indices of one closed cycle through `start`, or None.
 
     Depth-first over the adjacency, candidates tried in INPUT ORDER, so
@@ -95,6 +126,11 @@ def _walk_cycle(adj, start):
     untouched). Backtracking rather than a plain greedy walk so a
     degenerate extra coincidence cannot make a fillable loop look
     unclosable.
+
+    `ok`, when given, filters COMPLETE cycles and the search keeps
+    backtracking past one it rejects (#68) — so an extra coincidence
+    that pinches the lexicographically-first cycle falls through to a
+    later cycle that does not, instead of to a refusal.
     """
     n = len(adj)
     path = [start]
@@ -102,7 +138,8 @@ def _walk_cycle(adj, start):
 
     def extend():
         if len(path) == n:
-            return start in adj[path[-1]]
+            return start in adj[path[-1]] and (
+                ok is None or ok(list(path)))
         for j in sorted(adj[path[-1]]):
             if j in used:
                 continue
@@ -137,6 +174,15 @@ def loop_order(edges, tol=None):
         other freedom, and it does not matter: AN.orient_a_to_b reverses
         each edge, so both directions build the same surface with the
         pole indices turned around.
+
+    Cyclic means CYCLIC, not merely pairwise-adjacent (#68): the found
+    cycle must join corner to corner — every edge entered at one end
+    and left at the other. Three edges fanned out of a single point
+    are pairwise-adjacent (for n=3 the per-edge "meets exactly 2 of
+    the other 2" is vacuously true), yet no ordering of them chains;
+    that used to slip through and build a patch disagreeing with its
+    own geometry. Now every cycle the walk offers is checked, and a
+    selection whose only cycles pinch is refused per edge, named.
     """
     # Keep the caller's list object: when the input turns out to be
     # already cyclic, THAT list is what comes back, not a copy of it.
@@ -175,8 +221,35 @@ def loop_order(edges, tol=None):
     if problems:
         return None, "; ".join(problems)
 
-    order = _walk_cycle(adj, 0)
+    # Closure is corner-to-corner, not merely pairwise (#68): the walk
+    # offers only cycles where every edge is entered at one end and
+    # left at the other. For n=3 the adjacency checks above cannot see
+    # the difference -- a fan of three edges out of one point has
+    # every edge meeting exactly the other two -- so this is the check
+    # that actually refuses it, per edge and named.
+    ends = [_edge_ends(e) for e in edges]
+    order = _walk_cycle(
+        adj, 0, lambda o: _cycle_joins_corner_to_corner(o, ends, tol))
     if order is None or len(order) != n:
+        # A cycle exists in the adjacency, but every one of them
+        # pinches: some edge joins BOTH of its neighbours at the same
+        # end of itself (#68). Say THAT, not "does not close" --
+        # the distinction is the whole diagnosis.
+        bare = _walk_cycle(adj, 0)
+        if bare is not None and len(bare) == n:
+            pinched = []
+            for k, i in enumerate(bare):
+                p = _ends_touching(ends, i, bare[k - 1], tol)
+                s = _ends_touching(ends, i, bare[(k + 1) % n], tol)
+                if p == s and len(p) == 1:
+                    pinched.append(
+                        "%s meets both of its loop neighbours at the "
+                        "SAME end of itself (its other end plays no "
+                        "part in the loop) -- a boundary edge joins "
+                        "its two neighbours at its two different ends,"
+                        " corner to corner"
+                        % _edge_label(edges[i]))
+            return None, "; ".join(pinched)
         # every edge meets exactly two, yet there is no single cycle
         # through them: two separate closed loops handed over at once.
         left = [i for i in range(n) if not order or i not in order]

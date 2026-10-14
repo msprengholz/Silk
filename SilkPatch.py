@@ -38,10 +38,21 @@
 #    did (the legacy pole parity and the chain ground truth ride on that).
 #    `Edges[k]` IS boundary side k by construction, for any input order,
 #    and one recompute later the list is cyclic, so the write is a fixed
-#    point rather than a ping-pong. The 3-edge pointed fill is NOT touched
-#    -- its Patch33 parity rides on the list it is handed. (Not because it
-#    is already order-independent: see the note at the normalization
-#    site and #68.)
+#    point rather than a ping-pong.
+#
+#    #68: the pointed fill now means the same thing. `Edges` is a cycle
+#    for 3 edges exactly as for 4 — row U0/col V3/row U3 = Edges[0]/[1]/[2],
+#    the degenerate corner IS the Edges[2]->Edges[0] junction — both
+#    counts run through the normalization gate, and _pointed_fill
+#    re-checks the loop itself so it refuses a non-loop instead of
+#    building 16 poles that disagree with their own geometry. For a
+#    CLOSED triple nothing is rewritten (every ordering of three corners
+#    is already cyclic — the write is structurally a no-op, which is
+#    what keeps Patch33 parity at 0.00e+00); what the check catches is
+#    the three-seams-from-one-point fan, which is not a loop at all and
+#    used to slip through because for n=3 the per-edge adjacency test is
+#    vacuous. See SilkMachinery.loop_order and
+#    Tests/test_pointed_corner_triple.py.
 
 import FreeCAD
 import Part
@@ -491,7 +502,7 @@ class Patch:
 
         return poles, weights
 
-    def _pointed_fill(self, fp):
+    def _pointed_fill(self, fp, inputs=None):
         """Replicate Patch33's ControlGrid44_3 fill from Edges[0..2].
 
         Produces the SAME 16 poles/weights/layout as Patch33 for the
@@ -500,14 +511,39 @@ class Patch:
         2. Patch33's TweakWeight11 defaults to 1.0 and is a legacy-fill
         detail only -- the unified fill uses that default; no such
         property is added to the unified Patch.
+
+        #68: `Edges` is a CYCLE here exactly as in the quad fill --
+        row U0 = Edges[0], col V3 = Edges[1], row U3 = Edges[2], and
+        the degenerate corner IS the Edges[2]->Edges[0] junction (the
+        C1 layout). execute() hands the resolved cycle in through
+        `inputs` (for a closed triple that is the caller's own list --
+        every ordering of three corners is already cyclic, so this
+        stays byte-identical to the legacy path); the fill re-runs
+        loop_order on its own so it is safe standalone AND so a
+        selection that is not a loop -- three edges fanned out of one
+        point -- is REFUSED with the per-edge message instead of
+        chained into corners that do not exist. That refusal is what
+        keeps a pointed patch from disagreeing with its own geometry:
+        the oracle checks Edges[k] is side k, so the honest object for
+        a non-loop input is the empty/valid one, never 16 poles and a
+        red C1/C2.
         """
-        p0 = list(fp.Edges[0].Poles)
-        p1 = list(fp.Edges[1].Poles)
-        p2 = list(fp.Edges[2].Poles)
-        w0 = list(fp.Edges[0].Weights)
-        w1 = list(fp.Edges[1].Weights)
-        w2 = list(fp.Edges[2].Weights)
+        inputs = list(inputs if inputs is not None else fp.Edges)
         tol = fp.tolerance
+        edges, problem = loop_order(inputs, tol)
+        if edges is None:
+            FreeCAD.Console.PrintError(
+                "Silk: Patch '%s': its %d boundary edges do not close a "
+                "loop -- %s. No surface was built.\n"
+                % (fp.Name, len(inputs), problem))
+            return None
+
+        p0 = list(edges[0].Poles)
+        p1 = list(edges[1].Poles)
+        p2 = list(edges[2].Poles)
+        w0 = list(edges[0].Weights)
+        w1 = list(edges[1].Weights)
+        w2 = list(edges[2].Weights)
 
         quad12 = AN.orient_a_to_b(p0, p1, tol)
         if quad12 == 0:
@@ -695,33 +731,41 @@ class Patch:
             build_display(fp, Part.Shape(), [], [], [], False)
             return
 
-        # #67: normalize the STORED boundary list before the fill reads
-        # it, so the fill consumes exactly what the property says.
-        # `Edges` is a cycle; it may arrive in any order (panel click
-        # order, hand-order in the data tab, an old file's saved order).
-        # `loop_order` derives the cycle from the edges' own endpoints,
-        # the write below persists it, and the fill then runs on the
-        # stored cycle -- which is what makes `Edges[k]` boundary side k
-        # for ANY input order, not just for a canonical fixture.
+        # #67/#68: normalize the STORED boundary list before the fill
+        # reads it, so the fill consumes exactly what the property
+        # says. `Edges` is a cycle; it may arrive in any order (panel
+        # click order, hand-order in the data tab, an old file's saved
+        # order). `loop_order` derives the cycle from the edges' own
+        # endpoints, the write below persists it, and the fill then
+        # runs on the stored cycle -- which is what makes `Edges[k]`
+        # boundary side k for ANY input order, not just for a
+        # canonical fixture. Both counts go through the same gate now
+        # (#68): the pointed fill's Edges means exactly what the quad
+        # fill's does, row U0/col V3/row U3 = Edges[0]/[1]/[2] with
+        # the degenerate corner at the Edges[2]->Edges[0] junction.
         #
-        # Only the quad (4-edge) fill is normalized. The 3-edge pointed
-        # fill is left alone: its parity with Patch33 rides on the list it
-        # is given. Do NOT read that as "the pointed fill is fine" -- it
-        # builds poles for every ordering (6/6) but its OUTPUT is
-        # order-dependent, and it does not satisfy the Edges[k]-is-side-k
-        # invariant this method exists to establish: on a curved corner
-        # triple it is oracle-red on 6/6. Pre-existing, tracked in #68.
-        # A list that does not close is NOT written -- _quad_fill refuses
-        # it with the per-edge message, and a refusal leaves the stored
-        # list exactly as the user had it, which is what they can fix.
+        # For a closed 3-edge triple the write never fires, and that is
+        # structural, not hopeful: with three corners every ordering is
+        # already cyclic, so loop_order hands back the caller's own
+        # list (pinned by test_pointed_corner_triple_loop_order_is_verbatim_in_every_ordering)
+        # and the fill chains byte-identically to the legacy path --
+        # Patch33 parity stays 0.00e+00. What the gate DOES change for
+        # 3 edges: a selection that is not a loop -- three edges fanned
+        # out of one point, which the per-edge adjacency check cannot
+        # see for n=3 because there it is vacuous -- never reaches the
+        # fill as buildable input; _pointed_fill re-runs loop_order
+        # and refuses with the per-edge message. A list that does not
+        # close is NOT written, for either count: a refusal leaves the
+        # stored list exactly as the user had it, which is what they
+        # can fix.
         fill_inputs = inputs
-        if len(inputs) == 4:
+        if len(inputs) in (3, 4):
             cycle, _problem = loop_order(inputs, fp.tolerance)
             if cycle is not None:
                 self._store_boundary_cycle(fp, inputs, cycle)
                 fill_inputs = cycle
 
-        filled = (self._pointed_fill(fp) if len(inputs) == 3
+        filled = (self._pointed_fill(fp, fill_inputs) if len(inputs) == 3
                   else self._quad_fill(fp, fill_inputs))
         if filled is None:
             # degenerate / non-connecting loop: leave the object empty/valid

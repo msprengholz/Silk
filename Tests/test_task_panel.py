@@ -704,12 +704,14 @@ def test_every_patch_the_panel_hands_back_is_oracle_green(doc):
                   errors)
             errors += ["%s: console error: %s" % (label, e)
                        for e in cap.errors]
-        # And the 3-edge pointed fill, through the panel too -- #67 does
-        # NOT normalize that list (its Patch33 parity rides on the list
-        # it is handed), so this is pinned from the same fixture the
-        # pointed oracle test uses. Note this pins the FLAT-triangle
-        # fixture, where the pointed fill is oracle-green; on a curved
-        # corner triple it is not (#68).
+        # And the 3-edge pointed fill, through the panel too -- pinned
+        # from the same fixture the pointed oracle test uses (the
+        # closed curved triangle). #68 established the same
+        # Edges[k]-is-side-k invariant for the pointed fill as for the
+        # quad: a CLOSED triple is oracle-green on its own stored list
+        # in every ordering (curved corner triples included --
+        # Tests/test_pointed_corner_triple.py), while a selection that
+        # is not a loop is refused instead of built.
         from Tests.test_patch_stage import _make_triangle_edges
         tri = _make_triangle_edges(doc)
         for e in tri:

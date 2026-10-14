@@ -192,17 +192,24 @@ def _build_gt_patch(doc, fixture_doc):
 # same patch, a different pole indexing -- so "the same surface" is the
 # honest statement, and "no longer crashes" is not.
 
-# The 8 symmetries of [0,1]^2 as (u, v) maps, named. `I` is the identity;
-# `R` is a quarter turn; `F` mirrors u.
+# The 8 symmetries of [0,1]^2 as maps on SAMPLE-GRID indices (i, j)
+# in 0.._SAMPLE_N-1, named. `I` is the identity; `R` is a quarter turn;
+# `F` mirrors u. The complement is `_SAMPLE_N - 1` (#68 found these maps
+# hardcoded to 3 -- the POLE-grid complement -- while being applied to
+# the 7x7 SAMPLE grid: R/R2/R3/F/FR2/FR3 then mapped indices out of
+# range (negative Python indexing wraps to an arbitrary point) or to
+# the wrong point entirely, so no non-trivial symmetry could ever match.
+# That too was invisible while `_same_surface` never read the candidate:
+# identity answered first, worst 0, and returned).
 _SYMMETRIES = (
     ("I", lambda u, v: (u, v)),
-    ("R", lambda u, v: (3 - v, u)),
-    ("R2", lambda u, v: (3 - u, 3 - v)),
-    ("R3", lambda u, v: (v, 3 - u)),
-    ("F", lambda u, v: (3 - u, v)),
+    ("R", lambda u, v: (_SAMPLE_N - 1 - v, u)),
+    ("R2", lambda u, v: (_SAMPLE_N - 1 - u, _SAMPLE_N - 1 - v)),
+    ("R3", lambda u, v: (v, _SAMPLE_N - 1 - u)),
+    ("F", lambda u, v: (_SAMPLE_N - 1 - u, v)),
     ("FR", lambda u, v: (v, u)),
-    ("FR2", lambda u, v: (u, 3 - v)),
-    ("FR3", lambda u, v: (3 - v, 3 - u)),
+    ("FR2", lambda u, v: (u, _SAMPLE_N - 1 - v)),
+    ("FR3", lambda u, v: (_SAMPLE_N - 1 - v, _SAMPLE_N - 1 - u)),
 )
 
 # Sample the patch on a 7x7 interior grid -- coarse enough to be quick,
@@ -250,7 +257,13 @@ def _same_surface(ref, cand, tol=1e-6):
             i, j = int(u * _SAMPLE_N), int(v * _SAMPLE_N)
             i2, j2 = sym(i, j)
             target = ref_pts[i2 * _SAMPLE_N + j2][2]
-            worst = max(worst, (p_ref - target).Length)
+            # CANDIDATE point vs the reference point at the symmetry-
+            # mapped index (#68 discovered this line comparing ref to
+            # ref's own symmetrised grid, which made identity worst==0
+            # for ANY candidate -- the helper answered "same surface"
+            # without ever reading the candidate, and every consumer's
+            # surface claim was vacuous because of it).
+            worst = max(worst, (p_cand - target).Length)
         if best is None or worst < best[0]:
             best = (worst, name)
         if worst <= tol:
@@ -514,19 +527,22 @@ def test_pointed_fill_all_orderings_unchanged(doc):
     build, the oracle is green on each, and the canonical order is
     byte-for-byte what it always was.
 
-    The pointed fill was already order-independent (it collapses the
-    U=0 column onto the corner shared by edges 0+2, so any ordering of
-    the three curves still closes). #66 must leave that alone: the
-    reorder helper is consulted by the QUAD fill only, and this test
-    would notice if it were not -- a permuted pointed build that
-    differed from the canonical one in poles (not just in index order)
-    would mean the pointed path had started consuming a reordered
-    list.
-
-    Also pins the OTHER half of "leave its result alone": a permuted
-    pointed build must be the SAME SURFACE as the canonical one, exactly
-    as for the quad -- if the helper ever leaked into the 3-edge path,
-    the surfaces would differ and this would catch it."""
+    What #66 left alone is the BUILD and the canonical bytes. It is NOT
+    true -- and #68 showed this test never verified it, because
+    `_same_surface` compared the reference to its own symmetry image
+    (see `test_surface_comparison_helper_actually_compares`) -- that the
+    6 orderings are the same surface. Four of them are not: the
+    degenerate corner of a pointed fill is the `Edges[2] -> Edges[0]`
+    junction, i.e. the corner opposite the list's MIDDLE edge, so the
+    orderings with a different middle edge move the cone point and no
+    parametrization can map the result back. The pure loop reversal
+    (210) keeps the cone and comes back as the mirror image -- the same
+    surface -- and that partition (4 differ, 012+210 match) is asserted
+    below. Every ordering of a closed triple is a valid cycle (there is
+    no canonical rotation to pick), so `loop_order` returns it verbatim.
+    `Tests/test_pointed_corner_triple.py` pins the rule explicitly;
+    this test pins what #66/#67 must not change: the build, the oracle,
+    and the canonical bytes."""
     errors, checks = [], []
     from SilkWorkflowOps import create_patch
     from SilkChecks import check_patch
@@ -538,7 +554,7 @@ def test_pointed_fill_all_orderings_unchanged(doc):
         return {"pass": False, "errors": errors, "checks": checks}
     canon = (list(base.Poles), list(base.Weights))
 
-    empties, bad_oracle, bad_surface = [], [], []
+    empties, bad_oracle, differing = [], [], []
     for perm in itertools.permutations(range(3)):
         sel = [tri[i] for i in perm]
         label = "".join(str(i) for i in perm)
@@ -552,7 +568,7 @@ def test_pointed_fill_all_orderings_unchanged(doc):
         ok, worst, how = _same_surface(canon, (list(patch.Poles),
                                                list(patch.Weights)))
         if not ok:
-            bad_surface.append("%s (worst %.3e via %s)" % (label, worst, how))
+            differing.append("%s (worst %.3e via %s)" % (label, worst, how))
     if empties:
         errors.append("pointed orderings with no poles: %s" % empties)
     else:
@@ -562,12 +578,18 @@ def test_pointed_fill_all_orderings_unchanged(doc):
     else:
         checks.append("oracle green on all 6 pointed orderings (C1-C3, "
                       "P3-P4)")
-    if bad_surface:
-        errors.append("permuted pointed builds are not the canonical "
-                      "surface: %s" % bad_surface)
+    if len(differing) == 4 and not any(
+            d.startswith("012") or d.startswith("210") for d in differing):
+        checks.append("the 4 cone-MOVING orderings differ from the "
+                      "canonical surface (%s); the pure loop reversal "
+                      "210 is the mirror image and matches -- the "
+                      "degenerate corner follows Edges[2]->Edges[0], "
+                      "#68, pinned in test_pointed_corner_triple"
+                      % ", ".join(d.split(" ")[0] for d in differing))
     else:
-        checks.append("all 6 pointed orderings are the same surface as the "
-                      "canonical build")
+        errors.append("expected exactly the 4 cone-moving orderings "
+                      "(021/102/120/201) to differ and 012/210 to match; "
+                      "got %d differing: %s" % (len(differing), differing))
 
     # the canonical order is the legacy baseline, untouched
     again = create_patch(tri, name="PTAgain")
