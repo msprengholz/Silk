@@ -27,6 +27,13 @@ Reload control (#72):
     python3 Tests/run_all.py --rss-warn 1024    RSS warning threshold in MB
                                                (default 2048)
 
+Deadline control (Tests/watchdog.py owns the mechanics):
+    SILK_RUN_CEILING=300        wall-clock backstop for the RPC dispatch
+                                in seconds (default 1740)
+    SILK_STALL_SECONDS=60       flat-progress + flat-CPU time before the
+                                watchdog declares a stall (default 180)
+    SILK_WATCHDOG_INTERVAL=1    how often it samples (default 5)
+
 Silk modules are reimported only when a .py under the Mod directory has
 actually changed (mtime + size + sha256, per process). A re-run with no
 edits reimports nothing, so it creates no new generation of the ~86
@@ -41,7 +48,10 @@ Fallback -- standalone instance (e.g. CI):
 
 Both modes run exactly the same test functions through
 Tests.mcp_harness.run_tests -- the MCP chat path uses the same functions.
-Exit codes: 0 = all passed, 1 = test failures, 2 = could not reach FreeCAD.
+Exit codes: 0 = all passed, 1 = test failures, 2 = could not reach FreeCAD,
+3 = stalled (watchdog: progress AND CPU flat -- it names the test),
+4 = timed out (wall-clock ceiling exceeded without a confirmed stall;
+exit 3 is the diagnosis, exit 4 is only "we ran out of bound").
 """
 
 import os
@@ -222,9 +232,12 @@ def _run_in_process(inspect, save_dir, test_filter, test_modules=None):
 # The stall watchdog lives in its own module on purpose -- see its docstring.
 # run_all.py itself cannot be imported inside FreeCAD (it runs main()
 # unconditionally, which re-enters the RPC server and segfaults the GUI
-# thread), so anything testable about the watchdog has to live elsewhere.
+# thread), so anything testable about the watchdog -- and about ending the
+# run when it stalls or runs out of wall clock -- has to live elsewhere.
 from Tests.watchdog import (  # noqa: E402
     PROGRESS_FILE, STALL_SECONDS, _Watchdog,
+    EXIT_STALLED, EXIT_TIMED_OUT, RUN_CEILING_SECONDS,
+    report_timeout, wait_for_call,
 )
 
 def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
@@ -234,11 +247,21 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
     import json
     import xmlrpc.client
 
-    # The full suite takes ~11 minutes in a busy FreeCAD, so wait as long
-    # as the RPC server is willing to (its own cap, 1800s). At the old
-    # 600s the client hung up while the suite was still running, and the
-    # run's output was lost with it.
-    _call_timeout = 1800
+    # Two deadlines bound this run, and neither can be silenced by the
+    # other (the original defect: one 30-minute blocking call, and the
+    # stall detector could only watch it happen):
+    #   * the WATCHDOG ends the wait the moment it confirms a stall
+    #     (progress flat AND FreeCAD's CPU flat) -- seconds after the
+    #     wedge, not 30 minutes;
+    #   * the WALL-CLOCK CEILING is the backstop for everything else
+    #     (a progress file that never appears, a run that keeps working
+    #     but never finishes). Generous: the full suite takes ~11 min.
+    # The socket timeout sits AFTER the ceiling (+120s) so the client's
+    # own report always wins the race against an anonymous socket error.
+    # At the old flat 600s the client hung up while the suite was still
+    # running and the output was lost with it.
+    _ceiling = RUN_CEILING_SECONDS
+    _call_timeout = int(_ceiling + 120)
 
     class _Transport(xmlrpc.client.Transport):
         def make_connection(self, host):
@@ -275,26 +298,56 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
     _wd = _Watchdog()
     _wd.start()
     try:
-        res = proxy.execute_code(
-        # Order must match _silk_run's signature inside _REMOTE_CODE:
-        # (force, keep_ns, test_filter, close_docs, save_dir, test_modules).
-        # Getting this wrong passes test_modules in save_dir's slot, which
-        # does not crash -- it just runs the whole suite, which is the
-        # worst possible failure for a speed flag.
-            _REMOTE_CODE % (_SILK_DIR, str(bool(force_reload)),
-                            str(bool(keep_namespace)), test_filter,
-                            str(not (inspect or save_dir)), save_dir,
-                            list(test_modules) if test_modules else None),
-            _call_timeout,
+        # The call runs on a daemon worker thread; THIS thread owns the
+        # deadline (Tests.wait_for_call). The old code blocked here, so
+        # `_wd.stalled` could only be read after the call returned -- the
+        # stall detector was dead code for the whole duration of the wait.
+        wait = wait_for_call(
+            lambda: proxy.execute_code(
+                # Order must match _silk_run's signature inside _REMOTE_CODE:
+                # (force, keep_ns, test_filter, close_docs, save_dir, test_modules).
+                # Getting this wrong passes test_modules in save_dir's slot, which
+                # does not crash -- it just runs the whole suite, which is the
+                # worst possible failure for a speed flag.
+                _REMOTE_CODE % (_SILK_DIR, str(bool(force_reload)),
+                                str(bool(keep_namespace)), test_filter,
+                                str(not (inspect or save_dir)), save_dir,
+                                list(test_modules) if test_modules else None),
+                _call_timeout,
+            ),
+            watchdog=_wd,
+            ceiling=_ceiling,
         )
-    except Exception:
-        raise
+        # An exception from the call propagates exactly as the blocking call
+        # made it: out of _run_via_rpc, out of main(), as a traceback.
+        if wait.error is not None:
+            raise wait.error.with_traceback(wait.error.__traceback__)
+        if _wd.stalled:
+            # Covers both ways a stall can win: the wait ended on it, or the
+            # call returned within the same poll window after the stall was
+            # declared. The watchdog printed its STALLED banner when it
+            # fired -- but the outcome it just discarded must not vanish
+            # silently.
+            if wait.reason == "returned":
+                print("[warn] the call returned, but the watchdog had already "
+                      "declared a stall -- reporting the stall (exit %d)"
+                      % EXIT_STALLED, flush=True)
+            return EXIT_STALLED
+        if wait.reason == "timed-out":
+            # The watchdog has not confirmed a stall, so say exactly what is
+            # known: last progress record, elapsed, CPU, flatness.
+            report_timeout(wait.elapsed, _ceiling, watchdog=_wd)
+            return EXIT_TIMED_OUT
+        res = wait.value
+        # A completed run must be unmistakable from the outside: this prints
+        # before any RESULT parsing, so even a malformed result shows that
+        # the call returned -- DONE no longer looks like WEDGED.
+        print("[done] suite call returned after %.1f s" % wait.elapsed,
+              flush=True)
     finally:
         # The watchdog is a daemon and dies with the process; this only
         # makes the lifetime explicit.
         _wd.interval = 1e9
-    if _wd.stalled:
-        return 3
     if not isinstance(res, dict) or not res.get("success"):
         print("FreeCAD reported an error:\n%s" % res)
         return 2
