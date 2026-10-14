@@ -273,3 +273,4 @@ class CaptureConsole:
 - `Resources/Test_files/Silk_2Boundaries.FCStd` — 9 sketches only (baseline)
 - `Resources/Test_files/Silk_Workflow.FCStd` — full pipeline built on sketches
 - `Resources/Test_files/Silk_2BoundariesAndControlGrids.FCStd` — old reference with groups
+- `Resources/Test_files/examples/` — **sketch-only click-through fixtures for the human-test rounds (#56)**: `SketchOnly_Quad` (4 sketches → 1 patch), `SketchOnly_TwoPatches` (7 sketches → 2 patches + 1 blend), `SketchOnly_Corner4` (12 sketches → 4 patches + corner blends), and bonus `SketchOnly_CornerCube`. Each opens with **zero** Edge/Patch/Blend objects; a human clicks Edge → Patch → Blend to reproduce the documented target in `Resources/Test_files/examples/README.md`. Use these for the wizard-fit / tool-intuitiveness rounds (#48) and to change the tools without rebuilding geometry. `Tests/test_example_documents.py` asserts each example stays sketch-only with its documented sketch set.
