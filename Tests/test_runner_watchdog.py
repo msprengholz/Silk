@@ -24,6 +24,8 @@ import os
 import threading
 import time
 
+from Tests.mcp_harness import check
+
 
 def _write(rec, path):
     tmp = path + ".tmp"
@@ -188,12 +190,6 @@ def test_the_progress_file_is_written_atomically(doc):
             except OSError:
                 pass
     return {"pass": not errors, "errors": errors, "checks": checks}
-
-
-def check(cond, msg, errors):
-    if not cond:
-        errors.append(msg)
-    return bool(cond)
 
 
 ALL_TESTS = [

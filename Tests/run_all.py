@@ -57,7 +57,6 @@ exit 3 is the diagnosis, exit 4 is only "we ran out of bound").
 import os
 import re
 import json
-import os
 import sys
 import threading
 import time
@@ -92,6 +91,7 @@ _rss_warn_mb = 2048.0
 _REMOTE_CODE = """
 import sys, os, importlib
 sys.path.insert(0, %r)
+os.environ["SILK_PROGRESS_FILE"] = %r
 
 def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir,
               test_modules=None):
@@ -123,6 +123,10 @@ def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir,
     except Exception:
         pass
     from Tests import suite
+    # the client's progress file; mcp_harness may already be imported
+    # here with an older default, so rebind explicitly
+    import Tests.mcp_harness as _mh
+    _mh.PROGRESS_FILE = os.environ["SILK_PROGRESS_FILE"]
     from Tests.mcp_harness import run_tests
     funcs = suite.collect_tests(test_filter, test_modules)
     if funcs:
@@ -234,6 +238,13 @@ def _run_in_process(inspect, save_dir, test_filter, test_modules=None):
 # unconditionally, which re-enters the RPC server and segfaults the GUI
 # thread), so anything testable about the watchdog -- and about ending the
 # run when it stalls or runs out of wall clock -- has to live elsewhere.
+# The progress file is PER-RUN: the client-pid name, set BEFORE the
+# watchdog import (it reads the env var at import) and passed to the
+# remote suite below, whose writer must agree on the same file. Without
+# this two concurrent run_all.py runs clobber one shared record.
+os.environ.setdefault("SILK_PROGRESS_FILE",
+                      "/tmp/silk_progress_%d.json" % os.getpid())
+
 from Tests.watchdog import (  # noqa: E402
     PROGRESS_FILE, STALL_SECONDS, _Watchdog,
     EXIT_STALLED, EXIT_TIMED_OUT, RUN_CEILING_SECONDS,
@@ -304,12 +315,15 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
         # stall detector was dead code for the whole duration of the wait.
         wait = wait_for_call(
             lambda: proxy.execute_code(
-                # Order must match _silk_run's signature inside _REMOTE_CODE:
-                # (force, keep_ns, test_filter, close_docs, save_dir, test_modules).
-                # Getting this wrong passes test_modules in save_dir's slot, which
-                # does not crash -- it just runs the whole suite, which is the
+                # The %r slots, in order: _SILK_DIR (top of _REMOTE_CODE),
+                # the client's progress file (top of _REMOTE_CODE), then
+                # _silk_run's signature (force, keep_ns, test_filter,
+                # close_docs, save_dir, test_modules). Getting this wrong
+                # passes test_modules in save_dir's slot, which does not
+                # crash -- it just runs the whole suite, which is the
                 # worst possible failure for a speed flag.
-                _REMOTE_CODE % (_SILK_DIR, str(bool(force_reload)),
+                _REMOTE_CODE % (_SILK_DIR, os.environ["SILK_PROGRESS_FILE"],
+                                str(bool(force_reload)),
                                 str(bool(keep_namespace)), test_filter,
                                 str(not (inspect or save_dir)), save_dir,
                                 list(test_modules) if test_modules else None),
@@ -411,8 +425,20 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
 def main():
     global _rss_warn_mb
     if "--rss-warn" in sys.argv:
-        value = sys.argv[sys.argv.index("--rss-warn") + 1]
-        _rss_warn_mb = float(value)
+        idx = sys.argv.index("--rss-warn")
+        # a bare `--rss-warn` has no value to read: read past the end and
+        # the run dies on IndexError before it says anything. Usage line,
+        # non-zero exit.
+        if idx + 1 >= len(sys.argv) or sys.argv[idx + 1].startswith("--"):
+            print("usage: run_all.py [--rss-warn MB] [test filter] [--inspect] [--save]")
+            print("--rss-warn expects a megabyte threshold, e.g. --rss-warn 512")
+            return 2
+        try:
+            _rss_warn_mb = float(sys.argv[idx + 1])
+        except ValueError:
+            print("usage: run_all.py [--rss-warn MB] [test filter] [--inspect] [--save]")
+            print("--rss-warn expects a megabyte threshold, e.g. --rss-warn 512")
+            return 2
         print("RSS warning threshold: %.0f MB" % _rss_warn_mb)
     # Positional args are test filters; a flag's value is not one.
     skip = {"--rss-warn"}
@@ -430,7 +456,11 @@ def main():
                 rest.pop(0)
             continue
         if arg in skip:
-            rest.pop(0)  # drop the flag's value
+            # drop the flag's value; a bare flag at the END has none, and
+            # popping past it is the same IndexError the bare flag died on
+            # above
+            if rest and not rest[0].startswith("--"):
+                rest.pop(0)
             continue
         if arg.startswith("--"):
             continue

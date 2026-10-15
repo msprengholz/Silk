@@ -23,7 +23,17 @@ import time
 #
 # The record is written atomically (tmp + os.replace) so a reader can never
 # catch it half-written and think the run advanced when it did not.
-PROGRESS_FILE = os.environ.get("SILK_PROGRESS_FILE", "/tmp/silk_progress.json")
+PROGRESS_FILE = os.environ.get("SILK_PROGRESS_FILE",
+                               "/tmp/silk_progress_%d.json" % os.getpid())
+
+
+def check(cond, msg, errors):
+    """Shared test assertion: append msg to errors when cond fails, and
+    return cond. One helper, imported by every test module -- seven
+    identical local defs was the same concept spelled seven ways."""
+    if not cond:
+        errors.append(msg)
+    return cond
 
 
 def write_progress(phase, name="", index=None, total=None):

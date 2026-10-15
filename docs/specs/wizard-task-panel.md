@@ -30,12 +30,14 @@ Gui.Control.showDialog(SilkTaskDialog(panel))   # -> native Tasks panel
 ```
 
 `panel.setWindowTitle(...)` becomes the TaskBox header. Verified live (attach, render,
-Enter routing, QToolBox accordion).
+Enter routing).
 
 ## Host & lifecycle
 
-- Native task panel, `QToolBox` accordion with three sections: **Edge / Patch / Blend**, one open
-  at a time. `QToolBox` has `focusPolicy: 0`, so it never steals focus from the 3D view.
+- Native task panel (#71), three sections: **Edge / Patch / Blend** as header/content PAIRS in a
+  fixed order, one open at a time. The container is `SilkTaskPanel`'s own `SectionStack` (a plain
+  QWidget, deliberately NOT a QToolBox — a QToolBox stacks all three headers on top and cannot
+  fold). No header takes focus (`focusPolicy: NoFocus`), so it never steals focus from the 3D view.
 - **Refuse to open** if any foreign task dialog is active (FreeCAD allows one at a time and
   raises `RuntimeError("Active task dialog found")`). Never silently close someone else's task.
 - **Close the panel on document switch** — collections would belong to a document the user is no
@@ -68,11 +70,17 @@ Collect inputs, then confirm:
 
 ## Blend split parameter (the fillet-radius idea)
 
-No new property on Blend. The band width **is** the patch's split — `band_cells()` reads
-`p.USplits`/`p.VSplits` live on every call, nothing is cached. The wizard displays and edits the
-patch's splits directly, under the existing `normalize_splits` rule
-(`sorted(set(v for v in values if 0.0 < v < 1.0))`). A chosen width is validated to still yield
-exactly **one** band cell (multi-cell bands are still unsupported and must refuse clearly).
+No new property on Blend. The band width **is** the patch's split — each axis carries two NAMED
+float properties, `USplit1` / `USplit2` / `VSplit1` / `VSplit2` (#82): `Split1` is the
+parametric-0 end's band edge, `Split2` the parametric-1 end's, and the axis endpoints are the
+sentinels (`Split1 = 0`, `Split2 = 1` reads as "no split on this axis"). `band_cells()` reads
+the two named properties live on every call (`SilkMachinery.split_pair`, nothing cached). The
+wizard exposes the band width per seam row (one editor per patch, #69) and edits the patch's
+split edges directly, under the set-path normalization (`SilkPatch._normalize_splits_on_set` via
+`SilkMachinery.normalize_edge_pair`): a value outside [0, 1] becomes that slot's own sentinel,
+and a pair whose two edges are out of order is swapped (both reported on the console unless the
+document is restoring). A chosen width is validated to still yield exactly **one** band cell
+(multi-cell bands are still unsupported and must refuse clearly).
 
 ## Known traps (from the live investigation)
 

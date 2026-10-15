@@ -60,7 +60,8 @@ from collections import namedtuple
 # thread waiting on a mutex, a modal dialog, an exception loop) burns no
 # CPU, while a slow-but-alive test burns plenty.
 
-PROGRESS_FILE = os.environ.get("SILK_PROGRESS_FILE", "/tmp/silk_progress.json")
+PROGRESS_FILE = os.environ.get("SILK_PROGRESS_FILE",
+                               "/tmp/silk_progress_%d.json" % os.getpid())
 STALL_SECONDS = float(os.environ.get("SILK_STALL_SECONDS", "180"))
 
 # How often the watchdog thread samples the progress file + CPU (seconds).

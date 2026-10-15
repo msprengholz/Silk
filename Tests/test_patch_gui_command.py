@@ -10,6 +10,7 @@ lived in the comprehensive file (ported onto the unified Patch).
 import FreeCAD
 import Part
 from FreeCAD import Gui, Vector
+from Tests.mcp_harness import check
 
 
 class _CaptureConsole:
@@ -26,12 +27,6 @@ class _CaptureConsole:
 
     def __exit__(self, *args):
         FreeCAD.Console.PrintError = self._orig
-
-
-def check(cond, msg, errors):
-    if not cond:
-        errors.append(msg)
-    return cond
 
 
 def _make_loop_edges(doc):

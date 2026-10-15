@@ -59,14 +59,9 @@ import os
 import FreeCAD
 import Part
 from FreeCAD import Gui
+from Tests.mcp_harness import check
 
 Vector = FreeCAD.Vector
-
-
-def check(cond, msg, errors):
-    if not cond:
-        errors.append(msg)
-    return cond
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -223,11 +218,11 @@ def test_panel_lands_in_the_native_task_panel(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_toolbox_is_a_three_section_accordion(doc):
-    """The three sections are Edge / Patch / Blend in that order, one
-    open at a time, and the QToolBox takes no focus (focusPolicy 0) so
-    the 3D view keeps it -- which is exactly why confirm cannot be a
-    keyPressEvent."""
+def test_section_stack_has_three_ordered_sections_and_takes_no_focus(doc):
+    """The three sections are Edge / Patch / Blend in that order, as
+    header/content pairs in the section stack, and the stack takes no
+    focus (focusPolicy NoFocus) so the 3D view keeps it -- which is
+    exactly why confirm cannot be a keyPressEvent."""
     errors, checks = [], []
     from PySide import QtCore
     from SilkTaskPanel import SECTION_EDGE, SECTION_TITLES
@@ -3896,7 +3891,7 @@ def test_sections_are_header_content_pairs_not_a_toolbox(doc):
 
 ALL_TESTS = [
     test_panel_lands_in_the_native_task_panel,
-    test_toolbox_is_a_three_section_accordion,
+    test_section_stack_has_three_ordered_sections_and_takes_no_focus,
     test_enter_shortcut_is_application_scoped_for_both_enter_keys,
     test_edge_stage_collect_one_sketch_then_confirm,
     test_edge_stage_two_sketches_reach_the_2n_mode,

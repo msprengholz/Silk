@@ -39,6 +39,7 @@ import types
 import zipfile
 
 import FreeCAD
+from Tests.mcp_harness import check
 
 try:
     from FreeCAD import Gui
@@ -83,12 +84,6 @@ LEGACY_NAMES = [
     "StarTrim_CubicNStar", "SilkPose", "Silk_CreateBoundarySpline",
     "Silk_CreateControlGridPatch",
 ]
-
-
-def check(cond, msg, errors):
-    if not cond:
-        errors.append(msg)
-    return cond
 
 
 def _is_addworkbench_call(node):

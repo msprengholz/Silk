@@ -48,6 +48,8 @@ from contextlib import contextmanager
 
 import xmlrpc.server
 
+from Tests.mcp_harness import check
+
 MOD_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER = os.path.join(MOD_DIR, "Tests", "run_all.py")
 
@@ -59,12 +61,6 @@ _PY3 = None
 _PY3_PROBED = False
 
 _SCRATCH_PATHS = []
-
-
-def check(cond, msg, errors):
-    if not cond:
-        errors.append(msg)
-    return bool(cond)
 
 
 def _ok(checks, errors):

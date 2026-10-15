@@ -49,6 +49,13 @@ Deferred / non-core (keep tests, not part of the core suite's acceptance):
 | `test_workflow.py`, `test_boundaryspline.py` | PRUNE (#26) | legacy BoundarySpline / ControlGridPatch commands retired |
 | `test_api_smoke.py` | TRIM (#26) | keep only as an upstream AN guard if wanted; primitives now covered by object tests |
 
+**Actual disposition (2026-10-14):** the FOLD targets above never materialised — `test_edge.py`,
+`test_patch.py` and `test_mutation_matrix.py` do not exist. The stage tests
+(`test_edge_stage.py`, `test_patch_stage.py`, `test_blend_stage.py`) were **kept**, not folded;
+`test_patch33.py` was **deleted**, not folded into `test_patch`. Unified coverage lives instead
+in `test_patch_unified.py`, `test_blend_unified.py`, `test_mutation_unified.py` and the
+`test_mutation_backfill.py` matrix. The table above is the original plan, kept as a record.
+
 ## Mutation harness spec (the part we hand off)
 
 **Operators** — each applies a mutation, calls `doc.recompute()`, runs the object's oracle, and asserts: oracle green, geometry valid, no stale state.

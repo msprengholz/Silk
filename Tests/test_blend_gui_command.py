@@ -25,12 +25,7 @@ imported, not refactored.
 """
 import FreeCAD
 from FreeCAD import Gui
-
-
-def check(cond, msg, errors):
-    if not cond:
-        errors.append(msg)
-    return cond
+from Tests.mcp_harness import check
 
 
 def _select(*objs):

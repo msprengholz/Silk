@@ -1,6 +1,6 @@
 # Spec — Unified Edge / Patch / Blend (2-patch blend core)
 
-Status: **Thinking-phase artifact** for wayfinder map #1. Nothing here is implemented yet. When the seams below are agreed, this feeds `/to-tickets` and each build ticket is handed off to a subagent in a fresh context (standing process rule — see AGENTS.md "Discussion vs implementation").
+Status: **implemented** — the triad below landed on `unified-workflow-wizard` (Edge / Patch / Blend objects, ops layer + oracle, suite green). Kept as a design record for wayfinder map #1: when further seams are agreed, this feeds `/to-tickets` and each build ticket is handed off to a subagent in a fresh context (standing process rule — see AGENTS.md "Discussion vs implementation").
 
 ## Problem Statement
 

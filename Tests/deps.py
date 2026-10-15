@@ -66,6 +66,13 @@ def imports_of(path):
             elif isinstance(node, ast.ImportFrom):
                 if node.module and node.level == 0:   # 0 == absolute only
                     names.add(node.module.split(".")[0])
+                    # `from Tests.test_x import ...` is a dependency on
+                    # test_x itself, not on the Tests package -- the
+                    # first component alone would hide it from the
+                    # test-module dependency map below.
+                    parts = node.module.split(".")
+                    if parts[0] == "Tests" and len(parts) > 1:
+                        names.add(parts[1])
     _IMPORTS_CACHE[path] = names
     return names
 
@@ -123,7 +130,7 @@ def test_module_dependencies():
         name = os.path.splitext(os.path.basename(path))[0]
         for dep in imports_of(path) & names:
             if dep != name:
-                tests[name] |= tests.get(dep, set())
+                tests[name] |= tests.get(dep, set()) | {dep}
     return tests
 
 

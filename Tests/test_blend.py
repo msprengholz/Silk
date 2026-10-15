@@ -3,12 +3,13 @@ Blend test: two adjacent patches with a blend strip between them.
 
 #42: the patches are built through the ops layer (the unified
 Patch; the legacy CreateSilkPatch44 GUI command is retired). The
-CaptureConsole / check helpers lived in the retired
-test_patch44_comprehensive.py and moved here.
+CaptureConsole helper lived in the retired test_patch44_comprehensive.py
+and moved here; check comes from Tests.mcp_harness.
 """
 import FreeCAD
 import Part
 from FreeCAD import Vector
+from Tests.mcp_harness import check
 
 
 class CaptureConsole:
@@ -29,12 +30,6 @@ class CaptureConsole:
     def __exit__(self, *args):
         FreeCAD.Console.PrintError = self._orig_error
         FreeCAD.Console.PrintWarning = self._orig_warn
-
-
-def check(cond, msg, errors):
-    if not cond:
-        errors.append(msg)
-    return cond
 
 
 def _run_with_capture(doc, test_fn):
