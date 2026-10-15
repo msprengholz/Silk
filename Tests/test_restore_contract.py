@@ -12,12 +12,19 @@ restored blend raised
 
     AttributeError: 'Blend' object has no attribute '_delete_watcher'
 
-and died unwatched. Measured on Silk_Corner2x2.FCStd: all four unified
-Blends (B12/B24/B43/B31) restored with no watcher, so deleting B12 left
-Patch44 at U(0.0, 0.9) and Patch001 at U(0.1, 1.0) -- #70's unblend never
-ran and both stayed subdivided ("an unblended patch that still renders
-subdivided does not look unblended"). A freshly created blend unblends
-correctly, so the bug is restore-specific.
+and died unwatched. The clean evidence is the fresh-vs-restored comparison
+in test_a_restored_blend_unblends_like_a_fresh_one, run on a CornerBlend-
+free temp model so the unblend is observable: a FRESH delete drops the
+seam's band split on both patches (Patch44 U (0.0, 0.9) -> (0.0, 1.0);
+Patch001 U (0.1, 1.0) -> (0.0, 1.0)), while the RESTORED delete leaves them
+untouched -- with no watcher the delete slot never runs, so #70's unblend
+never happens and both patches stay subdivided. A freshly created blend
+unblends correctly, so the bug is restore-specific.
+
+The corner reference file (Silk_Corner2x2.FCStd) cannot serve as this
+repro: its CornerBlend feeds off B12, so `_drop_band_split` refuses and
+pins the splits EVEN WITH the watcher installed (#28) -- the splits
+staying there is correct behaviour, not evidence of the defect.
 
 Two things the oracle must respect:
 
@@ -28,12 +35,13 @@ Two things the oracle must respect:
     CaptureConsole (a Python monkeypatch of FreeCAD.Console.PrintError)
     never sees it -- "no console error" is not an assertion here.
 
-The last two tests walk EVERY reference .FCStd: each object that declared
-a proxy (module + class in Document.xml) must restore with a live proxy
-of that class, and every restored blend must carry its delete watcher.
-Objects whose saved Proxy is JSON `null` declare no proxy to restore --
-that is a property of the FILE, recorded in the checks and reported, not
-a restore-code defect (#10 family).
+The last two tests walk the named reference documents (REFERENCE_FILES
+below, NOT a filesystem sweep): each object that declared a proxy (module
++ class in Document.xml) must restore with a live proxy of that class, and
+every restored blend must carry its delete watcher. Objects whose saved
+Proxy is JSON `null` declare no proxy to restore -- that is a property of
+the FILE, recorded in the checks and reported, not a restore-code defect
+(#10 family).
 """
 
 import os
@@ -47,6 +55,26 @@ from Tests.mcp_harness import check
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURE_DIR = os.path.join(_HERE, "..", "Resources", "Test_files")
+
+# The reference documents this contract is asserted against -- the four
+# AGENTS.md lists under "Reference Files". This is EXPLICIT, not a
+# filesystem sweep, because a sweep also scoops up five files that are NOT
+# fixtures: the `SketchOnly_*_withEdges/withPatches` under Test_files root
+# are RECOVERY SNAPSHOTS of a human's work-in-progress session (`57dd0dd`,
+# "so git can recover them"), with no declared meaning and no owner -- only
+# the `examples/` set has one (Tests/test_example_documents.py). Their
+# `E_*` objects save `Proxy` = JSON null, so a sweep reports them as "0
+# declared proxies" and quietly pads the assertion set with files nothing
+# reads; their null proxies belong to the #10 family, not to this contract.
+# `examples/` is left out for the same reason it contributes nothing: it is
+# sketch-only, so it declares no proxy and would add only a "0 declared
+# proxies" line. `_inspect/` is gitignored scratch.
+REFERENCE_FILES = [
+    "Silk_2Boundaries.FCStd",
+    "Silk_2BoundariesAndControlGrids.FCStd",
+    "Silk_Workflow.FCStd",
+    "Silk_Corner2x2.FCStd",
+]
 
 BLEND_TYPES = ("Blend", "BlendStrip")
 
@@ -92,20 +120,14 @@ def _fresh_document(name):
     return FreeCAD.newDocument(name)
 
 
-def _fixture_files():
-    """Every reference .FCStd under Resources/Test_files.
+def _reference_files():
+    """The named reference documents, resolved to paths.
 
-    examples/ is included; `_inspect/` is NOT -- it is gitignored scratch
-    that earlier runs leave behind, not a reference fixture, and asserting
-    on stale artifacts would make this oracle depend on run history.
+    See REFERENCE_FILES: this is the explicit set, not a filesystem sweep.
+    Existence is asserted by the callers (a renamed/deleted reference doc
+    must fail loudly, not be silently skipped).
     """
-    out = []
-    for base, dirs, names in os.walk(FIXTURE_DIR):
-        dirs[:] = [d for d in dirs if d != "_inspect"]
-        for n in sorted(names):
-            if n.endswith(".FCStd"):
-                out.append(os.path.join(base, n))
-    return sorted(out)
+    return [os.path.join(FIXTURE_DIR, name) for name in REFERENCE_FILES]
 
 
 def _declared_proxies(path):
@@ -241,11 +263,12 @@ def test_every_reference_document_restores_its_declared_proxies(doc):
 
     An object whose .FCStd Proxy is `null` declared no proxy, so it cannot
     be asserted -- those are recorded (checks) as a found property of the
-    fixtures, not failed on.
+    reference documents, not failed on.
     """
     errors, checks = [], []
-    files = _fixture_files()
-    check(files, "no .FCStd fixtures found under %s" % FIXTURE_DIR, errors)
+    files = _reference_files()
+    missing = [p for p in files if not os.path.isfile(p)]
+    check(not missing, "reference document(s) missing: %s" % missing, errors)
 
     total = 0
     null_notes = []
@@ -278,7 +301,7 @@ def test_every_reference_document_restores_its_declared_proxies(doc):
         finally:
             FreeCAD.closeDocument(d.Name)
 
-    checks.append("checked %d declared proxies in %d fixtures"
+    checks.append("checked %d declared proxies in %d reference documents"
                   % (total, len(files)))
     for note in null_notes:
         checks.append("Proxy=null (nothing to restore): " + note)
@@ -286,11 +309,11 @@ def test_every_reference_document_restores_its_declared_proxies(doc):
 
 
 def test_every_restored_blend_has_its_delete_watcher(doc):
-    """Every blend in every reference .FCStd restored with a live watcher."""
+    """Every blend in the named reference documents restored with a watcher."""
     errors, checks = [], []
     seen = 0
     per_file = []
-    for path in _fixture_files():
+    for path in _reference_files():
         fname = os.path.relpath(path, FIXTURE_DIR)
         d = FreeCAD.openDocument(path)
         try:
