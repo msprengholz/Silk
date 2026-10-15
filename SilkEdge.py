@@ -29,9 +29,12 @@ iconPath = path_Silk_icons + "/BoundarySpline.svg"
 # Edge.execute, so none of them can disagree about what a selection means:
 #   1 sketch, 3 visible lines      -> "3L"
 #   1 sketch, one supported curve  -> "FirstElement"
-#   2 sketches, both node          -> "2N"   (circle + line each)
+#   2 sketches, both node          -> "2N"   (a circle + line, connected)
 #   2 sketches, two profiles       -> "plan_elevation" (plan then elevation)
-# Anything else is REFUSED by name, before anything is built.
+# Anything else is REFUSED by name, before anything is built. A node is
+# the FIRST TWO elements = one circle + one line CONNECTED at a shared
+# endpoint (sketch-local, the core's own tolerance); a circle + line pair
+# that is not connected is refused for what it is, never read as 2N.
 #
 # The plan + elevation pair is the ControlPoly4_2X4P composition: the plan
 # sketch (Sketches[0]) supplies the floor footprint, the elevation
@@ -82,14 +85,68 @@ def _is_first_element_sketch(sketch):
     return len(vis) == 1 and _is_view_element(vis[0][1])
 
 
-def _is_node_sketch(sketch):
-    """One full circle + one line -- the ControlPoly4_2N precondition (it
-    indexes Geometry[0] and Geometry[1] directly, so a node sketch is
-    exactly two elements)."""
-    if len(sketch.Geometry) != 2:
+def _node_circle_and_line(sketch):
+    """(circle, line) when the FIRST TWO elements are one part circle +
+    one part line -- exactly the two elements ControlPoly4_2N reads
+    (ArachNURBS.py:1994-1995, :2017-2018). Elements AFTER the first two
+    are ignored by the core, so they are allowed here; None when the
+    first two are not that pair."""
+    if len(sketch.Geometry) < 2:
+        return None
+    g0, g1 = sketch.Geometry[0], sketch.Geometry[1]
+    if {g0.TypeId, g1.TypeId} != {
+            "Part::GeomCircle", "Part::GeomLineSegment"}:
+        return None
+    circle = g0 if g0.TypeId == "Part::GeomCircle" else g1
+    line = g0 if g0.TypeId == "Part::GeomLineSegment" else g1
+    return circle, line
+
+
+def _node_is_connected(sketch):
+    """Whether the first two elements are a circle + line pair whose
+    circle centre sits on one of the line's endpoints -- the connection
+    ControlPoly4_2N verifies in sketch-LOCAL coordinates with the core's
+    own tolerance (ArachNURBS.py:2004-2008, :2027-2031)."""
+    pair = _node_circle_and_line(sketch)
+    if pair is None:
         return False
-    return {g.TypeId for g in sketch.Geometry} == {
-        "Part::GeomCircle", "Part::GeomLineSegment"}
+    circle, line = pair
+    return bool(
+        AN.equalVectors(line.StartPoint, circle.Center, AN.default_tol)
+        or AN.equalVectors(line.EndPoint, circle.Center, AN.default_tol))
+
+
+def _is_node_sketch(sketch):
+    """A usable node: the first two elements are one circle + one line,
+    CONNECTED at a shared endpoint. The core reads only Geometry[0] and
+    Geometry[1], so extra elements after them do not disqualify the sketch
+    (#90 review)."""
+    return _node_is_connected(sketch)
+
+
+def _unconnected_node(sketch):
+    """True when the first two elements are a circle + line pair that is
+    NOT connected (circle centre off the line) -- a pair that must be
+    refused for what it is, never routed to 2N."""
+    return (_node_circle_and_line(sketch) is not None
+            and not _node_is_connected(sketch))
+
+
+def _unconnected_node_refusal(sketches):
+    """One refusal sentence when any sketch's first two elements are an
+    UNCONNECTED circle + line pair, naming the offending sketch(es) and
+    the reason; None when none of them is such a pair."""
+    bad = [s for s in sketches if _unconnected_node(s)]
+    if not bad:
+        return None
+    names = " and ".join(_sketch_name(s) for s in bad)
+    if len(bad) == 1:
+        return ("%s is a circle + line pair, but the circle centre is not "
+                "on a line endpoint -- a node sketch connects its circle to "
+                "the line at one of the line's endpoints" % names)
+    return ("%s are circle + line pairs, but their circle centres are not "
+            "on a line endpoint -- a node sketch connects its circle to the "
+            "line at one of the line's endpoints" % names)
 
 
 def _first_view_element(sketch):
@@ -179,6 +236,9 @@ def classify_sketches(sketches):
                       % n)
 
     if n == 1:
+        reason = _unconnected_node_refusal(sketches)
+        if reason:
+            return None, reason
         kind = _sketch_kind(sketches[0])
         if kind == "3L":
             return "3L", "3L (one sketch)"
@@ -194,6 +254,13 @@ def classify_sketches(sketches):
     kp, ke = _sketch_kind(plan), _sketch_kind(elevation)
     if kp == "node" and ke == "node":
         return "2N", "2N (two sketches)"
+
+    # #90 review: a circle + line pair that is not connected must be
+    # refused for what it IS (naming the sketch and the reason), in any
+    # placement -- next to a node, a profile, or another such pair.
+    reason = _unconnected_node_refusal(sketches)
+    if reason:
+        return None, reason
 
     profiles = ("3L", "FirstElement")
     if kp in profiles and ke in profiles:
@@ -214,7 +281,8 @@ def classify_sketches(sketches):
                 "the elevation sketch (%s) is flat along the plan plane's "
                 "normal (height span %.2e) -- an elevation must rise above "
                 "the plan plane" % (_sketch_name(elevation), span))
-        return "plan_elevation", "plan + elevation (two sketches)"
+        return "plan_elevation", ("plan + elevation (%s, %s)"
+                                  % (kp, ke))
 
     return None, (
         "%s (%s) and %s (%s) cannot form an Edge -- a two-sketch Edge "

@@ -19,10 +19,13 @@ What is asserted here:
   3. every refusal is LOUD and leaves nothing half-built -- coplanar
      planes, non-perpendicular planes (both normals named), a flat
      elevation, a mixed node/view pair, two sketches that are neither
-     shape, and 3+ sketches. Each refusal test is mutation-checked
-     (removing the guard makes it fail);
+     shape, an unconnected circle + line pair (no node), and 3+ sketches.
+     Each refusal test is mutation-checked (removing the guard makes it
+     fail);
   4. an old 2-sketch node Edge still classifies as "2N" (restore parity),
-     including across a save / reopen;
+     including across a save / reopen, and a node sketch carrying extra
+     geometry AFTER its circle + line is still a node (the core reads only
+     the first two elements);
   5. the real panel reads the plan + elevation mode into its label, shows
      the refusal reason for a bad pair, and builds the edge on confirm.
 
@@ -80,6 +83,18 @@ def _node_sketch(doc, name, dx):
     sk.addGeometry([
         Part.Circle(Vector(0, 0, 0), Vector(0, 0, 1), 5.0),
         Part.LineSegment(Vector(0, 0, 0), Vector(dx, 10.0, 0)),
+    ])
+    doc.recompute()
+    return sk
+
+
+def _unconnected_node(doc, name="Bad"):
+    """A circle + line pair whose circle centre is NOT on the line -- the
+    shape ControlPoly4_2N cannot connect (it then leaves p01s unset)."""
+    sk = doc.addObject("Sketcher::SketchObject", name)
+    sk.addGeometry([
+        Part.Circle(Vector(0, 0, 0), Vector(0, 0, 1), 5.0),
+        Part.LineSegment(Vector(10, 0, 0), Vector(20, 10, 0)),
     ])
     doc.recompute()
     return sk
@@ -293,6 +308,63 @@ def test_refuses_three_sketches(doc):
                          "three sketches")
 
 
+def test_unconnected_node_is_refused_in_every_placement(doc):
+    """A circle + line pair whose centre is off the line is never read as
+    a node: refused, naming the sketch and the reason, in all three
+    placements (alone, next to a good node, next to a profile)."""
+    errors, checks = [], []
+    from SilkEdge import classify_sketches
+
+    good = _node_sketch(doc, "Good", 10.0)
+    bad = _unconnected_node(doc, "Bad")
+    plan = _line_sketch(doc, "Plan", PLAN_PTS)
+
+    for label, sel in (("alone", [bad]),
+                       ("with a node", [bad, good]),
+                       ("with a profile", [plan, bad])):
+        mode, detail = classify_sketches(sel)
+        check(mode is None,
+              "%s: unconnected node read as %r (%s)" % (label, mode, detail),
+              errors)
+        check("Bad" in detail,
+              "%s: refusal %r does not name the offending sketch"
+              % (label, detail), errors)
+        check("circle" in detail.lower() and "endpoint" in detail.lower(),
+              "%s: refusal %r does not name the reason" % (label, detail),
+              errors)
+    checks.append("unconnected node refused by name and reason in all three "
+                  "placements")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_unconnected_node_pair_builds_nothing_and_does_not_crash(doc):
+    """create_edge on the unconnected pair refuses before building: None,
+    no leaked Edge object, a console error naming the sketch -- never the
+    0-pole, null-Shape, oracle-red Edge (with its UnboundLocalError)."""
+    errors, checks = [], []
+    from SilkWorkflowOps import create_edge
+    from SilkChecks import check_edge
+
+    good = _node_sketch(doc, "Good", 10.0)
+    bad = _unconnected_node(doc, "Bad")
+    n_before = len(_edges(doc))
+    with _Capture() as cap:
+        edge = create_edge([bad, good], name="Unconnected")
+    check(edge is None,
+          "create_edge built an Edge from the unconnected pair", errors)
+    check(len(_edges(doc)) == n_before,
+          "an Edge object leaked into the document", errors)
+    check(any("Bad" in e for e in cap.errors),
+          "the refusal does not name the offending sketch: %r" % cap.errors,
+          errors)
+    red = [(o.Name, [n for (n, ok, _d) in check_edge(o) if not ok])
+           for o in _edges(doc)
+           if [n for (n, ok, _d) in check_edge(o) if not ok]]
+    check(not red, "an oracle-red Edge survived: %s" % red, errors)
+    checks.append("unconnected pair: None, no object, loud, nothing red")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 # ---- restore parity + classification regressions ---------------------------
 
 def test_node_pair_still_classifies_as_2n(doc):
@@ -314,6 +386,45 @@ def test_node_pair_still_classifies_as_2n(doc):
         bad = _failures(edge)
         check(not bad, "oracle flagged the 2N edge: %s" % bad, errors)
         checks.append("2N edge (%d poles) oracle green" % len(edge.Poles))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_node_with_extra_geometry_still_classifies_2n(doc):
+    """A node sketch carrying an extra CONSTRUCTION element after its
+    circle + line is still a node -- the core reads only Geometry[0] and
+    Geometry[1] -- and builds a green 2N edge."""
+    errors, checks = [], []
+    from SilkWorkflowOps import create_edge
+    from SilkEdge import classify_sketches
+    from Tests import corner_model
+
+    (_n, skey, p1, p2, ekey) = corner_model.EDGES[0]
+    a = corner_model.node_sketch(doc, "NS_a_extra", skey, p1)
+    a.addGeometry(
+        Part.LineSegment(Vector(0, 30, 0), Vector(5, 30, 0)), True)
+    doc.recompute()
+    b = corner_model.node_sketch(doc, "NS_b", ekey, p2)
+    check(len(a.Geometry) == 3,
+          "fixture has %d geometry elements, expected 3" % len(a.Geometry),
+          errors)
+    check(a.Geometry[0].TypeId == "Part::GeomCircle"
+          and a.Geometry[1].TypeId == "Part::GeomLineSegment",
+          "the first two elements are not circle + line: %s"
+          % [g.TypeId for g in a.Geometry], errors)
+
+    mode, detail = classify_sketches([a, b])
+    check(mode == "2N",
+          "node + extra element read as %r (%s), expected 2N"
+          % (mode, detail), errors)
+
+    edge = create_edge([a, b], name="NodeExtra2N")
+    if check(edge is not None,
+             "create_edge refused a node with extra geometry", errors):
+        check(len(edge.Poles) == 4,
+              "built %d poles, expected 4" % len(edge.Poles), errors)
+        bad = _failures(edge)
+        check(not bad, "oracle flagged the 2N edge: %s" % bad, errors)
+        checks.append("node + extra construction element -> 2N, oracle green")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -410,6 +521,11 @@ def test_panel_reads_plan_elevation_mode_and_builds(doc):
         check("plan" in text and "elevation" in text,
               "mode line %r does not name the plan + elevation reading"
               % panel.edge_mode_lbl.text(), errors)
+        # #90 review: the label must name the two SUB-modes in play, not
+        # just "two sketches" (both fixture sketches are 3L here).
+        check("3l" in text or "firstelement" in text,
+              "mode line %r does not name the sub-modes"
+              % panel.edge_mode_lbl.text(), errors)
         with _Capture() as cap:
             panel.panel_confirm()
         doc.recompute()
@@ -475,7 +591,10 @@ ALL_TESTS = [
     test_refuses_mixed_node_and_profile,
     test_refuses_two_unusable_sketches,
     test_refuses_three_sketches,
+    test_unconnected_node_is_refused_in_every_placement,
+    test_unconnected_node_pair_builds_nothing_and_does_not_crash,
     test_node_pair_still_classifies_as_2n,
+    test_node_with_extra_geometry_still_classifies_2n,
     test_single_sketch_classification_unchanged,
     test_node_pair_survives_save_and_reopen_as_2n,
     test_panel_reads_plan_elevation_mode_and_builds,
