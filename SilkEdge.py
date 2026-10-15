@@ -22,6 +22,288 @@ path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
 iconPath = path_Silk_icons + "/BoundarySpline.svg"
 
 
+# ---- sketch classification (#90) -----------------------------------------
+# One Edge is built three ways, and which way is decided by the SHAPES the
+# user selected -- there is no mode property to keep in sync. This one
+# classifier answers the panel's mode label, the ops layer's pre-check and
+# Edge.execute, so none of them can disagree about what a selection means:
+#   1 sketch, 3 visible lines      -> "3L"
+#   1 sketch, one supported curve  -> "FirstElement"
+#   2 sketches, both node          -> "2N"   (circle + line each)
+#   2 sketches, two profiles       -> "plan_elevation" (plan then elevation)
+# Anything else is REFUSED by name, before anything is built.
+#
+# The plan + elevation pair is the ControlPoly4_2X4P composition: the plan
+# sketch (Sketches[0]) supplies the floor footprint, the elevation
+# (Sketches[1]) supplies each pole's height along the plan plane's normal.
+
+# The element types ControlPoly4_FirstElement can consume (ArachNURBS.py
+# :2306-2344): a line, a circular arc, an elliptic arc, or a cubic
+# B-spline with 4 poles. A full circle is deliberately NOT among them.
+_VIEW_ELEMENT_TYPES = (
+    "Part::GeomLineSegment",
+    "Part::GeomArcOfCircle",
+    "Part::GeomArcOfEllipse",
+)
+
+# The plan and elevation planes must be perpendicular: the elevation's
+# height is the distance of its poles ALONG the plan plane's normal, which
+# reads as a clean height only when the two planes meet at a right angle.
+_PLANE_PERP_TOL = 1e-6
+
+
+def _visible_geometry(sketch):
+    """[(index, geometry)] of a sketch's visible (non-construction)
+    elements -- exactly what ControlPoly4_3L / _FirstElement read."""
+    return [(i, g) for i, g in enumerate(sketch.Geometry)
+            if not sketch.getConstruction(i)]
+
+
+def _is_bspline_view(geom):
+    return (geom.TypeId == "Part::GeomBSplineCurve"
+            and getattr(geom, "Degree", 0) == 3
+            and getattr(geom, "NbPoles", 0) == 4)
+
+
+def _is_view_element(geom):
+    return geom.TypeId in _VIEW_ELEMENT_TYPES or _is_bspline_view(geom)
+
+
+def _is_3l_sketch(sketch):
+    """Exactly 3 visible lines -- the ControlPoly4_3L precondition."""
+    vis = _visible_geometry(sketch)
+    return len(vis) == 3 and all(
+        g.TypeId == "Part::GeomLineSegment" for _i, g in vis)
+
+
+def _is_first_element_sketch(sketch):
+    """Exactly one visible element, of a type FirstElement can read."""
+    vis = _visible_geometry(sketch)
+    return len(vis) == 1 and _is_view_element(vis[0][1])
+
+
+def _is_node_sketch(sketch):
+    """One full circle + one line -- the ControlPoly4_2N precondition (it
+    indexes Geometry[0] and Geometry[1] directly, so a node sketch is
+    exactly two elements)."""
+    if len(sketch.Geometry) != 2:
+        return False
+    return {g.TypeId for g in sketch.Geometry} == {
+        "Part::GeomCircle", "Part::GeomLineSegment"}
+
+
+def _first_view_element(sketch):
+    """The element ControlPoly4_FirstElement would pick: the first visible
+    element, under the ArachNURBS type priority (cubic spline, elliptic
+    arc, circular arc, line)."""
+    vis = [g for _i, g in _visible_geometry(sketch)]
+    for pick in (lambda g: _is_bspline_view(g),
+                 lambda g: g.TypeId == "Part::GeomArcOfEllipse",
+                 lambda g: g.TypeId == "Part::GeomArcOfCircle",
+                 lambda g: g.TypeId == "Part::GeomLineSegment"):
+        for g in vis:
+            if pick(g):
+                return g
+    return None
+
+
+def _sketch_kind(sketch):
+    """'node' | '3L' | 'FirstElement' | None -- how `sketch` reads."""
+    if _is_node_sketch(sketch):
+        return "node"
+    if _is_3l_sketch(sketch):
+        return "3L"
+    if _is_first_element_sketch(sketch):
+        return "FirstElement"
+    return None
+
+
+def _sketch_name(sketch):
+    return getattr(sketch, "Label", None) or getattr(sketch, "Name", "?")
+
+
+def _kind_words(kind):
+    return {"node": "circle + line node",
+            "3L": "3 visible lines",
+            "FirstElement": "one curve element",
+            None: "neither a node nor a profile"}.get(kind, str(kind))
+
+
+def _plane_normal(sketch):
+    """World-space unit normal of `sketch`'s plane."""
+    n = sketch.Placement.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
+    if n.Length > 0:
+        n.normalize()
+    return n
+
+
+def _profile_poles(sketch, kind):
+    """The 4 world poles `sketch` supplies as a plan/elevation profile.
+
+    Mirrors ControlPoly4_3L / _FirstElement without creating a document
+    object: classification runs on every panel refresh and must stay
+    side-effect free. Used only to measure the elevation's height span.
+    """
+    mat = sketch.Placement.toMatrix()
+    if kind == "3L":
+        lines = [[mat.multiply(g.StartPoint), mat.multiply(g.EndPoint)]
+                 for _i, g in _visible_geometry(sketch)]
+        return list(AN.polyFromLineSet(lines, AN.default_tol))
+    nurb = _first_view_element(sketch).toNurbs()
+    nurb.increaseDegree(3)
+    return [mat.multiply(nurb.getPole(k)) for k in (1, 2, 3, 4)]
+
+
+def _height_span(poles, normal):
+    """Max - min of a pole set's height along `normal`."""
+    hs = [p.dot(normal) for p in poles]
+    return max(hs) - min(hs)
+
+
+def classify_sketches(sketches):
+    """(mode, detail) for a selection of sketches.
+
+    mode is '3L', 'FirstElement', '2N', 'plan_elevation', or None when the
+    selection cannot build an Edge -- then detail is the refusal reason,
+    naming the offending sketches (or the two plane normals). detail is
+    always one human sentence, so the panel label and the console error
+    can both use it verbatim.
+    """
+    sketches = list(sketches or [])
+    n = len(sketches)
+    if n == 0:
+        return None, "no sketches selected"
+    if n > 2:
+        return None, ("%d sketches selected -- an Edge takes at most 2 "
+                      "(one profile, one plan + elevation, or two nodes)"
+                      % n)
+
+    if n == 1:
+        kind = _sketch_kind(sketches[0])
+        if kind == "3L":
+            return "3L", "3L (one sketch)"
+        if kind == "FirstElement":
+            return "FirstElement", "FirstElement (one sketch)"
+        return None, ("%s is not a usable edge sketch (%s) -- a one-sketch "
+                      "Edge needs exactly 3 visible lines, or one supported "
+                      "curve element (line, arc, elliptic arc, or cubic "
+                      "spline)" % (_sketch_name(sketches[0]),
+                                   _kind_words(kind)))
+
+    plan, elevation = sketches[0], sketches[1]
+    kp, ke = _sketch_kind(plan), _sketch_kind(elevation)
+    if kp == "node" and ke == "node":
+        return "2N", "2N (two sketches)"
+
+    profiles = ("3L", "FirstElement")
+    if kp in profiles and ke in profiles:
+        np_ = _plane_normal(plan)
+        ne_ = _plane_normal(elevation)
+        dot = np_.dot(ne_)
+        if abs(dot) > _PLANE_PERP_TOL:
+            return None, (
+                "the two sketch planes are not perpendicular "
+                "(normal (%.3f, %.3f, %.3f) . normal (%.3f, %.3f, %.3f) "
+                "= %.3f) -- a plan + elevation Edge composes two "
+                "perpendicular planes; rotate one profile or use two node "
+                "sketches" % (np_.x, np_.y, np_.z,
+                              ne_.x, ne_.y, ne_.z, dot))
+        span = _height_span(_profile_poles(elevation, ke), np_)
+        if span <= AN.default_tol:
+            return None, (
+                "the elevation sketch (%s) is flat along the plan plane's "
+                "normal (height span %.2e) -- an elevation must rise above "
+                "the plan plane" % (_sketch_name(elevation), span))
+        return "plan_elevation", "plan + elevation (two sketches)"
+
+    return None, (
+        "%s (%s) and %s (%s) cannot form an Edge -- a two-sketch Edge "
+        "needs either two node sketches (each a circle + line) or two "
+        "profile sketches (a plan + an elevation)"
+        % (_sketch_name(plan), _kind_words(kp),
+           _sketch_name(elevation), _kind_words(ke)))
+
+
+# ---- build helpers -------------------------------------------------------
+
+def _read_legacy(doc, sketches, mode):
+    """(poles, weights, legs) from a 3L / FirstElement / 2N ControlPoly4
+    built on a throw-away object, removed before returning."""
+    if mode == "2N":
+        build, args = AN.ControlPoly4_2N, (sketches[0], sketches[1])
+    elif mode == "3L":
+        build, args = AN.ControlPoly4_3L, (sketches[0],)
+    else:
+        build, args = AN.ControlPoly4_FirstElement, (sketches[0],)
+    dummy = doc.addObject("Part::FeaturePython", "_edge_tmp")
+    try:
+        build(dummy, *args)
+        dummy.recompute()
+        return list(dummy.Poles), list(dummy.Weights), list(dummy.Legs)
+    finally:
+        doc.removeObject(dummy.Name)
+
+
+def _fill_view_poly4(obj, sketch):
+    """Populate `obj` with the 4-pole ControlPoly4 a single profile sketch
+    supplies (3L or FirstElement)."""
+    if _is_3l_sketch(sketch):
+        AN.ControlPoly4_3L(obj, sketch)
+    else:
+        AN.ControlPoly4_FirstElement(obj, sketch)
+    obj.recompute()
+
+
+def _compose_plan_elevation(doc, plan, elevation):
+    """(poles, weights, legs) from ControlPoly4_2X4P: each plan pole
+    lifted off the plan plane along its normal by the elevation pole's
+    height. The two profile ControlPoly4s and the composer live on
+    throw-away objects, all removed before returning."""
+    made = []
+    try:
+        plan_obj = doc.addObject("Part::FeaturePython", "_edge_plan")
+        made.append(plan_obj)
+        _fill_view_poly4(plan_obj, plan)
+        elev_obj = doc.addObject("Part::FeaturePython", "_edge_elev")
+        made.append(elev_obj)
+        _fill_view_poly4(elev_obj, elevation)
+        comp = doc.addObject("Part::FeaturePython", "_edge_compose")
+        made.append(comp)
+        AN.ControlPoly4_2X4P(comp, plan_obj, elev_obj)
+        comp.recompute()
+        return list(comp.Poles), list(comp.Weights), list(comp.Legs)
+    finally:
+        for obj in reversed(made):
+            try:
+                doc.removeObject(obj.Name)
+            except Exception:
+                pass
+
+
+def _apply_edge_geometry(fp, poles, weights, legs):
+    """Store the geometry and rebuild the display Shape from the display
+    toggles. Empty poles/legs is the honest "nothing built" state."""
+    fp.Poles = list(poles)
+    fp.Weights = list(weights)
+    fp.Legs = list(legs)
+    shapes = []
+    if fp.ShowCurve and len(poles) == 4:
+        curve = Part.BSplineCurve()
+        curve.buildFromPoles(list(poles))
+        shapes.append(curve.toShape())
+    if fp.ShowPolygon and legs:
+        for leg in legs:
+            if hasattr(leg, "toShape"):
+                shapes.append(leg.toShape())
+    if shapes:
+        try:
+            fp.Shape = Part.Compound(shapes)
+        except Exception:
+            fp.Shape = shapes[0] if len(shapes) == 1 else Part.Shape()
+    else:
+        fp.Shape = Part.Shape()
+
+
 class Edge:
     def __init__(self, obj, sketches):
         latest_version = "0.01"
@@ -63,84 +345,27 @@ class Edge:
         if 'Restore' in fp.State:
             return
 
-        sketches = fp.Sketches
-        if not sketches:
+        sketches = list(fp.Sketches or [])
+        mode, detail = classify_sketches(sketches)
+        if mode is None:
+            # #90: a selection the Edge cannot build is REFUSED loudly and
+            # left empty -- never a half-built geometry. "no sketches" is
+            # the one quiet case (a fresh or blank edge).
+            if sketches:
+                FreeCAD.Console.PrintError(
+                    "Silk: Edge not built -- %s\n" % detail)
+            _apply_edge_geometry(fp, [], [], [])
             return
 
-        if len(sketches) >= 2:
-            # 2N mode — two sketches (each with circle + line)
-            from ArachNURBS import ControlPoly4_2N
-            dummy = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "_edge_tmp")
-            ControlPoly4_2N(dummy, sketches[0], sketches[1])
-            dummy.recompute()
-            if fp.reverse:
-                fp.Poles = list(reversed(dummy.Poles))
-                fp.Weights = list(reversed(dummy.Weights))
-            else:
-                fp.Poles = dummy.Poles
-                fp.Weights = dummy.Weights
-            fp.Legs = dummy.Legs
-            FreeCAD.ActiveDocument.removeObject(dummy.Name)
+        if mode == "plan_elevation":
+            poles, weights, legs = _compose_plan_elevation(
+                fp.Document, sketches[0], sketches[1])
         else:
-            sketch = sketches[0]
-            geom = sketch.Geometry
-            geom_count = len(geom)
-
-            visible_count = 0
-            visible_line_count = 0
-            for i in range(geom_count):
-                if not sketch.getConstruction(i):
-                    visible_count += 1
-                    if geom[i].TypeId == "Part::GeomLineSegment":
-                        visible_line_count += 1
-
-            if visible_line_count == 3 and visible_count == visible_line_count:
-                from ArachNURBS import ControlPoly4_3L
-                dummy = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "_edge_tmp")
-                ControlPoly4_3L(dummy, sketch)
-                dummy.recompute()
-                if fp.reverse:
-                    fp.Poles = list(reversed(dummy.Poles))
-                    fp.Weights = list(reversed(dummy.Weights))
-                else:
-                    fp.Poles = dummy.Poles
-                    fp.Weights = dummy.Weights
-                fp.Legs = dummy.Legs
-                FreeCAD.ActiveDocument.removeObject(dummy.Name)
-            else:
-                from ArachNURBS import ControlPoly4_FirstElement
-                dummy = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "_edge_tmp")
-                ControlPoly4_FirstElement(dummy, sketch)
-                dummy.recompute()
-                if fp.reverse:
-                    fp.Poles = list(reversed(dummy.Poles))
-                    fp.Weights = list(reversed(dummy.Weights))
-                else:
-                    fp.Poles = dummy.Poles
-                    fp.Weights = dummy.Weights
-                fp.Legs = dummy.Legs
-                FreeCAD.ActiveDocument.removeObject(dummy.Name)
-
-        # Build display shape from toggles
-        shapes_to_compound = []
-        if fp.ShowCurve and len(fp.Poles) == 4:
-            curve = Part.BSplineCurve()
-            curve.buildFromPoles(fp.Poles)
-            shapes_to_compound.append(curve.toShape())
-        if fp.ShowPolygon and fp.Legs:
-            for leg in fp.Legs:
-                if hasattr(leg, "toShape"):
-                    shapes_to_compound.append(leg.toShape())
-        if shapes_to_compound:
-            try:
-                fp.Shape = Part.Compound(shapes_to_compound)
-            except Exception:
-                if len(shapes_to_compound) == 1:
-                    fp.Shape = shapes_to_compound[0]
-                else:
-                    fp.Shape = Part.Shape()
-        else:
-            fp.Shape = Part.Shape()
+            poles, weights, legs = _read_legacy(fp.Document, sketches, mode)
+        if fp.reverse:
+            poles = list(reversed(poles))
+            weights = list(reversed(weights))
+        _apply_edge_geometry(fp, poles, weights, legs)
 
 
 class EdgeViewProvider:
@@ -194,6 +419,15 @@ class CreateEdge:
 
         if not selected:
             FreeCAD.Console.PrintError("Silk: Edge requires at least one Sketch selected.\n")
+            return
+
+        # #90: refuse an unbuildable selection BEFORE anything is created --
+        # 3+ sketches, a mixed node/view pair, two non-perpendicular planes,
+        # a flat elevation, and a sketch that is neither shape.
+        mode, detail = classify_sketches(selected)
+        if mode is None:
+            FreeCAD.Console.PrintError(
+                "Silk: cannot create an Edge -- %s\n" % detail)
             return
 
         edge = doc.addObject("Part::FeaturePython", "Edge")

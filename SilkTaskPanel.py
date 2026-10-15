@@ -95,6 +95,7 @@ except ImportError:  # pragma: no cover - console-only FreeCAD
     QtGui = None
 
 from SilkGuide import compute_guide_state
+from SilkEdge import classify_sketches
 from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge
 from SilkMachinery import patch_side, side_of_edge, build_intervals, \
     corner_cells, split_pair, axis_splits, band_at_end, loop_order
@@ -1223,10 +1224,13 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
 
         edges = self._collected[SECTION_EDGE]
         self.edge_count_lbl.setText("%d/%d" % (len(edges), EDGE_MAX))
-        if len(edges) == 2:
-            self.edge_mode_lbl.setText("2N (two sketches)")
-        elif len(edges) == 1:
-            self.edge_mode_lbl.setText("3L (one sketch)")
+        # #90: the label is the classifier's own detail sentence -- the
+        # SAME call that decides the build, so it shows "plan + elevation",
+        # "2N", "3L", "FirstElement", or the refusal reason for the exact
+        # selection the user has. An empty collection stays blank.
+        if edges:
+            _mode, detail = classify_sketches(self.collected(SECTION_EDGE))
+            self.edge_mode_lbl.setText(detail)
         else:
             self.edge_mode_lbl.setText("")
 

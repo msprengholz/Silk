@@ -55,6 +55,7 @@ that function would satisfy the check. Every mirror says so where it
 is defined.
 """
 
+import FreeCAD
 import Part
 
 TOL = 1e-6
@@ -97,6 +98,28 @@ def _sketch_endpoints(sketch):
     return pl.multVec(lines[0].StartPoint), pl.multVec(lines[-1].EndPoint)
 
 
+def _sketch_plane_normal(sketch):
+    """World-space unit normal of a sketch plane. Mirrors the object
+    code's own normal (SilkEdge._plane_normal) but is re-derived HERE on
+    purpose -- like the other helpers this file mirrors, the oracle must
+    not call the function under test (see the MIRROR note above)."""
+    try:
+        n = sketch.Placement.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
+    except Exception:
+        return None
+    if n.Length <= 0:
+        return None
+    n.normalize()
+    return n
+
+
+def _in_plane_dist(p, q, n):
+    """Distance from p to q after dropping both points' component along
+    the plane normal n."""
+    d = p - q
+    return (d - n * d.dot(n)).Length
+
+
 def _check_edge(edge):
     results = []
 
@@ -133,12 +156,28 @@ def _check_edge(edge):
                         "sketch not pure 3L lines; anchoring not checked"))
     else:
         first, last = endpoints
-        d0 = _dist(poles[0], first)
-        d3 = _dist(poles[3], last)
+        # #90: a plan + elevation Edge lifts each plan pole off the plan
+        # plane by the elevation height, so a pole is anchored when its
+        # IN-PLANE projection meets the plan sketch's endpoint. A
+        # legitimate raised end (nonzero elevation height at an end) must
+        # not be red -- the height belongs to the elevation. The plan is
+        # Sketches[0]; a 2N edge's first sketch is a circle + line, whose
+        # endpoints read None above, so this path stays single-profile.
+        n = None
+        if len(list(edge.Sketches)) == 2:
+            n = _sketch_plane_normal(edge.Sketches[0])
+        if n is not None:
+            d0 = _in_plane_dist(poles[0], first, n)
+            d3 = _in_plane_dist(poles[3], last, n)
+            basis = "in-plane end"
+        else:
+            d0 = _dist(poles[0], first)
+            d3 = _dist(poles[3], last)
+            basis = "end"
         ok = d0 <= TOL and d3 <= TOL
         results.append((
             "E1_endpoint_anchoring", ok,
-            "end deltas vs sketch: %.2e / %.2e (tol %.0e)" % (d0, d3, TOL),
+            "%s deltas vs sketch: %.2e / %.2e (tol %.0e)" % (basis, d0, d3, TOL),
         ))
 
     # E2: pole order without jumps. Edges are open curves (sketch start

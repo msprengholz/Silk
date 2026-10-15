@@ -17,7 +17,7 @@ geometric coincidence).
 
 import FreeCAD
 
-from SilkEdge import Edge, EdgeViewProvider
+from SilkEdge import Edge, EdgeViewProvider, classify_sketches
 from SilkPatch import Patch, PatchViewProvider
 from SilkBlend import Blend, BlendStripViewProvider, BLEND_TYPES, PATCH_TYPES
 from SilkMachinery import loop_order
@@ -29,10 +29,25 @@ def create_edge(sketches, name="Edge"):
     addObject -> Edge constructor -> view provider -> recompute ->
     return the created object, so later steps can consume the result
     in one script. No selection, no commands, no dialogs.
+
+    #90: the geometry mode is derived from the sketch SHAPES, not from a
+    toggle -- 3 visible lines or a single curve element (one sketch), two
+    circle+line nodes (2N), or a plan + elevation pair (Sketches[0] is
+    the plan, Sketches[1] the elevation; ControlPoly4_2X4P). A selection
+    that cannot build any of those is REFUSED here, before anything is
+    constructed: a console error naming the offending sketches (or the
+    two plane normals) and None. The panel and the toolbar command run
+    the same classifier, so they refuse identically.
     """
     doc = FreeCAD.ActiveDocument
     if not isinstance(sketches, (list, tuple)):
         sketches = [sketches]
+    sketches = [s for s in sketches if s is not None]
+    mode, detail = classify_sketches(sketches)
+    if mode is None:
+        FreeCAD.Console.PrintError(
+            "Silk: cannot create an Edge -- %s\n" % detail)
+        return None
     obj = doc.addObject("Part::FeaturePython", name)
     Edge(obj, list(sketches))
     EdgeViewProvider(obj.ViewObject)
