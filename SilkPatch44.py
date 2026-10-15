@@ -17,7 +17,7 @@ import FreeCAD
 import Part
 import ArachNURBS as AN
 
-from SilkMachinery import build_intervals, build_subgrids, build_display, \
+from SilkMachinery import build_subgrids, build_display, \
     split_pair, axis_splits, NO_BAND_1, NO_BAND_2
 
 import os, Silk_dummy
@@ -25,11 +25,9 @@ path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
 iconPath = path_Silk_icons + "/Patch44.svg"
 
-# Canonical implementation lives in the shared machinery core
-# (SilkMachinery); re-exported under the legacy name for old
-# callers (SilkCorner / SilkChecks import it from SilkMachinery
-# directly since #42).
-_build_intervals = build_intervals
+# Canonical implementations live in the shared machinery core
+# (SilkMachinery); old callers (SilkCorner / SilkChecks) import
+# from SilkMachinery directly since #42.
 
 
 class Patch44:

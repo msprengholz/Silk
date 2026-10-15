@@ -49,9 +49,10 @@ Tolerances (spec #16): poles 1e-6, weights exact (1.0).
 
 MIRROR, DO NOT IMPORT: several helpers here deliberately re-derive the
 object code's tables (_detect_seam, _pinned_seam, _oracle_band_cells,
-_corner_cells) instead of importing them. An oracle that calls the
-function under test proves nothing — a bug in that function would
-satisfy the check. Every mirror says so where it is defined.
+_oracle_side_and_end, _corner_cells) instead of importing them. An
+oracle that calls the function under test proves nothing — a bug in
+that function would satisfy the check. Every mirror says so where it
+is defined.
 """
 
 import Part
@@ -507,10 +508,6 @@ def _check_patch_pointed(patch, edges):
     return results
 
 
-# The blend strip width used by SilkBlend when it segments the patches'
-# base surfaces perpendicular to the shared edge.
-BLEND_STRIP_WIDTH = 0.1
-
 # Tangent scale applied by SilkBlend when calling AN.blend_poly_2x4_1x6.
 BLEND_TANGENT_SCALE = 2.0
 
@@ -686,6 +683,43 @@ def _oracle_band_cells(p, etype, ss):
     a = (nu - 1) if ss else 0
     keep_v = set(range(nv)) - _oracle_corner_cells(vs[0], vs[1], nv)
     return [a * nv + b for b in sorted(keep_v)]
+
+
+def _oracle_side_and_end(o, p, tol):
+    """`(etype, ss)` -- the boundary side AND the end it names -- of the
+    seam blend-shaped `o` takes on patch `p`, or (None, None) when `o`
+    cannot say.
+
+    Mirror of SilkBlend.side_and_end, re-derived HERE for the same
+    reason _detect_seam is (#39): the corner oracle must resolve the
+    strip's side itself, not call the production reader whose answer it
+    checks -- a shared bug in side_and_end would otherwise be
+    oracle-green by construction. Uses the oracle's own seam mirrors,
+    exactly the two paths SilkBlend._resolve_seam takes: _pinned_seam
+    when `o` pins an Edge (a unified Blend), _detect_seam otherwise (a
+    legacy BlendStrip) -- and the pinned path does NOT fall back to
+    auto-detect. (None, None) when `p` is not one of `o`'s two patches,
+    matching the production refusal the corner-cell walk relies on to
+    skip foreign strips.
+    """
+    if not (o.PatchA is p or o.PatchB is p):
+        return None, None
+    a_c = [o.PatchA.Poles[0], o.PatchA.Poles[3],
+           o.PatchA.Poles[15], o.PatchA.Poles[12]]
+    b_c = [o.PatchB.Poles[0], o.PatchB.Poles[3],
+           o.PatchB.Poles[15], o.PatchB.Poles[12]]
+    seam = None
+    edge = getattr(o, "Edge", None)
+    if edge is not None:
+        ep = list(getattr(edge, "Poles", []) or [])
+        seam = (_pinned_seam(a_c, b_c, ep[0], ep[3], tol)
+                if len(ep) >= 4 else None)
+    if seam is None and edge is None:
+        seam = _detect_seam(a_c, b_c, tol)
+    if seam is None:
+        return None, None
+    e = seam[0] if o.PatchA is p else seam[1]
+    return e, (0 if e[1] == "0" else 1)
 
 
 def _blend_reference_rows(pa, pb, tol=0.01, edge=None):
@@ -886,7 +920,6 @@ def _corner_reference_rows(strips, tol=0.01):
     cells (not from the corner blend itself). Returns (rows,
     corner_cells) or (None, None) on any inconsistency.
     """
-    from SilkBlend import band_cells, side_and_end
     rows = []
     corner_cells = {}
     for s in strips:
@@ -896,12 +929,12 @@ def _corner_reference_rows(strips, tol=0.01):
         # #83: the mirror of SilkCorner._derive_rows -- the strip's side is
         # read off the STRIP (a unified Blend pins its Edge), so a pair
         # sharing two seams cannot collapse to one side here either.
-        e_a, ss_a = side_and_end(s, pa, tol)
-        e_b, ss_b = side_and_end(s, pb, tol)
+        e_a, ss_a = _oracle_side_and_end(s, pa, tol)
+        e_b, ss_b = _oracle_side_and_end(s, pb, tol)
         if not e_a or not e_b:
             return None, None
-        bca = band_cells(pa, e_a, ss_a)
-        bcb = band_cells(pb, e_b, ss_b)
+        bca = _oracle_band_cells(pa, e_a, ss_a)
+        bcb = _oracle_band_cells(pb, e_b, ss_b)
         if len(bca) != 1 or len(bcb) != 1:
             return None, None
         li_map = {}
@@ -913,7 +946,7 @@ def _corner_reference_rows(strips, tol=0.01):
                 other = t.PatchB if t.PatchA is pth else t.PatchA
                 if other is None:
                     continue
-                te, tss = side_and_end(t, pth, tol)
+                te, tss = _oracle_side_and_end(t, pth, tol)
                 if not te:
                     continue
                 if te[0] == "U":
