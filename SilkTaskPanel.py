@@ -25,9 +25,10 @@
 #        each of our own actions, and nothing else in the workbench is
 #        subscribed.
 #
-#    Three collect-then-confirm stages in a QToolBox accordion (Edge /
-#    Patch / Blend), one open at a time. `QToolBox` has focusPolicy 0,
-#    so the panel never steals focus from the 3D view -- which is why
+#    Three collect-then-confirm stages (Edge / Patch / Blend) in a
+#    header/content stack (SectionStack, NOT a QToolBox since #71), one
+#    open at a time. The panel takes NoFocus, so it never steals focus
+#    from the 3D view -- which is why
 #    `keyPressEvent` never fires and confirm is a QShortcut with
 #    Qt.ApplicationShortcut registered for BOTH Qt.Key_Return and
 #    Qt.Key_Enter (the keypad Enter does not fire otherwise).
