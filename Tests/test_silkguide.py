@@ -91,6 +91,44 @@ def test_guide_state_empty_document(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_guide_state_no_document(doc):
+    """No active document -> the same zero-count state as an empty
+    document, no AttributeError.
+
+    compute_guide_state() resolves doc=None to FreeCAD.ActiveDocument;
+    when that is None the query must not walk doc.Objects. The stub
+    replaces SilkGuide.FreeCAD (the module's own binding) so the
+    no-document path is forced deterministically even though the test
+    run itself has an active document."""
+    errors, checks = [], []
+
+    class _NoDocFreeCAD(object):
+        ActiveDocument = None
+
+    orig = SilkGuide.FreeCAD
+    SilkGuide.FreeCAD = _NoDocFreeCAD
+    try:
+        state = compute_guide_state()
+    finally:
+        SilkGuide.FreeCAD = orig
+
+    if state["hint"] != HINT_CREATE_EDGE:
+        errors.append("no-document hint is %r, want %r"
+                      % (state["hint"], HINT_CREATE_EDGE))
+    if state["counts"] != {"edges": 0, "patches": 0, "blends": 0}:
+        errors.append("no-document counts are %r" % (state["counts"],))
+    if state["seams"]:
+        errors.append("no-document reports %d seam(s)" % len(state["seams"]))
+    if state["complete"]:
+        errors.append("no-document reports complete=True")
+    if state["seam_counts"] != {"total": 0, "blendable": 0, "blended": 0,
+                                "blocked": 0}:
+        errors.append("no-document seam_counts are %r"
+                      % (state["seam_counts"],))
+    checks.append("no active document -> zero-count state, no crash")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 def test_guide_state_edges_only(doc):
     """Edges but no patches (and a stray unreferenced edge, which is not
     a seam) -> the create-patches hint; counts count the stray edge."""
@@ -460,6 +498,7 @@ def test_guide_container_removed(doc):
 
 ALL_TESTS = [
     test_guide_state_empty_document,
+    test_guide_state_no_document,
     test_guide_state_edges_only,
     test_guide_state_single_patch_no_seam,
     test_guide_state_blendable_seam,

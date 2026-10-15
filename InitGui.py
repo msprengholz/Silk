@@ -125,6 +125,7 @@ class Silk (Workbench):
 		import StarTrim_CubicNStar
 		import SilkPose
 		import SilkPatch
+		import SilkPatch44
 		import SilkBlend
 		import SilkWorkflow
 		import Reload_Silk

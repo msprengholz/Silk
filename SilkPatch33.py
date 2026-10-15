@@ -16,11 +16,6 @@ import Part
 
 import ArachNURBS as AN
 
-try:
-    from . import SilkPatch44 as _P  # for icon/helpers if needed
-except Exception:
-    pass
-
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")

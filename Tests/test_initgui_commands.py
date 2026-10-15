@@ -61,12 +61,14 @@ EXPECTED_GROUPS = ["Workflow", "Guide", "Dev"]
 RESTORE_CRITICAL = ["ArachNURBS", "SilkWorkflow", "SilkPatch44", "SilkEdge",
                     "SilkPatch", "SilkBlend", "SilkCorner"]
 
-# ...and the subset Initialize() is expected to import up front. SilkPatch44
-# and SilkCorner are reached lazily (SilkBlend imports SilkCorner; FreeCAD's
-# restore imports SilkPatch44 on demand), so they are asserted importable
-# rather than asserted to be in the import block.
+# ...and the subset Initialize() is expected to import up front. SilkCorner
+# is reached lazily (SilkBlend imports it), so it is asserted importable
+# rather than asserted to be in the import block. SilkPatch44 IS in the
+# import block: the docstring's old-document-restore story names it
+# (Silk_Workflow.FCStd -> SilkPatch44 / SilkBlend / SilkEdge), and a
+# restore shim with no command registration costs nothing up front.
 IMPORTED_UP_FRONT = ["ArachNURBS", "SilkWorkflow", "SilkEdge", "SilkPatch",
-                     "SilkBlend"]
+                     "SilkPatch44", "SilkBlend"]
 
 # Every legacy command name that used to be visible. None may reappear.
 LEGACY_NAMES = [

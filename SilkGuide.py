@@ -123,6 +123,16 @@ def compute_guide_state(doc=None):
     surface them.
     """
     doc = doc if doc is not None else FreeCAD.ActiveDocument
+    if doc is None:
+        # No document open: the zero-count state, same shape as an
+        # empty document (a None doc has no Objects to walk).
+        return {
+            "hint": HINT_CREATE_EDGE,
+            "counts": {"edges": 0, "patches": 0, "blends": 0},
+            "seams": [],
+            "seam_counts": dict(total=0, blendable=0, blended=0, blocked=0),
+            "complete": False,
+        }
     counts = {
         "edges": _count(doc, ("Edge",)),
         "patches": _count(doc, PATCH_TYPES),

@@ -497,6 +497,7 @@ def run_blend(fp):
     # If shared edge runs ALONG U (row): perpendicular = V → take COLUMNS (const U)
     # If shared edge runs ALONG V (col): perpendicular = U → take ROWS (const V)
     blend_poles = []
+    blend_weights = []
     # #31: strip index 0 sits at param 0 of the strip window. For ss=0 the
     # shared edge is at index 0; for ss=1 it is at index 3. Build each row
     # in shared→outer order, then orient: blend_poly_2x4_1x6 needs
@@ -529,9 +530,10 @@ def run_blend(fp):
         res = AN.blend_poly_2x4_1x6(l_rev, [1.0] * 4, rc, [1.0] * 4,
                                     2.0, 2.0, 2.0, 2.0)
         blend_poles.append(res[0])
+        blend_weights.append(res[1])
 
     fp.Poles = [p for row in blend_poles for p in row]
-    fp.Weights = [w for row in [res[1] for _ in range(4)] for w in row]
+    fp.Weights = [w for row in blend_weights for w in row]
     fp.Legs = AN.drawGrid(fp.Poles, 6)
 
     # Step 8: build blend surface using AN.CubicSurface_64
@@ -539,11 +541,19 @@ def run_blend(fp):
         return
 
     doc = fp.Document
-    tmp_surf = doc.addObject("Part::FeaturePython", "_blend_surf_tmp")
-    AN.CubicSurface_64(tmp_surf, fp)
-    tmp_surf.recompute()
-    surf_shape = tmp_surf.Shape
-    doc.removeObject(tmp_surf.Name)
+    tmp_surf = None
+    try:
+        tmp_surf = doc.addObject("Part::FeaturePython", "_blend_surf_tmp")
+        AN.CubicSurface_64(tmp_surf, fp)
+        tmp_surf.recompute()
+        surf_shape = tmp_surf.Shape
+    finally:
+        # the temp carrier must not survive a failed build
+        if tmp_surf is not None and doc.getObject(tmp_surf.Name) is not None:
+            try:
+                doc.removeObject(tmp_surf.Name)
+            except Exception:
+                pass
 
     if not surf_shape or not hasattr(surf_shape, "Faces") or not surf_shape.Faces:
         # Fallback: just show grid

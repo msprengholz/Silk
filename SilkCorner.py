@@ -228,23 +228,31 @@ class CornerBlend:
         # needs pole-carrying objects, so build throwaway carriers)
         doc = fp.Document
         carriers = []
-        for i, row in enumerate(ordered):
-            c = doc.addObject("Part::FeaturePython", "_cb_poly_tmp")
-            c.addProperty("App::PropertyVectorList", "Poles", "Internal",
-                          "boundary row poles").Poles
-            c.addProperty("App::PropertyFloatList", "Weights", "Internal",
-                          "boundary row weights").Weights
-            c.Poles = row
-            c.Weights = [1.0] * 6
-            carriers.append(c)
-        grid = doc.addObject("Part::FeaturePython", "_cb_grid_tmp")
-        AN.ControlGrid66_4(grid, *carriers)
-        grid.recompute()
-        poles36 = list(grid.Poles) if hasattr(grid, "Poles") else []
-        weights36 = list(grid.Weights) if hasattr(grid, "Weights") else []
-        doc.removeObject(grid.Name)
-        for c in carriers:
-            doc.removeObject(c.Name)
+        grid = None
+        try:
+            for i, row in enumerate(ordered):
+                c = doc.addObject("Part::FeaturePython", "_cb_poly_tmp")
+                c.addProperty("App::PropertyVectorList", "Poles", "Internal",
+                              "boundary row poles").Poles
+                c.addProperty("App::PropertyFloatList", "Weights", "Internal",
+                              "boundary row weights").Weights
+                c.Poles = row
+                c.Weights = [1.0] * 6
+                carriers.append(c)
+            grid = doc.addObject("Part::FeaturePython", "_cb_grid_tmp")
+            AN.ControlGrid66_4(grid, *carriers)
+            grid.recompute()
+            poles36 = list(grid.Poles) if hasattr(grid, "Poles") else []
+            weights36 = list(grid.Weights) if hasattr(grid, "Weights") else []
+        finally:
+            # temp carriers must not survive a failed build
+            for name in ([grid.Name] if grid is not None else []) \
+                    + [c.Name for c in carriers]:
+                if doc.getObject(name) is not None:
+                    try:
+                        doc.removeObject(name)
+                    except Exception:
+                        pass
 
         if len(poles36) != 36 or len(weights36) != 36:
             FreeCAD.Console.PrintError(
@@ -258,11 +266,19 @@ class CornerBlend:
         fp.Legs = AN.drawGrid(fp.Poles, 6)
 
         # corner surface via AN.CubicSurface_66 (never buildFromPolesMultsKnots)
-        tmp_surf = doc.addObject("Part::FeaturePython", "_cb_surf_tmp")
-        AN.CubicSurface_66(tmp_surf, fp)
-        tmp_surf.recompute()
-        surf_shape = tmp_surf.Shape
-        doc.removeObject(tmp_surf.Name)
+        tmp_surf = None
+        try:
+            tmp_surf = doc.addObject("Part::FeaturePython", "_cb_surf_tmp")
+            AN.CubicSurface_66(tmp_surf, fp)
+            tmp_surf.recompute()
+            surf_shape = tmp_surf.Shape
+        finally:
+            # the temp carrier must not survive a failed build
+            if tmp_surf is not None and doc.getObject(tmp_surf.Name) is not None:
+                try:
+                    doc.removeObject(tmp_surf.Name)
+                except Exception:
+                    pass
 
         if not surf_shape or not hasattr(surf_shape, "Faces") \
                 or not surf_shape.Faces:

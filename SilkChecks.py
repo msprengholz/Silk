@@ -1000,22 +1000,31 @@ def _check_corner_blend(cb, strips, reference_poles):
         import ArachNURBS as AN
         doc = cb.Document
         carriers = []
-        for i, row in enumerate(rows):
-            c = doc.addObject("Part::FeaturePython", "_cb_ref_poly")
-            c.addProperty("App::PropertyVectorList", "Poles", "Internal",
-                          "p").Poles
-            c.addProperty("App::PropertyFloatList", "Weights", "Internal",
-                          "w").Weights
-            c.Poles = row
-            c.Weights = [1.0] * 6
-            carriers.append(c)
-        grid = doc.addObject("Part::FeaturePython", "_cb_ref_grid")
-        AN.ControlGrid66_4(grid, *carriers)
-        grid.recompute()
-        ref_poles = list(grid.Poles) if hasattr(grid, "Poles") else []
-        doc.removeObject(grid.Name)
-        for c in carriers:
-            doc.removeObject(c.Name)
+        grid = None
+        try:
+            for i, row in enumerate(rows):
+                c = doc.addObject("Part::FeaturePython", "_cb_ref_poly")
+                c.addProperty("App::PropertyVectorList", "Poles", "Internal",
+                              "p").Poles
+                c.addProperty("App::PropertyFloatList", "Weights", "Internal",
+                              "w").Weights
+                c.Poles = row
+                c.Weights = [1.0] * 6
+                carriers.append(c)
+            grid = doc.addObject("Part::FeaturePython", "_cb_ref_grid")
+            AN.ControlGrid66_4(grid, *carriers)
+            grid.recompute()
+            ref_poles = list(grid.Poles) if hasattr(grid, "Poles") else []
+        finally:
+            # temp reference objects must not survive a failed build;
+            # cleanup runs before the error result below is returned
+            for name in ([grid.Name] if grid is not None else []) \
+                    + [c.Name for c in carriers]:
+                if doc.getObject(name) is not None:
+                    try:
+                        doc.removeObject(name)
+                    except Exception:
+                        pass
         if len(ref_poles) != 36:
             results.append(("CB2_interior_fill", False,
                             "reference fill produced %d poles" % len(ref_poles)))
