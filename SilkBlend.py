@@ -640,46 +640,55 @@ def _on_delete(fp):
     proxy = fp.Proxy
     if getattr(proxy, "_dying", False):
         return False
+    # A blend whose deletion has begun stays dying FOR GOOD (#93), not
+    # just for the duration of this call. A restored document opens with
+    # its objects Touched, so Document::_removeObject runs one more
+    # recompute AFTER this slot returns; the old `finally: _dying = False`
+    # cleared the flag before that recompute, which re-entered run_blend
+    # and let ensure_band_split re-write the very band split just dropped
+    # -- the restored blend unblended and instantly re-blended itself,
+    # leaving both patches subdivided. Keeping the flag set makes the
+    # removal-time recompute a no-op, which the cascade path already
+    # guarantees explicitly (_cascade_one pins proxy._dying before
+    # removing the orphan); this gives every delete trigger the same
+    # guarantee.
     proxy._dying = True
-    try:
-        doc = getattr(fp, "Document", None)
-        if doc is None or "Restore" in getattr(fp, "State", []):
-            return False
-        pa, pb = getattr(fp, "PatchA", None), getattr(fp, "PatchB", None)
-        # (1) this seam's own split, on each patch it feeds
-        if pa is not None and pb is not None and pa is not pb:
-            seam = _resolve_seam(fp, pa, pb, getattr(fp, "tolerance", 0.01))
-            for p, etype in ((pa, seam[0]), (pb, seam[1])) if seam else ():
-                if getattr(p, "object_type", None) in PATCH_TYPES:
-                    try:
-                        _drop_band_split(doc, fp, p, etype)
-                    except Exception:
-                        pass
-        # (2) the band cells, from the blends that remain
-        seen = []
-        for role in ("PatchA", "PatchB"):
-            p = getattr(fp, role, None)
-            if (p is None
-                    or getattr(p, "object_type", None) not in PATCH_TYPES
-                    or any(q is p for q in seen)):
-                continue
-            seen.append(p)
-            try:
-                ensure_hidden_idxs_property(p)
-                # every surviving strip's band, minus this one
-                p._HiddenSubgridIdxs = sorted(_linked_band_cells(fp, p))
-            except Exception:
-                pass
-            try:
-                p.touch()
-            except Exception:
-                pass
+    doc = getattr(fp, "Document", None)
+    if doc is None or "Restore" in getattr(fp, "State", []):
+        return False
+    pa, pb = getattr(fp, "PatchA", None), getattr(fp, "PatchB", None)
+    # (1) this seam's own split, on each patch it feeds
+    if pa is not None and pb is not None and pa is not pb:
+        seam = _resolve_seam(fp, pa, pb, getattr(fp, "tolerance", 0.01))
+        for p, etype in ((pa, seam[0]), (pb, seam[1])) if seam else ():
+            if getattr(p, "object_type", None) in PATCH_TYPES:
+                try:
+                    _drop_band_split(doc, fp, p, etype)
+                except Exception:
+                    pass
+    # (2) the band cells, from the blends that remain
+    seen = []
+    for role in ("PatchA", "PatchB"):
+        p = getattr(fp, role, None)
+        if (p is None
+                or getattr(p, "object_type", None) not in PATCH_TYPES
+                or any(q is p for q in seen)):
+            continue
+        seen.append(p)
         try:
-            doc.recompute()
+            ensure_hidden_idxs_property(p)
+            # every surviving strip's band, minus this one
+            p._HiddenSubgridIdxs = sorted(_linked_band_cells(fp, p))
         except Exception:
             pass
-    finally:
-        proxy._dying = False
+        try:
+            p.touch()
+        except Exception:
+            pass
+    try:
+        doc.recompute()
+    except Exception:
+        pass
     return False
 
 
@@ -923,8 +932,15 @@ class BlendStrip:
         __init__ (the object is in the document by the time the proxy
         constructor runs) and from onDocumentRestored (a restored blend
         never runs __init__, so without this it would die unwatched).
+
+        #93: the guard reads `_delete_watcher` THROUGH getattr, because a
+        restored blend reaches here without __init__ ever having run --
+        reading `self._delete_watcher` directly raised AttributeError on
+        the restore path, so the watcher was never installed and a
+        reopened blend could never unblend. The attribute must not depend
+        on __init__; the default-absent case is the same as None.
         """
-        if self._delete_watcher is not None:
+        if getattr(self, "_delete_watcher", None) is not None:
             return
         # #89: every blend create/restore also ensures the app-level
         # cascade observer is installed (idempotent -- module-flag

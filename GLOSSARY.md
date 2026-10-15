@@ -48,3 +48,16 @@ _Avoid_: corner subgrid
 **Corner fill**:
 The surface that closes the gap where four bands meet at a four-patch corner.
 _Avoid_: corner blend, corner patch
+
+**Restore shim**:
+A class + view provider kept in a module only so an old document that saved
+objects of that class can rebuild their proxies when it opens; nothing creates
+one any more (`Patch44`, `Patch33`, `BlendStrip`).
+The **restore contract** it carries: FreeCAD rebuilds a restored proxy from the
+saved (empty) state and then calls `onDocumentRestored` -- **it never runs
+`__init__`** -- so every registration a fresh object gets in `__init__` (the
+blend's delete-watcher) must be re-established on the restore path too, through
+a guard that does not depend on `__init__` having run. A restored object is a
+live, editable one: deleting a restored blend must unblend its patches exactly
+as deleting a freshly created one does.
+_Avoid_: restore hook, migration class
