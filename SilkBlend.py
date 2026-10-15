@@ -683,6 +683,136 @@ def _on_delete(fp):
     return False
 
 
+# ---- cascade-delete of edge blends on patch delete (#89) ----------------
+
+_CASCADE_OBSERVER = None
+
+
+def ensure_cascade_observer():
+    """Install the ONE central app-level document observer (#89),
+    idempotently (module-flag dedupe: N objects never multiply it).
+
+    The observer lives in the object model (this module -- NOT InitGui),
+    so cascade works headless, workbench-inactive and on old restored
+    documents. It is installed on first Patch/Blend create and on
+    onDocumentRestored -- every construction and restore path calls
+    here, and the module flag makes the extra calls free.
+
+    Reload-safe (#72): the observer object is also tracked on the
+    FreeCAD module (which survives a Silk module reload), so a fresh
+    module generation detaches the previous generation's observer
+    before registering its own -- otherwise every reload would stack a
+    second cascader and double the work / pin the old generation.
+    """
+    global _CASCADE_OBSERVER
+    if _CASCADE_OBSERVER is not None:
+        return _CASCADE_OBSERVER
+    # A previous module generation may still have an observer registered
+    # (FreeCAD keeps document observers across a Silk reload). Its
+    # methods point at a dead generation's dict, so detach it here.
+    old = getattr(FreeCAD, "_silk_cascade_observer", None)
+    if old is not None:
+        try:
+            FreeCAD.removeDocumentObserver(old)
+        except Exception:
+            pass
+        FreeCAD._silk_cascade_observer = None
+    obs = _CascadeDeleteObserver()
+    try:
+        FreeCAD.addDocumentObserver(obs)
+    except Exception:
+        return None
+    FreeCAD._silk_cascade_observer = obs
+    _CASCADE_OBSERVER = obs
+    return obs
+
+
+class _CascadeDeleteObserver:
+    """App-level document observer: cascade edge blends off a deleted
+    patch (#89).
+
+    When a Patch is deleted from under a live 2-patch edge blend, the
+    blend would otherwise survive as an ORPHAN -- Document::_removeObject
+    nullifies its PatchA link, so it can never unblend and the surviving
+    patch keeps its band hole and stale split forever. This observer
+    catches the patch deletion in the SAME before-links-nullified window
+    `_DeleteWatcher` relies on (signalDeletedObject fires before the
+    links go), runs the shared `_on_delete` unblend on each linked
+    blend, then removes the orphan.
+
+    Scope stops at edge blends: a CornerBlend takes `Strips`, not a
+    patch pair, so it is excluded structurally (not in BLEND_TYPES) and
+    by the explicit guard -- a corner blend whose ring strip died is a
+    future decision (#28), left untouched here.
+    """
+
+    def __init__(self):
+        # The re-entrancy guard (#80 lesson): set before any operation
+        # that can raise; the slot must never exit without completing.
+        # Names of the deleted patches currently being cascaded, so a
+        # nested deletion cannot re-enter for the same patch.
+        self._cascading = set()
+        self._alive = True
+
+    def slotDeletedObject(self, obj):
+        if getattr(obj, "object_type", "") != "Patch":
+            return
+        try:
+            name = obj.Name
+            doc = obj.Document
+        except ReferenceError:
+            return
+        if doc is None or name in self._cascading:
+            return
+        self._cascading.add(name)
+        try:
+            matches = [
+                o for o in doc.Objects
+                if (getattr(o, "object_type", "") in BLEND_TYPES
+                    and getattr(o, "object_type", "") != "CornerBlend"
+                    and (getattr(o, "PatchA", None) is obj
+                         or getattr(o, "PatchB", None) is obj))
+            ]
+            for blend in matches:
+                self._cascade_one(doc, obj, blend)
+        finally:
+            self._cascading.discard(name)
+
+    def _cascade_one(self, doc, patch, blend):
+        # (1) unblend the survivor(s) -- reuse the shared _on_delete, the
+        # one place that knows the whole rule (drop the band split
+        # whole-axis-bar-what-a-survivor-needs + restore hidden cells +
+        # touch + recompute). Do NOT duplicate it.
+        proxy = getattr(blend, "Proxy", None)
+        try:
+            _on_delete(blend)
+        except Exception:
+            pass
+        # (2) keep the spill dying so its own per-blend _DeleteWatcher
+        # no-ops (no double work) when removeObject fires it, and so a
+        # recompute that still reaches it (it is linked until removal
+        # finishes) does not re-hide the band just restored.
+        if proxy is not None:
+            try:
+                proxy._dying = True
+            except Exception:
+                pass
+        bname = getattr(blend, "Name", None) or "Blend"
+        # (3) remove the orphan. The blend's own deletion re-enters this
+        # observer with the blend (object_type != Patch), which no-ops.
+        try:
+            doc.removeObject(blend.Name)
+        except Exception:
+            pass
+        # (4) one silent console line naming the removed blend + patch.
+        FreeCAD.Console.PrintMessage(
+            "[Silk] %s cascaded with deleted patch %s\n"
+            % (bname, getattr(patch, "Name", "?")))
+
+    def slotDeletedDocument(self, doc):
+        pass
+
+
 # ---- object types --------------------------------------------------------
 
 class _DeleteWatcher:
@@ -796,6 +926,10 @@ class BlendStrip:
         """
         if self._delete_watcher is not None:
             return
+        # #89: every blend create/restore also ensures the app-level
+        # cascade observer is installed (idempotent -- module-flag
+        # dedupe, so N blends never multiply it).
+        ensure_cascade_observer()
         try:
             if fp.Document is None:
                 return

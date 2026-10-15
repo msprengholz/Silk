@@ -161,6 +161,13 @@ class Patch:
         self._subsurfaces = []
         self._sub_legs = []
         self._base_surface = None
+        # #89: ensure the app-level cascade observer is installed on
+        # first Patch create too (idempotent -- module-flag dedupe).
+        try:
+            from SilkBlend import ensure_cascade_observer
+            ensure_cascade_observer()
+        except Exception:
+            pass
         # #67: re-entrancy guard for the Edges-cycle write. See
         # _store_boundary_cycle.
         self._normalizing_edges = False
@@ -171,6 +178,14 @@ class Patch:
         self._normalizing_splits = False
 
     def onDocumentRestored(self, obj):
+        # #89: a restored (legacy) patch+blend must also get the cascade
+        # observer, so a patch deleted from under a restored blend still
+        # cascades it. Idempotent -- module-flag dedupe.
+        try:
+            from SilkBlend import ensure_cascade_observer
+            ensure_cascade_observer()
+        except Exception:
+            pass
         # #82: a Patch saved before the band edges existed comes back
         # without any of the four properties -- __init__ does not run on
         # restore, and no migration is shipped, so the old USplits /
