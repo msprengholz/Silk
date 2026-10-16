@@ -62,6 +62,26 @@ users who want an order-2 build (#96) — geometry first, selection UX later.
 The corner rebuild joins the standing acceptance chain (`Tests/test_chain.py`),
 folded into the corner stage ticket (#29 → #91).
 
+## Measurement update (#97)
+
+With the calibrated instrument (`Tests/continuity_calibration.py`; see the
+finding in `docs/research/silk-corner-continuity-measurement.md`), the existing
+Silk corner (`Silk_Demo_01`, four `ControlGrid66_4Sub` junctions) is **C0-exact**
+(boundary gap <= 5.2e-13 mm) and **tangent-plane continuous to <= 0.48 deg**
+against its neighbouring `CubicSurface_64` blends, but is **not G2**: the
+across-seam normal-curvature gap reaches 3.1e-2 /mm against a 5e-5 tolerance
+(geodesic-torsion gaps to 4.1e-2 /mm; fifteen of sixteen seams fail, one is
+exactly zero).
+
+So upstream's "smooth transitions across the four original faces" is **G1**, not
+G2 -- and the port in #91 reproduces that bar. The workbench's own `CornerBlend`
+before the port measures **C0** with a normal gap up to 2.1 deg: the same object,
+an order of magnitude worse. **The stage's target is therefore the reference bar
+(G1, <= 0.5 deg), not a G2 claim.** A G2 target is not supported by measurement
+for either mechanism: the FreeCAD order-2 fill's G2-ness is itself unmeasured,
+because the Phase B probe read normal gaps only. Any future G2 claim has to be
+read off `k_gap` / `twist_gap`.
+
 ## Baseline
 
 Continuity is judged against `Resources/Demo_files/Silk_Demo_01.FCStd` — the

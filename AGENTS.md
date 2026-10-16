@@ -25,6 +25,22 @@ output, publishes its error floor, and carries either a known-answer calibration
 or an independent cross-check. A number quoted from a label, with no preserved
 output, is not a measurement.
 
+### Continuity instrument (corner stage)
+
+Two instruments, one calibrated. `Tests/g2_oracle.py` samples a caller-supplied
+seam and finite-differences it (`c0`, `g1_deg`, `k_gap`, `twist_gap`);
+`Tests/silk_nurbs.py` + `Tests/continuity_analytic.py` evaluate the stored
+control net exactly, **carrying the weights**, and add the combinatorial
+`c0_controlnet`. `Tests/continuity_calibration.py` is the soundness harness:
+`solve_uv`'s floor (4.5e-13 mm), every quantity's error floor, a known G1 angle,
+a known curvature jump -- which is also the proof that **`g1_deg` cannot
+establish G2** -- and an independent reflected-3D cross-check. **G2 is only ever
+the `k_gap` / `twist_gap` claim.** No test asserts a continuity label
+(`test_no_continuity_threshold_in_suite`); the manual scripts
+(`Tests/g2_demo_corner.py`, `Tests/g2_corner_measurement.py`) carry
+`MANUAL = True` and are asserted reachable. Measured reference corner
+(`Silk_Demo_01`): C0 exact, G1 <= 0.48 deg, **not G2** (`k_gap` <= 3.1e-2 /mm).
+
 ## Core Object Architecture
 
 Three types, one per process step (#42): `Edge` → `Patch` → `Blend`.
