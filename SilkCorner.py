@@ -319,6 +319,8 @@ class CreateCornerBlend:
                   if getattr(o, "object_type", None) in BLEND_TYPES]
         from SilkWorkflowOps import create_corner_blend
         doc = FreeCAD.ActiveDocument
+        if doc is None:
+            return  # nothing to put a transaction on; nothing is created
         known = {o.Name for o in doc.Objects}
         doc.openTransaction("Silk corner blend")
         try:
