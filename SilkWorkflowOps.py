@@ -298,7 +298,7 @@ def _existing_corner_blend(doc, strips):
         if getattr(o, "object_type", None) != "CornerBlend":
             continue
         have = list(getattr(o, "Strips", []) or [])
-        if len(have) == 4 and {id(s) for s in have} == want:
+        if len(have) == len(strips) and {id(s) for s in have} == want:
             return o
     return None
 
@@ -325,18 +325,18 @@ def create_corner_blend(*strips, name="CornerBlend"):
     if len(strips) == 1 and isinstance(strips[0], (list, tuple)):
         strips = list(strips[0])
     strips = [s for s in (strips or []) if s is not None]
-    if len(strips) != 4:
+    if len(strips) not in (3, 4):
         FreeCAD.Console.PrintError(
             "Silk: cannot create a corner blend from %d blend%s -- a corner "
-            "is the ring of exactly 4 blends around one junction. Nothing "
-            "was created.\n"
+            "is the ring of 3 (triangular) or 4 blends around one junction. "
+            "Nothing was created.\n"
             % (len(strips), "" if len(strips) == 1 else "s"))
         return None
     grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL)
     if grids is None:
         FreeCAD.Console.PrintError(
-            "Silk: cannot create a corner blend from these 4 blends -- %s. "
-            "Nothing was created.\n" % why)
+            "Silk: cannot create a corner blend from these %d blends -- %s. "
+            "Nothing was created.\n" % (len(strips), why))
         return None
     existing = _existing_corner_blend(doc, strips)
     if existing is not None:
@@ -344,7 +344,11 @@ def create_corner_blend(*strips, name="CornerBlend"):
             "Silk: this junction already has a corner blend (%s) -- no "
             "second one created\n" % existing.Name)
         return existing
-    ordered, _why = corner_ring(strips)
+    if len(strips) == 3:
+        from SilkMachinery import corner_ring_3
+        ordered, _why = corner_ring_3(strips)
+    else:
+        ordered, _why = corner_ring(strips)
     obj = doc.addObject("Part::FeaturePython", name)
     CornerBlend(obj, ordered)
     CornerBlendViewProvider(obj.ViewObject)

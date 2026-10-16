@@ -32,8 +32,9 @@ import Part
 import ArachNURBS as AN
 
 from SilkBlend import band_cells, side_and_end, BLEND_TYPES
-from SilkMachinery import build_intervals, split_pair, corner_ring, \
-    corner_grid, orient_junction_row
+from SilkMachinery import (build_intervals, split_pair, corner_ring,
+    corner_grid, orient_junction_row, corner_ring_3,
+    control_grid64_3_1, reverse_grid_rows)
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -63,7 +64,12 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
     Returns (grids, corner_cells, None) or (None, None, reason). Every
     refusal names the strip (or patch) that caused it.
     """
-    ordered, why = corner_ring(strips)
+    strips = list(strips)
+    is_tri = (len(strips) == 3)
+    if is_tri:
+        ordered, why = corner_ring_3(strips)
+    else:
+        ordered, why = corner_ring(strips)
     if ordered is None:
         return None, None, why
     grids = []
@@ -109,6 +115,40 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
                                 "poles / %d weights"
                                 % (s.Name, len(poles), len(weights)))
         grids.append(orient_junction_row(poles, weights, li_map[pa.Name]))
+    if is_tri:
+        base_grids = list(grids)
+        patches = []
+        for s in ordered:
+            for pth in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
+                if pth is not None and pth not in patches:
+                    patches.append(pth)
+        member = None
+        for pth in patches:
+            poles_p = list(getattr(pth, "Poles", None) or [])
+            weights_p = list(getattr(pth, "Weights", None) or [])
+            if len(poles_p) != 16:
+                continue
+            if len(weights_p) != 16:
+                weights_p = [1.0] * 16
+            for corner in range(4):
+                for rev in (False, True):
+                    mp, mw = control_grid64_3_1(poles_p, weights_p, corner)
+                    if mp is None:
+                        continue
+                    if rev:
+                        mp, mw = reverse_grid_rows(mp, mw)
+                    cand = base_grids + [(list(mp), list(mw))]
+                    p36, _w, _why = corner_grid(cand, CORNER_TOL)
+                    if p36 is not None:
+                        member = (list(mp), list(mw))
+                        break
+                if member is not None:
+                    break
+            if member is not None:
+                break
+        if member is None:
+            return None, None, "could not build triangular 4th member"
+        grids = base_grids + [member]
     return grids, corner_cells, None
 
 

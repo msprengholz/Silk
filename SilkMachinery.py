@@ -1078,3 +1078,126 @@ def build_display(fobj, base_shape, sub_shapes, base_legs, sub_legs,
                 fobj.Shape = Part.Shape(shapes)
     else:
         fobj.Shape = Part.Shape()
+
+
+# ---- triangular 4th member (#3-valent hard corner) -----------------------
+#
+# Port of `ArachNURBS.ControlGrid64_3_1Grid44.execute`: rotate a 4x4 grid
+# so the target corner sits at 00, collapse one side into the degenerate
+# triangular layout with the "tiny spacing" workaround, and return a
+# 6x4 (24-pole) grid that serves as the fourth ring member of a 3-valent
+# corner. `corner` in 0..3 is the corner index of the 4x4 to collapse.
+
+import numpy as np
+from FreeCAD import Vector as _CGV
+
+
+def control_grid64_3_1(grid_poles, grid_weights, corner=0):
+    if corner not in (0, 1, 2, 3):
+        return None, None
+    rotate = corner
+    lp = list(grid_poles)
+    lw = list(grid_weights)
+    if len(lp) != 16 or len(lw) != 16:
+        return None, None
+    Apoles = [list(lp[0:4]), list(lp[4:8]), list(lp[8:12]), list(lp[12:16])]
+    Aweights = [list(lw[0:4]), list(lw[4:8]), list(lw[8:12]), list(lw[12:16])]
+    uv_poles_temp = np.rot90(Apoles, rotate).tolist()
+    uv_weights = np.rot90(Aweights, rotate).tolist()
+    uv_poles = [[None]*4 for _ in range(4)]
+    for i in range(4):
+        for j in range(4):
+            v = uv_poles_temp[i][j]
+            uv_poles[i][j] = _CGV(v[0], v[1], v[2]) if hasattr(v, "__len__") \
+                and not hasattr(v, "x") else v
+    set_poles = [uv_poles[i][j] for i in range(4) for j in range(4)]
+    set_weights = [uv_weights[i][j] for i in range(4) for j in range(4)]
+
+    def V(p):  # ensure FreeCAD.Vector
+        if hasattr(p, "x"):
+            return p
+        return _CGV(p[0], p[1], p[2])
+
+    p = [V(x) for x in set_poles]
+    w = [float(x) for x in set_weights]
+
+    # third strategy mapping (upstream)
+    p00 = p[12]; p01 = p[8]; p02 = p[4]; p03 = p[1]; p04 = p[2]; p05 = p[3]
+    p10 = p[13]; p11 = p[9]
+    p14 = p[6]; p15 = p[7]
+    p20 = p[14]
+    p21 = p[14] + (p[10] - p[14]) * 0.5
+    p22 = p21 + (p[10] - p21) * 0.5
+    p24 = p[15] + (p[10] - p[15]) * 0.5
+    p23 = p24 + (p[10] - p24) * 0.5
+    p25 = p[11]
+    p30 = p[15]; p31 = p[15]; p32 = p[15]; p33 = p[15]; p34 = p[15]; p35 = p[15]
+    p12 = (p[5] + p[11]) * 0.5 if hasattr(p[5]+p[11], "multiply") else (p[5] + p[11]) * 0.5
+    p13 = (p[5] + p[6]) * 0.5
+
+    out_poles = [p00, p01, p02, p03, p04, p05,
+                 p10, p11, p12, p13, p14, p15,
+                 p20, p21, p22, p23, p24, p25,
+                 p30, p31, p32, p33, p34, p35]
+
+    w00 = w[12]; w01 = w[8]; w02 = w[4]; w03 = w[1]; w04 = w[2]; w05 = w[3]
+    w10 = w[13]; w11 = w[9]
+    w14 = w[6]; w15 = w[7]
+    w20 = w[14]
+    w21 = w[10]; w22 = w[10]; w23 = w[10]; w24 = w[10]
+    w25 = w[11]
+    w30 = w[15]; w31 = w[15]; w32 = w[15]; w33 = w[15]; w34 = w[15]; w35 = w[15]
+    w12 = (w[5] + w[11]) * 0.5
+    w13 = (w[5] + w[6]) * 0.5
+
+    out_weights = [w00, w01, w02, w03, w04, w05,
+                   w10, w11, w12, w13, w14, w15,
+                   w20, w21, w22, w23, w24, w25,
+                   w30, w31, w32, w33, w34, w35]
+    # ensure vectors
+    for i in range(len(out_poles)):
+        if not hasattr(out_poles[i], "x"):
+            v = out_poles[i]
+            out_poles[i] = _CGV(v[0], v[1], v[2])
+    return out_poles, out_weights
+
+
+def corner_ring_3(strips):
+    strips = list(strips)
+    if len(strips) != 3:
+        return None, ("a 3-valent ring is exactly 3 blends (got %d)"
+                      % len(strips))
+    adj = {i: set() for i in range(3)}
+    for i in range(3):
+        for j in range(i + 1, 3):
+            # reuse SilkMachinery? inline share patch
+            def _sp(a, b):
+                pa = [getattr(a, "PatchA", None), getattr(a, "PatchB", None)]
+                pb = [getattr(b, "PatchA", None), getattr(b, "PatchB", None)]
+                return any(x is not None and x is y for x in pa for y in pb)
+            if _sp(strips[i], strips[j]):
+                adj[i].add(j)
+                adj[j].add(i)
+    for i in range(3):
+        if len(adj[i]) != 2:
+            return None, ("%s shares a patch with %d of the other blends; "
+                          "a 3-valent corner needs a 3-cycle"
+                          % (strips[i].Name, len(adj[i])))
+    # order
+    import FreeCAD
+    def _idx(o):
+        doc = getattr(o, "Document", None)
+        if doc is None:
+            return 0
+        for k, oo in enumerate(doc.Objects):
+            if oo is o:
+                return k
+        return 0
+    start = min(range(3), key=lambda i: _idx(strips[i]))
+    nxt = min(adj[start], key=lambda i: _idx(strips[i]))
+    third = [k for k in adj[nxt] if k != start][0]
+    if third in (start,):
+        return None, "not a single 3-cycle"
+    if start not in adj[third]:
+        return None, "the three blends do not form a single 3-cycle"
+    return [strips[start], strips[nxt], strips[third]], None
