@@ -129,14 +129,23 @@ creates them anymore.
   distinct shared corners, cross-column apexes and facing collapsed rows still
   refuse by name. `Tests/cube_corner_model.py` +
   `Tests/test_cube_corner_3valent.py` carry the contract (36 poles, 1+ face,
-  idempotent, reversed ring identical) and the raw instrument readings: the
-  non-reversed seam `k_gap` 6.132e-03 sampled / 6.888e-15 exact; the two seams
+  idempotent, reversed ring identical) and the raw instrument readings. The
+  member is a faithful, term-for-term port of upstream's stored members
+  (ticket-foldfix; `Tests/test_triangular_member_calibration.py` pins exact
+  parity on the demo's four stored members and on synthetic weights), and
+  `SilkMachinery.smooth_degenerate_cap` re-solves the two member-side interior
+  rows of the assembled 6x6 from the transfinite (Coons) fill of the corner's
+  own boundary loop — upstream's subgrid chain extrapolates past the collapsed
+  row and folded the cap. After the fix: **0 normal-field flips** (n=39/81/150,
+  Part surface + exact net; was 19/1521 at n=39), cap samples inside the
+  boundary box (was +0.0101 mm), Shape valid, no self-intersections; the
+  non-reversed seam `k_gap` 4.563e-03 sampled / 6.888e-15 exact; the two seams
   that terminate in the collapsed row read a **degenerate-boundary normal**
   (g1 90° at their apex-side stations — the same reading the demo's hard-corner
-  members give, `Tests/g2_edge_blend_probe.py`), and a normal-field fold remains
-  in the tight apex band (16 of 1521 exact-net samples flip; no
-  self-intersections). 4-valent reference on the same code: g1 ≤ 2.0e-4°,
-  `k_gap` ≤ 1.0e-2 /mm.
+  members give, `Tests/g2_edge_blend_probe.py`) and their `k_gap` drops from
+  3.5e+2 /mm to ~2e-13 exact / 2.4e-3 sampled. 4-valent reference on the same
+  code (untouched by the smoothing; CB2 still poles-matches the legacy chain):
+  g1 ≤ 2.0e-4°, `k_gap` ≤ 1.0e-2 /mm.
 - Fourth wizard step and fourth toolbar command (`Silk_CreateCornerBlend`);
   the toolbar path opens its own transaction.
 - Weights are carried — rational weights are possible.

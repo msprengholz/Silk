@@ -22,9 +22,27 @@ patches pass `check_patch` on their own `Edges`, 3 strips pass
     corner), choosing the ring-canonical pairing.
 
 The built corner has 36 poles, one face, a non-empty Shape and an
-idempotent second ask. `test_3valent_cube_corner_seam_measurement`
-records the raw seam numbers; no continuity label is asserted anywhere
-in this module.
+idempotent second ask.
+
+MEASURED STATE (ticket-foldfix): upstream's subgrid chain extrapolates
+the subgrid interiors PAST the member's collapsed row, which pushed the
+cap's member-side interior beyond the apex and folded it (normal-field
+flips: 19/1521 samples at n=39 on the parity member; the fold was not
+the port's -- it persists with upstream's member substituted, and it is
+independent of the member's tiny-spacing factor). `SilkMachinery.
+smooth_degenerate_cap` now re-solves the two member-side interior rows
+from the transfinite (Coons) fill of the corner's own boundary loop.
+After the fix, measured on this fixture: **0 normal-field flips** at
+n=39/81 on both the Part surface and the exact net, cap samples inside
+the boundary box (the fold poked 0.0101 mm past it), Shape valid, no
+self-intersections; the seam OPPOSITE the member keeps its exact G1
+(0.0000 deg) and `k_gap` 6.888e-15 /mm, and the two seam
+correspondences that terminate in the collapsed row drop from
+`k_gap` 3.514e+02 /mm (sampled 3.512e+02) to 2.03e-13 /mm exact /
+2.380e-03 /mm sampled -- at apex-side stations their boundary normal is
+genuinely degenerate (g1 reads 90 deg there, by the member's construct),
+so that reading is reported separately and is not a cap-quality number.
+No continuity label is asserted anywhere in this module.
 """
 
 import FreeCAD
@@ -219,6 +237,196 @@ def _match_side(cb_poles, strip_poles):
     return None
 
 
+def test_3valent_cube_corner_cap_is_fold_free(doc):
+    """OWNER ACCEPTANCE (ticket-foldfix): the 3-valent cap has no visible
+    fold.
+
+    The triangular member's collapsed junction row made the subgrid chain
+    extrapolate the member-side interior PAST the apex, so the assembled
+    cap doubled over just inside the collapsed side (the fold this test
+    pins to zero). `SilkMachinery.smooth_degenerate_cap` re-solves the two
+    member-side interior rows from the boundary loop; the instruments here
+    all run on the BUILT corner:
+
+      * normal-field flips == 0 at n = 39 (the resolution the fold was
+        first read at: 19 flips on the parity build, 17 on the pre-parity
+        one), n = 81 and n = 150, on the Part surface (`SilkChecks`'
+        neighbour-consistency rule) and on the exact control net. (The
+        folded net's reversal is continuous, not a discontinuity -- at
+        n = 300 it reads 0 too, so the coarse count is the aliased
+        reading of a tight crease; the box overshoot below is the
+        resolution-independent defect.)
+      * no overshoot: every exact-net sample stays inside the bounding box
+        of the four boundary rows (before the fix the cap poked 0.0101 mm
+        = 10 % of the corner cell past it on the member side);
+      * the built Shape is valid and a 1e-3 mm mesh of its face has no
+        self-intersections (the fold was a normal-field fold, so this is
+        recorded as a separate instrument).
+
+    Raw numbers are reported in the checks; nothing here labels G1/G2 and
+    no continuity threshold is asserted.
+    """
+    ccm.build_cube_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIP_NAMES]
+    cb = create_corner_blend(*strips)
+    if cb is None:
+        return {"pass": False, "errors": ["corner build refused"],
+                "checks": []}
+    errors, checks = [], []
+    cb_flat = list(cb.Poles)
+    cb_weights = list(cb.Weights) or [1.0] * 36
+    cb_part = _part_surface(cb_flat, cb_weights, 6)
+    cb_net = SN.NurbsSurface.from_flat(cb_flat, cb_weights, 6, 6,
+                                       SN.KNOTS_6, SN.KNOTS_6)
+
+    def exact_flips(n):
+        ns = []
+        for i in range(n):
+            for j in range(n):
+                nrm = cb_net.normal((i + 0.5) / n, (j + 0.5) / n)
+                ns.append(None if nrm.Length < 1e-12 else nrm)
+        out = []
+        for i in range(n):
+            for j in range(n):
+                a = ns[i * n + j]
+                if a is None:
+                    continue
+                for (ii, jj) in ((i - 1, j), (i, j - 1)):
+                    if ii < 0 or jj < 0:
+                        continue
+                    b = ns[ii * n + jj]
+                    if b is not None and a.dot(b) < -1e-6:
+                        out.append((round((i + 0.5) / n, 4),
+                                    round((j + 0.5) / n, 4)))
+        return out
+
+    for n in (39, 81, 150):
+        part_flips, any_normal = SilkChecks._normal_field_flips(cb_part, n=n)
+        net_flips = exact_flips(n)
+        checks.append("n=%d: Part-surface flips %d (any normal: %s), "
+                      "exact-net flips %d"
+                      % (n, len(part_flips), any_normal, len(net_flips)))
+        if not any_normal:
+            errors.append("n=%d: no valid normal on the cap surface" % n)
+        if part_flips or net_flips:
+            errors.append("n=%d: %d Part-surface / %d exact-net normal-field "
+                          "flips -- the cap folds"
+                          % (n, len(part_flips), len(net_flips)))
+
+    # no overshoot: the cap must stay inside the box its four boundary
+    # rows span (the region the ring leaves for it)
+    side_idx = (list(range(6)) + list(range(30, 36))
+                + [v * 6 for v in range(6)] + [v * 6 + 5 for v in range(6)])
+    lo = (min(cb_flat[k].x for k in side_idx),
+          min(cb_flat[k].y for k in side_idx),
+          min(cb_flat[k].z for k in side_idx))
+    hi = (max(cb_flat[k].x for k in side_idx),
+          max(cb_flat[k].y for k in side_idx),
+          max(cb_flat[k].z for k in side_idx))
+    worst = 0.0
+    for i in range(101):
+        for j in range(101):
+            p = cb_net.value(i / 100.0, j / 100.0)
+            for a, c in enumerate((p.x, p.y, p.z)):
+                worst = max(worst, lo[a] - c, c - hi[a])
+    checks.append("overshoot beyond the boundary box %s .. %s: %.3e mm"
+                  % (tuple(round(x, 4) for x in lo),
+                     tuple(round(x, 4) for x in hi), worst))
+    if worst > 1e-9:
+        errors.append("cap overshoots the boundary box by %.3e mm" % worst)
+
+    valid = bool(cb.Shape and not cb.Shape.isNull() and cb.Shape.isValid()
+                 and cb.Shape.Faces)
+    checks.append("Shape valid with faces: %s" % valid)
+    if not valid:
+        errors.append("corner Shape invalid or empty")
+    try:
+        import MeshPart
+        face = max(cb.Shape.Faces, key=lambda f: f.Area)
+        mesh = MeshPart.meshFromShape(Shape=face, LinearDeflection=1e-3,
+                                      AngularDeflection=0.3, Relative=False)
+        si = bool(mesh.hasSelfIntersections())
+        checks.append("fine mesh (%d facets, deflection 1e-3 mm): "
+                      "self-intersections %s" % (mesh.CountFacets, si))
+        if si:
+            errors.append("the cap's fine mesh self-intersects")
+    except Exception as exc:
+        errors.append("mesh self-intersection check failed: %r" % (exc,))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_3valent_cap_smoothing_is_side_agnostic(doc):
+    """`smooth_degenerate_cap` must not care which side of the assembled
+    6x6 carries the member's collapse.
+
+    A ring built the other way round can present the collapsed row on any
+    of the four sides; the smoothing re-indexes to the Coons frame
+    (collapse at V1) and maps back. This test assembles the RAW (upstream)
+    net from the fixture's ring grids, then smooths it four times -- once
+    per collapse-side placement -- and requires all four results to be the
+    same net and fold-free. A mapping slip would show up here as a
+    side-dependent cap."""
+    import Tests.cube_corner_model as ccm
+    import SilkMachinery as M
+    import SilkCorner
+
+    errors, checks = [], []
+    ccm.build_cube_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIP_NAMES]
+    grids, _cells, why = SilkCorner.corner_inputs(strips)
+    if grids is None:
+        return {"pass": False,
+                "errors": ["corner_inputs refused the fixture: %s" % why],
+                "checks": checks}
+
+    # the raw assembly (corner_grid's orientation step, without smoothing)
+    pairs = [M.pair_common(grids[i][0], grids[(i + 1) % 4][0],
+                           SilkCorner.CORNER_TOL)[0] for i in range(4)]
+    if not all(p == M.CORNER_COMMON for p in pairs):
+        return {"pass": False,
+                "errors": ["the fixture ring is not canonically oriented: "
+                           "%r" % (pairs,)], "checks": checks}
+    subs = []
+    for i in range(4):
+        a, b = grids[i], grids[(i + 1) % 4]
+        p9, w9, _why = M.subgrid33_2grid64(a[0], a[1], b[0], b[1],
+                                           SilkCorner.CORNER_TOL)
+        subs.append((p9, w9))
+    raw_p, raw_w = M.control_grid66_4sub(subs)
+    raw_side = M._collapsed_side(raw_p, SilkCorner.CORNER_TOL)
+    checks.append("raw assembly collapse side: %s" % raw_side)
+    if raw_side != "v1":
+        errors.append("the fixture's raw collapse is on %r, expected v1"
+                      % raw_side)
+
+    ref_p, _ref_w = M.smooth_degenerate_cap(raw_p, raw_w,
+                                            SilkCorner.CORNER_TOL)
+    for side in ("v1", "v0", "u1", "u0"):
+        perm = [M._collapse_frame_index(side, k) for k in range(36)]
+        inv = [0] * 36
+        for k in range(36):
+            inv[perm[k]] = k
+        v_p = [raw_p[inv[k]] for k in range(36)]
+        v_w = [raw_w[inv[k]] for k in range(36)]
+        if M._collapsed_side(v_p, SilkCorner.CORNER_TOL) != side:
+            errors.append("could not place the collapse on %s" % side)
+            continue
+        s_p, _s_w = M.smooth_degenerate_cap(v_p, v_w,
+                                            SilkCorner.CORNER_TOL)
+        back = [s_p[perm[k]] for k in range(36)]
+        dev = max((a - b).Length for a, b in zip(back, ref_p))
+        flips, _any_n = SilkChecks._normal_field_flips(
+            _part_surface(back, raw_w, 6), n=39)
+        checks.append("%s: smoothed vs the v1 result max|dPole| %.3e mm, "
+                      "flips %d" % (side, dev, len(flips)))
+        if dev > 1e-9:
+            errors.append("%s: smoothed cap differs from the v1 result by "
+                          "%.3e mm" % (side, dev))
+        if flips:
+            errors.append("%s: %d normal-field flips" % (side, len(flips)))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 def test_3valent_cube_corner_seam_measurement(doc):
     """Raw seam numbers of the built 3-valent corner (measurement only).
 
@@ -241,7 +449,11 @@ def test_3valent_cube_corner_seam_measurement(doc):
         that terminate there read a degenerate-boundary normal at their
         apex-side stations -- `g1_deg` reaches 90 deg by construction
         exactly as `Tests/g2_edge_blend_probe.py` records for the demo's
-        hard-corner members;
+        hard-corner members. `smooth_degenerate_cap` (ticket-foldfix)
+        keeps that boundary and re-solves only the member-side interior
+        rows, so the degenerate reading stays while the seams' `k_gap`
+        in the tight apex band drops from 3.5e+2 /mm (the folded
+        upstream net) to ~1e-13 /mm exact / 2.4e-3 /mm sampled;
       * `twist_gap` depends on the caller's seam correspondence: on a
         REVERSED seam the geodesic torsion enters with a sign flip, so it
         can read ~2|tau| even where the surface is smooth (#101). Only
@@ -427,6 +639,8 @@ ALL_TESTS = [
     test_cube_corner_fixture_is_oracle_green,
     test_3valent_cube_corner_builds_green,
     test_3valent_cube_corner_builds_in_a_reversed_ring,
+    test_3valent_cube_corner_cap_is_fold_free,
+    test_3valent_cap_smoothing_is_side_agnostic,
     test_3valent_cube_corner_seam_measurement,
     test_3valent_cube_corner_non_ring_refused,
 ]

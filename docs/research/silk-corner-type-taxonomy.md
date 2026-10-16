@@ -113,14 +113,27 @@ sampled + exact instruments, floor from `Tests/continuity_calibration.py`):
   strip seams (exact c0 ≤ 4.2e-17 mm).
 - The corner's fourth side is the member's collapsed row. The two seams terminating there read a
   degenerate-boundary normal at their apex-side stations (g1 = 90 deg there, exactly as
-  `Tests/g2_edge_blend_probe.py` records for the demo's hard-corner members) and their `k_gap`
-  peaks in the tight apex band (up to 8.1e+2 /mm exact). The seam opposite the member (corner `v0`
-  / strip `B_BC`) is smooth: exact `k_gap` 6.9e-15 /mm, sampled 6.1e-3 /mm (finite-difference bias
-  above the calibrated floor). `twist_gap` is reported but the B_AB seam is a reversed
-  correspondence (#101), so it is not evidence there.
-- A normal-field fold remains in the tight apex band (16 of 1521 sampled cells flip): the member
-  construction's documented folding trade-off ("causes folding"; the tiny-spacing strategy "will
-  break G1 slightly"). No continuity label is asserted anywhere.
+  `Tests/g2_edge_blend_probe.py` records for the demo's hard-corner members); their `k_gap`,
+  which upstream's folded net read at 3.5e+2 /mm, is 2.0e-13 /mm exact / 2.4e-3 /mm sampled after
+  the fold fix. The seam opposite the member (corner `v0` / strip `B_BC`) is smooth: exact
+  `k_gap` 6.9e-15 /mm, sampled 4.6e-3 /mm (finite-difference bias above the calibrated floor).
+  `twist_gap` is reported but the B_AB seam is a reversed correspondence (#101), so it is not
+  evidence there.
+- **The fold is gone (ticket-foldfix).** Upstream's subgrid chain extrapolates subgrid interiors
+  PAST the member's collapsed row; on this fixture that pushed the cap's member-side interior
+  beyond the apex and doubled it over (19/1521 normal-field flips at n=39 on the parity member;
+  the fold was upstream's, not the port's, and independent of the member's tiny-spacing factor —
+  a sweep of it never reached 0 flips). `SilkMachinery.smooth_degenerate_cap` re-solves the two
+  member-side interior rows of the assembled 6x6 from the transfinite (Coons) fill of the corner's
+  own boundary loop (weights held fixed), leaving the collapsed boundary and the three strip-side
+  rows untouched. Measured after the fix: **0 flips** at n=39/81/150 on the Part surface and on the
+  exact net (the folded net's reversal is continuous, not a discontinuity: it reads 0 at n=300 too,
+  so the coarse count is the aliased reading of a tight crease), all samples inside the boundary box
+  (the fold had poked 0.0101 mm past it), Shape
+  valid, no self-intersections; the opposite seam's exact G1 (0.0000 deg) and `k_gap` are
+  preserved because they read the first three control rows only. No continuity label is asserted
+  anywhere.
 
-For comparison, the 4-valent corner measured with the same seam-matching code: g1 ≤ 2.0e-4 deg,
-k_gap ≤ 1.0e-2 /mm (the strong-link reference of #97/#100).
+For comparison, the 4-valent corner measured with the same seam-matching code (and untouched by
+the smoothing — a collapsed side is what gates it): g1 ≤ 2.0e-4 deg, k_gap ≤ 1.0e-2 /mm (the
+strong-link reference of #97/#100), CB2 pole parity with the legacy chain intact.

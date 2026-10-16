@@ -18,7 +18,12 @@ strip-to-grid derivation shared by the object and the ops validator
 restore shims (#7) and are never called at runtime; they remain the
 pole-for-pole oracle the tests compare against. The old #28 fill
 (`ControlGrid66_4`, a boundary-curve constructor whose interior was
-difference propagation) is gone.
+difference propagation) is gone. Ticket-foldfix adds the one deliberate
+deviation from the port: `SilkMachinery.smooth_degenerate_cap` re-solves
+the member-side interior rows of a ring that carries a collapsed side,
+because upstream's subgrid extrapolation past that side folds the cap on
+the cube-corner fixture; on the ordinary 4-valent ring it is a
+byte-identical no-op.
 
 Usage:
   1. Build the 4 ring Blend strips

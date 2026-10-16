@@ -951,6 +951,202 @@ def control_grid66_4sub(subgrids):
     return poles, weights
 
 
+# ---- the degenerate-side cap smoothing (3-valent fold fix) ---------------
+#
+# A 3-valent corner ring carries a triangular 4th member whose junction row
+# COLLAPSES onto the ring's shared corner (`control_grid64_3_1`'s
+# p30..p35 = set_poles[15] row). `subgrid33_2grid64` then extrapolates the
+# subgrid interiors PAST that collapsed row (`p11_v = p10 + (v_col0[1] -
+# v_col1[1]) * u_tan_ratio` and friends) -- correct for a regular pair, but
+# past a collapsed end row the extrapolation pushes the corner net's
+# member-side rows BEYOND the apex. On the cube-corner fixture that makes
+# the cap double over near the apex: the normal field flips (measured, see
+# Tests/test_cube_corner_3valent.py).
+#
+# The fix keeps the collapsed boundary and the three strip-side rows and
+# REPLACES the eight interior poles of the two member-side rows with the
+# least-squares projection of the TRANSFINITE (Coons) fill of the corner's
+# own boundary loop. The Coons fill is fold-free on the fixture (0
+# flips at n=39/81 and on the exact net), and the seam OPPOSITE the member
+# keeps its exact G1 and curvature because those read the first three
+# control rows only -- the fix never touches rows 0..2.
+#
+# Weights are carried: the solve is the rational least-squares with the
+# assembled net's own weights held FIXED (a rational basis function is
+# `N_i N_j w_ij / W`), so only the pole positions move and the weight
+# channel stays exactly the subgrid chain's. If the solve is not finite
+# the input is returned unchanged -- the smoothing must never break a
+# build that the upstream construction could complete.
+
+_KNOTS6 = [0.0, 0.0, 0.0, 0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0, 1.0, 1.0, 1.0]
+
+
+def _bspline_basis(i, p, u, knots):
+    """Cox-de Boor basis value N_{i,p}(u) (clamped end: u == 1 allowed)."""
+    if p == 0:
+        if knots[i] <= u < knots[i + 1]:
+            return 1.0
+        if u >= knots[-1] and u > knots[i] and knots[i + 1] >= knots[-1]:
+            return 1.0
+        return 0.0
+    left = 0.0
+    if knots[i + p] > knots[i]:
+        left = ((u - knots[i]) / (knots[i + p] - knots[i])
+                * _bspline_basis(i, p - 1, u, knots))
+    right = 0.0
+    if knots[i + p + 1] > knots[i + 1]:
+        right = ((knots[i + p + 1] - u) / (knots[i + p + 1] - knots[i + 1])
+                 * _bspline_basis(i + 1, p - 1, u, knots))
+    return left + right
+
+
+def _basis6(u):
+    """The six degree-3 basis values at `u` on `_KNOTS6`."""
+    return [_bspline_basis(i, 3, u, _KNOTS6) for i in range(6)]
+
+
+def _collapsed_side(poles36, tol):
+    """The name of the 6x6 side whose six poles all coincide ('u0', 'u1',
+    'v0', 'v1'), or None. The triangular member's collapsed junction row
+    lands on exactly one side of the assembled corner."""
+    sides = {
+        "u0": [v * 6 + 0 for v in range(6)],
+        "u1": [v * 6 + 5 for v in range(6)],
+        "v0": [0 * 6 + u for u in range(6)],
+        "v1": [5 * 6 + u for u in range(6)],
+    }
+    for name, idxs in sides.items():
+        p0 = poles36[idxs[0]]
+        if all((poles36[k] - p0).Length <= tol for k in idxs):
+            return name
+    return None
+
+
+def _collapse_frame_index(side, k):
+    """Original flat index of frame position `k`, where the frame places
+    the collapsed side at V1 (the Coons construction's degenerate side).
+
+    P'[u][v] = P[u][v] for a collapsed v1, P[u][5-v] for v0,
+    P[v][u] for u1, P[5-v][u] for u0; flat index = v*6 + u."""
+    v, u = divmod(k, 6)
+    if side == "v1":
+        return v * 6 + u
+    if side == "v0":
+        return (5 - v) * 6 + u
+    if side == "u1":
+        return u * 6 + v
+    return u * 6 + (5 - v)          # u0
+
+
+def _coons_target(net_p, net_w, u, v):
+    """The transfinite (Coons) fill of the frame net's boundary loop, with
+    the v1 side collapsed to a point. Rational boundaries, Cartesian
+    result: the same construction on a degenerate quadrilateral."""
+    def point(eval_uv):
+        num = [0.0, 0.0, 0.0]
+        den = 0.0
+        for idx, wt in eval_uv:
+            num[0] += wt * net_p[idx].x
+            num[1] += wt * net_p[idx].y
+            num[2] += wt * net_p[idx].z
+            den += wt
+        if den == 0.0:
+            return None
+        return (num[0] / den, num[1] / den, num[2] / den)
+
+    bu, bv = _basis6(u), _basis6(v)
+    c_v0 = point([(0 * 6 + i, bu[i] * net_w[0 * 6 + i]) for i in range(6)])
+    c_v1 = point([(5 * 6 + i, bu[i] * net_w[5 * 6 + i]) for i in range(6)])
+    c_u0 = point([(j * 6 + 0, bv[j] * net_w[j * 6 + 0]) for j in range(6)])
+    c_u1 = point([(j * 6 + 5, bv[j] * net_w[j * 6 + 5]) for j in range(6)])
+    if None in (c_v0, c_v1, c_u0, c_u1):
+        return None
+    p00 = (net_p[0].x, net_p[0].y, net_p[0].z)
+    p01 = c_v1            # the collapsed v1 side is one point
+    c00 = tuple((1 - v) * p00[k] + v * p01[k] for k in range(3))
+    p10 = tuple(net_p[0 * 6 + 5][k] for k in range(3))
+    c10 = tuple((1 - v) * p10[k] + v * p01[k] for k in range(3))
+    out = []
+    for k in range(3):
+        out.append((1 - v) * c_v0[k] + v * c_v1[k]
+                   + (1 - u) * (c_u0[k] - c00[k])
+                   + u * (c_u1[k] - c10[k]))
+    return tuple(out)
+
+
+def smooth_degenerate_cap(poles36, weights36, tol=1e-6):
+    """Fold-free cap smoothing for a corner with a collapsed side.
+
+    Detects a side of the 6x6 whose six poles coincide (the triangular
+    4th member's collapsed junction row), re-indexes the net so that side
+    is V1, and re-solves the eight interior poles of its two neighbouring
+    rows (frame u = 1..4, v = 3,4) as the least-squares projection of the
+    transfinite (Coons) fill of the corner's own boundary loop -- with
+    the assembled weights held fixed. Everything else (all four boundary
+    sides included) is returned untouched, so C0 at every seam and the
+    opposite seam's exact G1/curvature are preserved.
+
+    Returns (poles36, weights36): the input lists unchanged when no side
+    is collapsed (the ordinary 4-valent ring) or when the solve does not
+    produce a finite net.
+    """
+    side = _collapsed_side(poles36, tol)
+    if side is None:
+        return poles36, weights36
+    perm = [_collapse_frame_index(side, k) for k in range(36)]
+    fp = [poles36[k] for k in perm]
+    fw = [float(weights36[k]) for k in perm]
+
+    n_samp = 25
+    free = [(v * 6 + u) for v in (3, 4) for u in range(1, 5)]
+    sites = [((i + 0.5) / n_samp, (j + 0.5) / n_samp)
+             for i in range(n_samp) for j in range(n_samp)]
+    fixed = [k for k in range(36) if k not in free]
+
+    ncol = len(free)
+    A = np.zeros((len(sites), ncol))
+    B = np.zeros((len(sites), 3))
+    for r, (u, v) in enumerate(sites):
+        bu, bv = _basis6(u), _basis6(v)
+        field_w = sum(bu[i] * bv[j] * fw[j * 6 + i]
+                      for i in range(6) for j in range(6))
+        if field_w <= 0.0:
+            return poles36, weights36
+        tgt = _coons_target(fp, fw, u, v)
+        if tgt is None:
+            return poles36, weights36
+        acc = [0.0, 0.0, 0.0]
+        for k in fixed:
+            vv, uu = divmod(k, 6)
+            rat = bu[uu] * bv[vv] * fw[k] / field_w
+            if rat != 0.0:
+                acc[0] += rat * fp[k].x
+                acc[1] += rat * fp[k].y
+                acc[2] += rat * fp[k].z
+        for ci, k in enumerate(free):
+            vv, uu = divmod(k, 6)
+            A[r, ci] = bu[uu] * bv[vv] * fw[k] / field_w
+        B[r, 0] = tgt[0] - acc[0]
+        B[r, 1] = tgt[1] - acc[1]
+        B[r, 2] = tgt[2] - acc[2]
+
+    try:
+        sol, _res, _rank, _sv = np.linalg.lstsq(A, B, rcond=None)
+    except Exception:
+        return poles36, weights36
+    if not all(np.isfinite(sol.ravel())):
+        return poles36, weights36
+
+    frame_p = list(fp)
+    for ci, k in enumerate(free):
+        frame_p[k] = _CGV(float(sol[ci, 0]), float(sol[ci, 1]),
+                          float(sol[ci, 2]))
+    out_p = list(poles36)
+    for k in range(36):
+        out_p[perm[k]] = frame_p[k]
+    return out_p, list(weights36)
+
+
 def corner_grid(grids, tol=1e-6):
     """Four 24-pole grids (ring order) -> the corner's 6x6.
 
@@ -992,6 +1188,11 @@ def corner_grid(grids, tol=1e-6):
                                 % (i, (i + 1) % 4, why))
         subgrids.append((p, w))
     p36, w36 = control_grid66_4sub(subgrids)
+    # A 3-valent ring's triangular member collapses one side of the 6x6;
+    # the subgrid extrapolation past that side folds the cap, so the
+    # member-side interior rows are re-solved from the boundary (no-op on
+    # an ordinary 4-valent ring).
+    p36, w36 = smooth_degenerate_cap(p36, w36, tol)
     return p36, w36, None
 
 
