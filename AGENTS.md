@@ -122,14 +122,21 @@ creates them anymore.
 - Refuses **by name and creates nothing** unless it gets four strips forming
   one ring, or three strips forming a 3-cycle (the #80/#83 lesson: never park a
   dead object). An existing corner for the same strip set is an idempotent no-op.
-- **The 3-valent path currently refuses at the member stage** (honest, measured):
-  the triangular-member search feeds each patch's full 4x4 base net instead of
-  the ring's corner cell, and the degenerate apex then trips the strict
-  shared-corner match (`pair_common`) that upstream merely warned about. The
-  cube-corner fixture `Tests/cube_corner_model.py` + `Tests/test_cube_corner_3valent.py`
-  records this exactly; the positive contract (36 poles, 1+ faces, idempotent)
-  is pre-written in that test's docstring and it must be rewritten (it will
-  fail) when the two fixes land.
+- **The 3-valent path builds (measured on the cube-corner fixture).** The
+  member is derived from the patch's ring **corner cell** (not its full base
+  net), and a multi-corner match is admitted by `pair_common` only when it is
+  the member's own collapsed end row (`{0,1}` or `{2,3}` at one end) — two
+  distinct shared corners, cross-column apexes and facing collapsed rows still
+  refuse by name. `Tests/cube_corner_model.py` +
+  `Tests/test_cube_corner_3valent.py` carry the contract (36 poles, 1+ face,
+  idempotent, reversed ring identical) and the raw instrument readings: the
+  non-reversed seam `k_gap` 6.132e-03 sampled / 6.888e-15 exact; the two seams
+  that terminate in the collapsed row read a **degenerate-boundary normal**
+  (g1 90° at their apex-side stations — the same reading the demo's hard-corner
+  members give, `Tests/g2_edge_blend_probe.py`), and a normal-field fold remains
+  in the tight apex band (16 of 1521 exact-net samples flip; no
+  self-intersections). 4-valent reference on the same code: g1 ≤ 2.0e-4°,
+  `k_gap` ≤ 1.0e-2 /mm.
 - Fourth wizard step and fourth toolbar command (`Silk_CreateCornerBlend`);
   the toolbar path opens its own transaction.
 - Weights are carried — rational weights are possible.
