@@ -57,6 +57,66 @@ CORNER_TOL = 1e-6
 # there is exactly ONE definition of "what corner does this strip set
 # make". No document, no object, no console here.
 
+def _corner_cell_net(p, cell):
+    """Patch p's ring-corner subgrid cell as (flat poles, flat weights) in
+    the row-major 4x4 order `control_grid64_3_1` reads, or (None, None).
+
+    `cell` is the patch's entry from `corner_inputs`' `corner_cells`
+    (`(pth, iu_c, iv_c, nu, nv)`). The cell is extracted through the
+    patch's own `getSubgrid`, so the RATIONAL weights of the segmented
+    cell come with the poles -- the same net the patch's `_subgrids`
+    holds, plus its weights. This is the ring's corner cell: the region
+    the band setbacks leave for the corner fill, whose outer corner is
+    the point the ring's boundary loop passes through.
+    """
+    if cell is None:
+        return None, None
+    pth, iu_c, iv_c, _nu, nv = cell
+    if pth is not p:
+        return None, None
+    us = build_intervals(*split_pair(p, "U"))
+    vs = build_intervals(*split_pair(p, "V"))
+    if not (0 <= iu_c < len(us) and 0 <= iv_c < len(vs)):
+        return None, None
+    getter = getattr(getattr(p, "Proxy", None), "getSubgrid", None)
+    if getter is None:
+        return None, None
+    u0, u1 = us[iu_c]
+    v0, v1 = vs[iv_c]
+    poles2d, weights2d = getter(u0, u1, v0, v1)
+    if not poles2d or not weights2d:
+        return None, None
+    try:
+        poles = [poles2d[r][c] for r in range(4) for c in range(4)]
+        weights = [float(weights2d[r][c]) for r in range(4)
+                   for c in range(4)]
+    except (IndexError, TypeError):
+        return None, None
+    if len(poles) != 16 or len(weights) != 16:
+        return None, None
+    return poles, weights
+
+
+def _member_ring(base_grids, ordered, patch, member):
+    """The 4-grid ring with `member` at `patch`'s corner.
+
+    The triangular 4th member stands in for the blend the missing fourth
+    surface would have contributed, so it sits between the TWO ring
+    strips that meet at `patch` -- not blindly appended, because
+    `corner_ring_3`'s direction follows document order and a ring built
+    the other way round needs the member at the mirrored position. The
+    ring's first grid (and so the canonical start both `corner_grid` and
+    the object's own derivation use) is preserved."""
+    touching = [i for i, s in enumerate(ordered)
+                if getattr(s, "PatchA", None) is patch
+                or getattr(s, "PatchB", None) is patch]
+    for i in touching:
+        j = (i + 1) % len(ordered)
+        if j != i and j in touching:
+            return base_grids[:i + 1] + [member] + base_grids[i + 1:]
+    return base_grids + [member]
+
+
 def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
     """The four strips' 24-pole grids in ring order, each with its
     junction-end row at V = 3, plus the corner cell of each patch.
@@ -123,32 +183,39 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
                 if pth is not None and pth not in patches:
                     patches.append(pth)
         member = None
+        ring = None
         for pth in patches:
-            poles_p = list(getattr(pth, "Poles", None) or [])
-            weights_p = list(getattr(pth, "Weights", None) or [])
-            if len(poles_p) != 16:
+            # the member is the missing fourth band at THIS patch's
+            # corner: fed the patch's ring corner CELL (the region the
+            # band setbacks leave), never the full 4x4 base net -- the
+            # base net's corners are the patch vertices, which is why
+            # the old input could never land the member on the ring's
+            # shared corner.
+            poles_c, weights_c = _corner_cell_net(
+                pth, corner_cells.get(pth.Name))
+            if poles_c is None:
                 continue
-            if len(weights_p) != 16:
-                weights_p = [1.0] * 16
             for corner in range(4):
                 for rev in (False, True):
-                    mp, mw = control_grid64_3_1(poles_p, weights_p, corner)
+                    mp, mw = control_grid64_3_1(poles_c, weights_c, corner)
                     if mp is None:
                         continue
                     if rev:
                         mp, mw = reverse_grid_rows(mp, mw)
-                    cand = base_grids + [(list(mp), list(mw))]
+                    member = (list(mp), list(mw))
+                    cand = _member_ring(base_grids, ordered, pth, member)
                     p36, _w, _why = corner_grid(cand, CORNER_TOL)
                     if p36 is not None:
-                        member = (list(mp), list(mw))
+                        ring = cand
                         break
-                if member is not None:
+                    member = None
+                if ring is not None:
                     break
-            if member is not None:
+            if ring is not None:
                 break
-        if member is None:
+        if ring is None:
             return None, None, "could not build triangular 4th member"
-        grids = base_grids + [member]
+        grids = ring
     return grids, corner_cells, None
 
 

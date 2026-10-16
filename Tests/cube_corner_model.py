@@ -28,12 +28,19 @@ the Blend defaults (0.1 at each seam's own end) — no width is overridden.
 build_cube_corner_model(doc) creates 18 node sketches + 9 edges + 3 patches
 + 3 strips in `doc` via SilkWorkflowOps only, and returns the object map.
 
-MEASURED STATE (2eda11a): the fixture is oracle-green and the three strips
-resolve as the 3-cycle ring, but the corner build on it is refused by name
-("could not build triangular 4th member") — the triangular-member search
-feeds each patch's full 4x4 base grid, whose corners are the patch
-vertices, never the ring's shared corner. See
-Tests/test_cube_corner_3valent.py for the executed record.
+MEASURED STATE (ticket-3valent-fix): the fixture is oracle-green (3 patches
+pass `check_patch` on their own stored `Edges`, 3 strips pass `check_blend`),
+the three strips resolve as the 3-cycle ring, and the corner now BUILDS on
+it: `SilkCorner.corner_inputs` no longer feeds the member the patch's
+full 4x4 base net -- it extracts the patch's ring CORNER CELL (the subgrid
+cell at the junction, with its weights) and searches corner index +
+reversal for the member whose collapsed row lands on the ring's shared
+corner; `SilkMachinery.pair_common` then admits that row's two coincident
+corner slots by the degeneracy rule (one collapsed end row against one
+neighbour corner). The built CornerBlend has 36 poles, one face, a
+non-empty Shape and an idempotent second ask. See
+Tests/test_cube_corner_3valent.py for the executed record and the raw seam
+measurement.
 """
 
 import FreeCAD

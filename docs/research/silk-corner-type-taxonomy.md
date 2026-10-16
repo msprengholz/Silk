@@ -66,9 +66,9 @@ So a junction type decides the construction, not the user's tool preference.
 | Upstream corner | Role | Employed by us? |
 |---|---|---|
 | `ControlGrid44_4` (4×4 base grid) | base patch | equivalent rôle via `SilkPatch`'s own 16-pole grid |
-| `ControlGrid44_2EdgeSegments` (2-curve corner cell) | ring-member input | **build path, pending** — fed to the triangular member inside `SilkCorner.corner_inputs`; the current input selection (patch base net, not the ring's corner cell) is one of the two diagnosed refusal causes |
+| `ControlGrid44_2EdgeSegments` (2-curve corner cell) | ring-member input | **employed** — the patch's ring corner cell (extracted with its weights via `Patch.getSubgrid`) feeds the triangular member inside `SilkCorner.corner_inputs`; the old base-net input was one of the two diagnosed refusal causes, now fixed |
 | `ControlGrid64_2Grid44` (6×4 2-patch blend) | ring member | equivalent via `SilkBlend` (`blend_poly_2x4_1x6` → `CubicSurface_64`) |
-| `ControlGrid64_3_1Grid44` (the triangular 4th member) | ring member @ 3-valent | **employed as machinery** (`SilkMachinery.control_grid64_3_1`, hidden inside `CornerBlend`); positive 3-valent build still refused — see "current 3-valent state" |
+| `ControlGrid64_3_1Grid44` (the triangular 4th member) | ring member @ 3-valent | **employed** (`SilkMachinery.control_grid64_3_1`, hidden inside `CornerBlend`); the positive 3-valent build now succeeds — see "3-valent state" |
 | `SubGrid33_2Grid64` | 4-members → 4-sub corner | employed (`SilkMachinery`) |
 | `ControlGrid66_4Sub` / `CubicSurface_66` | 4-patch fill | employed |
 | `ControlGrid3Star66_3Sub` / `ControlGridNStar66_NSub` | soft N-valent star cup | parked for later (D02/D03 deferral) |
@@ -77,7 +77,7 @@ So a junction type decides the construction, not the user's tool preference.
 Decision recorded:
 - Corner stage scoped to **Demo 01** (four 3-valent hard corners). The triangular 4th member is
   built into the corner stage invisibly (per the earlier decision), faithful to upstream; the
-  machinery is in and unit-tested, but the positive 3-valent build still refuses — see below.
+  positive 3-valent build now succeeds on the cube-corner fixture — see below.
 - The **star family is deferred** to a later subproject with Demos 02/03 (which also carries the
   missing-class finding from the census: Demo 02's stored `ArachNURBS.ControlGrid3Star66_3Sub`
   does not exist in today's `ArachNURBS.py`).
@@ -86,22 +86,41 @@ Decision recorded:
   can fill.
 - Register + drift-guard added so every ArachNURBS corner type is classified before the suite goes green.
 
-## Current 3-valent state (measured on the cube-corner fixture)
+## 3-valent state (built on the cube-corner fixture)
 
 `Tests/cube_corner_model.py` builds three planar patches meeting like a cube corner (oracle-green,
-strips resolve as the 3-cycle ring). `create_corner_blend` still refuses:
+strips resolve as the 3-cycle ring) and `create_corner_blend` now BUILDS on it. Both diagnosed
+causes were fixed in the member stage, not the fixture:
 
-> `Silk: cannot create a corner blend from these 3 blends -- could not build triangular 4th member. Nothing was created.`
+1. **Member input**: the search now extracts each patch's ring **corner cell** (the subgrid cell at
+   the junction, through `Patch.getSubgrid` so the rational weights come with it) and searches
+   corner index + reversal for the member whose collapsed row lands on the ring's shared corner.
+   The old input — each patch's full 4x4 base net — has its corners on the patch vertices and can
+   never land on the ring; the member is also inserted between the two ring strips that meet at the
+   chosen patch, so a ring built the other way round normalizes through `corner_grid`'s mirrored
+   path.
+2. **Degenerate-corner matching**: the member's collapsed end row puts TWO of its corner slots on
+   the neighbour's shared corner. `pair_common` now admits exactly that case — all matches on one
+   point, exactly one grid presenting the duplicated slots, and those slots forming one collapsed
+   end row — and returns the pairing the subgrid reader consumes ((3,2), or its mirror (2,3) for a
+   ring traversed the other way). Two distinct shared corners, duplicates across a column, or two
+   facing collapsed rows still refuse.
 
-Two diagnosed causes (both in the member stage, not the fixture):
+Measured (`Tests/test_cube_corner_3valent.py::test_3valent_cube_corner_seam_measurement`, n=21,
+sampled + exact instruments, floor from `Tests/continuity_calibration.py`):
 
-1. **Member input**: the search feeds each patch's full 4x4 base net to `control_grid64_3_1`, so the
-   degenerate row lands on a patch vertex — never the ring's corner-cell outer corner (0.1 off the
-   junction on both seams).
-2. **Degenerate-corner matching**: with the actual corner cell, the collapsed row holds the apex in
-   two corner slots, and the strict `pair_common` refuses ("share more than one corner") where
-   upstream `SubGrid33_2Grid64.execute` warned and kept the last match.
+- Build: 36 poles, 1 face, non-empty Shape, idempotent second ask; `c0_controlnet` 0 on all three
+  strip seams (exact c0 ≤ 4.2e-17 mm).
+- The corner's fourth side is the member's collapsed row. The two seams terminating there read a
+  degenerate-boundary normal at their apex-side stations (g1 = 90 deg there, exactly as
+  `Tests/g2_edge_blend_probe.py` records for the demo's hard-corner members) and their `k_gap`
+  peaks in the tight apex band (up to 8.1e+2 /mm exact). The seam opposite the member (corner `v0`
+  / strip `B_BC`) is smooth: exact `k_gap` 6.9e-15 /mm, sampled 6.1e-3 /mm (finite-difference bias
+  above the calibrated floor). `twist_gap` is reported but the B_AB seam is a reversed
+  correspondence (#101), so it is not evidence there.
+- A normal-field fold remains in the tight apex band (16 of 1521 sampled cells flip): the member
+  construction's documented folding trade-off ("causes folding"; the tiny-spacing strategy "will
+  break G1 slightly"). No continuity label is asserted anywhere.
 
-`Tests/test_cube_corner_3valent.py` records exactly this; its docstring pre-writes the positive
-contract (36 poles, 1+ faces, non-empty shape, idempotent) and the test must be rewritten (it will
-fail) when the fixes land. No k_gap is measurable until then (no corner surface exists).
+For comparison, the 4-valent corner measured with the same seam-matching code: g1 ≤ 2.0e-4 deg,
+k_gap ≤ 1.0e-2 /mm (the strong-link reference of #97/#100).

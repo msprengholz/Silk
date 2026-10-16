@@ -761,25 +761,74 @@ def orient_junction_row(poles, weights, junction_row):
     return reverse_grid_rows(poles, weights)
 
 
+def _collapsed_end_row(slots):
+    """True when `slots` is exactly the two corner slots of ONE end row of
+    a 24-pole grid: {0, 1} (V0 row) or {2, 3} (V3 row) of CORNER_IDX.
+
+    A degenerate member whose whole junction row collapses onto one point
+    presents those two slots at the same place -- that is the only
+    duplication the ring chain can read, and telling it apart from two
+    genuinely distinct shared corners is what `pair_common` needs."""
+    return sorted(slots) in ([0, 1], [2, 3])
+
+
 def pair_common(grid_0, grid_1, tol):
     """(i, j): the corner of grid_0 that coincides with the corner of
     grid_1, as corner INDICES into CORNER_IDX, at `tol`.
 
-    Returns ((i, j), None) or (None, reason). Upstream reports rather than
-    refuses a multiple match, then trips over an unbound local later; here
-    it is a named refusal."""
+    Returns ((i, j), None) or (None, reason). A single geometric match is
+    the ordinary case. The triangular 4th member of a 3-valent corner is
+    DEGENERATE at its junction end: its whole end row collapses onto one
+    point, so BOTH corner slots of that row sit on the neighbour's shared
+    corner and the scan finds two matches. That case is admitted by the
+    degeneracy rule below; upstream merely printed a warning and kept the
+    last match (then tripped over an unbound local), and a strict refusal
+    of it is what kept the 3-valent build red.
+
+    DEGENERACY RULE -- multiple matches are admissible only when
+
+      * every match resolves to ONE and the same point (a genuinely
+        ambiguous pair of DISTINCT shared corners still refuses), and
+      * exactly one grid presents the duplicated slots, and those slots
+        are the two corners of one end ROW (a collapsed end row, the
+        member's junction row) -- two grids each holding duplicate slots
+        (both collapsed, or an apex repeated across a COLUMN) still
+        refuse, and
+      * the returned pairing is one the subgrid reader consumes: the
+        ring-canonical `CORNER_COMMON` = (3, 2), or its mirror (2, 3) for
+        a ring traversed the other way. Anything else is ambiguous and
+        refuses.
+
+    The caller (`corner_grid`) decides which ring direction is canonical:
+    it tries the (3, 2) reading first and the all-mirrored (2, 3) reading
+    second, so a degenerate member works in a ring built either way
+    round."""
     c0, c1 = _corner_pts(grid_0), _corner_pts(grid_1)
-    found = None
-    for i in range(4):
-        for j in range(4):
-            if (c0[i] - c1[j]).Length <= tol:
-                if found is not None:
-                    return None, ("the two grids share more than one corner "
-                                  "at tolerance %g" % tol)
-                found = (i, j)
-    if found is None:
+    matches = [(i, j) for i in range(4) for j in range(4)
+               if (c0[i] - c1[j]).Length <= tol]
+    if not matches:
         return None, ("the two grids share no corner at tolerance %g" % tol)
-    return found, None
+    if len(matches) == 1:
+        return matches[0], None
+
+    ambiguous = ("the two grids share more than one corner at tolerance "
+                 "%g" % tol)
+    i_slots = sorted({i for i, _ in matches})
+    j_slots = sorted({j for _, j in matches})
+    point_0, point_1 = c0[matches[0][0]], c1[matches[0][1]]
+    for i, j in matches:
+        if (c0[i] - point_0).Length > tol or (c1[j] - point_1).Length > tol:
+            return None, ambiguous          # two DISTINCT shared corners
+    grid_0_degenerate = len(j_slots) == 1 and _collapsed_end_row(i_slots)
+    grid_1_degenerate = len(i_slots) == 1 and _collapsed_end_row(j_slots)
+    if grid_0_degenerate == grid_1_degenerate:
+        # neither is a collapsed end row, or both are: nothing here picks
+        # a pairing, so the overlap is genuine ambiguity.
+        return None, ambiguous
+    for candidate in (CORNER_COMMON, (CORNER_COMMON[1], CORNER_COMMON[0])):
+        if candidate in matches:
+            return candidate, None
+    return None, ambiguous
 
 
 def subgrid33_2grid64(poles_0, weights_0, poles_1, weights_1, tol=1e-6):
