@@ -25,10 +25,10 @@
 #        each of our own actions, and nothing else in the workbench is
 #        subscribed.
 #
-#    Three collect-then-confirm stages (Edge / Patch / Blend) in a
-#    header/content stack (SectionStack, NOT a QToolBox since #71), one
-#    open at a time. The panel takes NoFocus, so it never steals focus
-#    from the 3D view -- which is why
+#    Four collect-then-confirm stages (Edge / Patch / Blend / Corner
+#    Blend) in a header/content stack (SectionStack, NOT a QToolBox since
+#    #71), one open at a time. The panel takes NoFocus, so it never steals
+#    focus from the 3D view -- which is why
 #    `keyPressEvent` never fires and confirm is a QShortcut with
 #    Qt.ApplicationShortcut registered for BOTH Qt.Key_Return and
 #    Qt.Key_Enter (the keypad Enter does not fire otherwise).
@@ -96,7 +96,9 @@ except ImportError:  # pragma: no cover - console-only FreeCAD
 
 from SilkGuide import compute_guide_state
 from SilkEdge import classify_sketches
-from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge
+from SilkBlend import BLEND_TYPES
+from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge, \
+    create_corner_blend
 from SilkMachinery import patch_side, side_of_edge, build_intervals, \
     corner_cells, split_pair, axis_splits, band_at_end, loop_order
 
@@ -108,8 +110,8 @@ iconPath = path_Silk_icons + "/Silk.svg"
 
 # ---- section indices (the QToolBox pages, in order) -----------------------
 
-SECTION_EDGE, SECTION_PATCH, SECTION_BLEND = 0, 1, 2
-SECTION_TITLES = ("Edge", "Patch", "Blend")
+SECTION_EDGE, SECTION_PATCH, SECTION_BLEND, SECTION_CORNER = 0, 1, 2, 3
+SECTION_TITLES = ("Edge", "Patch", "Blend", "Corner Blend")
 # #71: every section folded. A QToolBox cannot express this -- it refuses
 # setCurrentIndex(-1) and snaps back to the last valid index -- so folding
 # the open section left it in a state the panel could not describe. The
@@ -120,9 +122,11 @@ SECTION_NONE = -1
 
 # Per-stage collection bounds. Edge: 1 or 2 sketches (1 -> 3L, 2 -> 2N).
 # Patch: 3 or 4 edges (3 -> pointed, 4 -> quad). Blend: 1..N seams.
+# Corner Blend: exactly 4 blend strips, the ring around one junction.
 EDGE_MIN, EDGE_MAX = 1, 2
 PATCH_MIN, PATCH_MAX = 3, 4
 BLEND_MIN = 1
+CORNER_MIN = CORNER_MAX = 4
 
 # The default band width SilkBlend.ensure_band_split writes when the
 # patch's end of that axis carries no band edge at all (ss 0 -> 0.1,
@@ -204,6 +208,7 @@ BAND_A, BAND_B = "A", "B"
 PLACEHOLDERS = {
     SECTION_EDGE: "nothing collected -- click a sketch in the 3D view",
     SECTION_PATCH: "nothing collected -- click edges in the 3D view",
+    SECTION_CORNER: "nothing collected -- click 4 blend strips in the 3D view",
 }
 
 # The static guidance, kept as the panel's / sections' tooltip and in the
@@ -216,7 +221,9 @@ HINT_TOOLTIP = (
     "OK blends every collected seam in one undo step. A seam is bounded by "
     "one band edge on EACH of its two patches, so a blended row has an "
     "editor per patch (Band A / Band B) -- they start equal, and setting "
-    "them apart is deliberate.")
+    "them apart is deliberate.\n"
+    "Corner Blend: click the 4 blends that ring one shared junction; Enter "
+    "or OK fills the corner where they meet.")
 
 
 # ---- the section container (header / content pairs, #71) ------------------
@@ -481,7 +488,7 @@ class SilkTaskDialog:
         # or table from stretching to fill (which is what made #62's panel
         # read as empty). The guidance that used to sit in a group box
         # above the accordion lives here and on the panel's / sections'
-        # tooltips -- the primary space belongs to the three sections.
+        # tooltips -- the primary space belongs to the sections.
         return True
 
     def isAllowedAlterDocument(self):
@@ -680,7 +687,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self._shortcuts = []
         # one list of collected objects per section
         self._collected = {SECTION_EDGE: [], SECTION_PATCH: [],
-                           SECTION_BLEND: []}
+                           SECTION_BLEND: [], SECTION_CORNER: []}
         # seam edge Name -> {BAND_A: QDoubleSpinBox, BAND_B: ...} for the
         # band-split editors currently mounted in the table. Two per row
         # since #69: one per patch, each writing only its own.
@@ -724,6 +731,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self._build_edge_page()
         self._build_patch_page()
         self._build_blend_page()
+        self._build_corner_page()
 
         # --- the footer: guidance OUT of the prime top-of-panel space --
         # #62 put the next-step hint in a QGroupBox above the accordion,
@@ -919,6 +927,30 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         # #65, so the default is unchanged on purpose.
         self.sections.open(SECTION_EDGE)
 
+    def _build_corner_page(self):
+        page = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(page)
+        lay.addWidget(self._instruction(
+            "Click the 4 blends that ring one shared junction. Enter or OK "
+            "fills the corner where they meet."))
+        self.corner_list = self._collection_list(page)
+        self.corner_list.itemSelectionChanged.connect(
+            self._on_collected_changed)
+        lay.addWidget(self.corner_list)
+        row = QtWidgets.QHBoxLayout()
+        self.corner_count_lbl = QtWidgets.QLabel("0/4")
+        row.addWidget(self.corner_count_lbl)
+        row.addStretch(1)
+        self.corner_remove_btn = QtWidgets.QPushButton("Remove")
+        self.corner_remove_btn.setToolTip(
+            "Remove the selected blend from this collection")
+        self.corner_remove_btn.clicked.connect(self._remove_selected)
+        row.addWidget(self.corner_remove_btn)
+        lay.addLayout(row)
+        # The slack belongs to the PAGE, not to an empty list box.
+        lay.addStretch(1)
+        self.sections.add_section(SECTION_TITLES[SECTION_CORNER], page)
+
     def _install_shortcuts(self):
         """Confirm via Enter, as a QShortcut with Qt.ApplicationShortcut.
 
@@ -1009,7 +1041,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         Called from close_panel, so it covers every exit: manual close,
         the document-switch hook, and the caller-closed path."""
         self._collected = {SECTION_EDGE: [], SECTION_PATCH: [],
-                           SECTION_BLEND: []}
+                           SECTION_BLEND: [], SECTION_CORNER: []}
         self._split_widgets = {}
         self._split_meta = {}
         self._split_filters = []
@@ -1071,7 +1103,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
 
     def section_limit(self, section):
         return {SECTION_EDGE: EDGE_MAX, SECTION_PATCH: PATCH_MAX,
-                SECTION_BLEND: len(self.seam_inventory())}[section]
+                SECTION_BLEND: len(self.seam_inventory()),
+                SECTION_CORNER: CORNER_MAX}[section]
 
     def accepts(self, section, obj):
         """What the open section collects. A wrong type is IGNORED, never
@@ -1090,6 +1123,10 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             return self.is_sketch(obj)
         if section == SECTION_PATCH:
             return self.object_type(obj) == "Edge"
+        if section == SECTION_CORNER:
+            # Corner Blend collects the 4 ring blends themselves (identity,
+            # not geometry): a Blend strip object. A wrong type is ignored.
+            return self.object_type(obj) in BLEND_TYPES
         # Blend: an Edge object that is a seam right now. An edge with
         # fewer than two patches is not a seam, and a non-manifold one is
         # not blendable -- both are silently ignored here; the table still
@@ -1138,8 +1175,9 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         section = self.open_section()
         if section == SECTION_NONE:
             return
-        widget = (self.edge_list if section == SECTION_EDGE
-                  else self.patch_list)
+        widget = {SECTION_EDGE: self.edge_list,
+                  SECTION_PATCH: self.patch_list,
+                  SECTION_CORNER: self.corner_list}[section]
         row = widget.currentRow()
         if row < 0 or row >= len(self._collected[section]):
             return
@@ -1209,7 +1247,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
 
     def _render_lists(self):
         for section, widget in ((SECTION_EDGE, self.edge_list),
-                                (SECTION_PATCH, self.patch_list)):
+                                (SECTION_PATCH, self.patch_list),
+                                (SECTION_CORNER, self.corner_list)):
             items = self._collected[section]
             widget.clear()
             if items:
@@ -1242,6 +1281,9 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             self.patch_fill_lbl.setText("pointed fill")
         else:
             self.patch_fill_lbl.setText("")
+
+        cbs = self._collected[SECTION_CORNER]
+        self.corner_count_lbl.setText("%d/%d" % (len(cbs), CORNER_MAX))
 
     @staticmethod
     def _item_text(item):
@@ -1701,6 +1743,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             return EDGE_MIN <= n <= EDGE_MAX
         if section == SECTION_PATCH:
             return PATCH_MIN <= n <= PATCH_MAX
+        if section == SECTION_CORNER:
+            return n == CORNER_MAX
         return n >= BLEND_MIN
 
     def ok_enabled(self):
@@ -1738,6 +1782,9 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                 bad.append((item, "it is no longer a sketch"))
             elif section == SECTION_PATCH and self.object_type(obj) != "Edge":
                 bad.append((item, "it is no longer an Edge"))
+            elif section == SECTION_CORNER:
+                if self.object_type(obj) not in BLEND_TYPES:
+                    bad.append((item, "it is no longer a blend"))
             elif section == SECTION_BLEND:
                 why = self._seam_stale(obj)
                 if why:
@@ -1802,6 +1849,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             return self.confirm_edge()
         if section == SECTION_PATCH:
             return self.confirm_patch()
+        if section == SECTION_CORNER:
+            return self.confirm_corner()
         return self.confirm_blend()
 
     def confirm_edge(self):
@@ -1942,6 +1991,49 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             lines.insert(0, "%d blends created in one step" % len(made))
         self.status_lbl.setText("; ".join(lines))
         return bool(made)
+
+    def confirm_corner(self):
+        """The 4 collected blends in ONE transaction -> one CornerBlend
+        (#91), so one Enter is one undo step.
+
+        A selection that is not the ring of 4 blends around one shared
+        junction is refused LOUDLY by name (SilkWorkflowOps), with the
+        collection left intact and nothing created. A junction that
+        already has a corner is an idempotent no-op that names the
+        existing object.
+        """
+        strips = self.collected(SECTION_CORNER)
+        stale = self.stale_items()
+        if stale:
+            return self._refuse_stale(stale)
+        doc = self.doc
+        before = {o.Name for o in doc.Objects}
+        doc.openTransaction("Silk corner blend")
+        try:
+            with _ConsoleTap() as tap:
+                corner = create_corner_blend(*strips)
+        finally:
+            doc.commitTransaction()
+
+        if corner is None:
+            self.status_lbl.setText(tap.errors[-1].strip() if tap.errors
+                                    else "no corner blend created")
+            return False
+
+        self._collected[SECTION_CORNER] = []
+        self.refresh()
+        if corner.Name in before:
+            # Idempotent no-op: the resolver returned the EXISTING corner
+            # and already said so, in its own words.
+            self.status_lbl.setText(tap.messages[-1].strip() if tap.messages
+                                    else "this junction already has a corner "
+                                         "blend (%s)" % corner.Name)
+            return False
+        self.status_lbl.setText("%s created from %d blends"
+                                % (corner.Name, len(strips)))
+        FreeCAD.Console.PrintMessage("Corner blend created: %s\n"
+                                     % corner.Name)
+        return True
 
     def _refuse_stale(self, stale):
         item, why = stale[0]

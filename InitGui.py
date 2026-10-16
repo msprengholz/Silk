@@ -59,8 +59,9 @@ class Silk (Workbench):
 	separate track.
 	"""
 
-	# The workflow triad -- one command per process step: Edge -> Patch -> Blend
-	WORKFLOW_COMMANDS = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend"]
+	# The workflow commands -- one per process step: Edge -> Patch -> Blend -> Corner Blend
+	WORKFLOW_COMMANDS = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend",
+	                     "Silk_CreateCornerBlend"]
 
 	# The task panel
 	GUIDE_COMMANDS = ["Silk_Guide"]
@@ -127,11 +128,12 @@ class Silk (Workbench):
 		import SilkPatch
 		import SilkPatch44
 		import SilkBlend
+		import SilkCorner
 		import SilkWorkflow
 		import Reload_Silk
 		import SilkTaskPanel
 
-		# Only the five visible commands, in their three groups. All of
+		# Only the visible commands, in their three groups. All of
 		# them are registered by the imports above. Referenced through
 		# `self` (class attributes) -- never as module-level globals:
 		# see the class docstring for why.
