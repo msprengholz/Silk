@@ -1170,19 +1170,26 @@ def control_grid64_3_1(grid_poles, grid_weights, corner=0):
     p = [V(x) for x in set_poles]
     w = [float(x) for x in set_weights]
 
-    # third strategy mapping (upstream)
+    # third strategy mapping, term for term upstream (ticket-foldfix).
+    # p12 halves set_poles[5] with p11 = set_poles[9]; p24 starts from
+    # p25 = set_poles[11], NOT from set_poles[15] -- the two source-pole
+    # slips the member calibration measured. The weight channel below is
+    # upstream's LITERAL lines (w12 from input weights 4/10, w13 from
+    # 1/10, both averaged with w[10]) even though they read like a
+    # copy-paste from a different index map; parity with the stored demo
+    # members wins by product decision.
     p00 = p[12]; p01 = p[8]; p02 = p[4]; p03 = p[1]; p04 = p[2]; p05 = p[3]
     p10 = p[13]; p11 = p[9]
     p14 = p[6]; p15 = p[7]
     p20 = p[14]
     p21 = p[14] + (p[10] - p[14]) * 0.5
     p22 = p21 + (p[10] - p21) * 0.5
-    p24 = p[15] + (p[10] - p[15]) * 0.5
-    p23 = p24 + (p[10] - p24) * 0.5
     p25 = p[11]
+    p24 = p25 + (p[10] - p25) * 0.5
+    p23 = p24 + (p[10] - p24) * 0.5
     p30 = p[15]; p31 = p[15]; p32 = p[15]; p33 = p[15]; p34 = p[15]; p35 = p[15]
-    p12 = (p[5] + p[11]) * 0.5 if hasattr(p[5]+p[11], "multiply") else (p[5] + p[11]) * 0.5
-    p13 = (p[5] + p[6]) * 0.5
+    p12 = (p[5] + p11) * 0.5
+    p13 = (p[5] + p14) * 0.5
 
     out_poles = [p00, p01, p02, p03, p04, p05,
                  p10, p11, p12, p13, p14, p15,
@@ -1196,8 +1203,8 @@ def control_grid64_3_1(grid_poles, grid_weights, corner=0):
     w21 = w[10]; w22 = w[10]; w23 = w[10]; w24 = w[10]
     w25 = w[11]
     w30 = w[15]; w31 = w[15]; w32 = w[15]; w33 = w[15]; w34 = w[15]; w35 = w[15]
-    w12 = (w[5] + w[11]) * 0.5
-    w13 = (w[5] + w[6]) * 0.5
+    w12 = (w02 + w21) * 0.5   # upstream: (set_weights[4] + w[10])/2
+    w13 = (w03 + w24) * 0.5   # upstream: (set_weights[1] + w[10])/2
 
     out_weights = [w00, w01, w02, w03, w04, w05,
                    w10, w11, w12, w13, w14, w15,
