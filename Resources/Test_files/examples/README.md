@@ -89,6 +89,17 @@ a simple closed quad → a two-patch chain with a blendable seam → a four
   point), for later rounds. This one is **optional** / advanced; do not
   use it for the first wizard-fit judgement.
 
+
+## SketchOnly_Demo01Subset.FCStd — Demo 01 sketch-only subset
+
+- **91 sketches** (`Sketch014`..`Sketch104`) — the inputs carried over
+  from `Resources/Demo_files/Silk_Demo_01.FCStd`. **Zero** Edge / Patch /
+  Blend objects. A human (or agent) clicks **Edge -> Patch -> Blend**
+  for as far as the *linear* workflow reaches (7 Edges -> 2 Patches -> 1
+  Blend); the 4 junction rings themselves require the triangular 4th
+  member that is tracked separately (#98) and are *not* buildable yet.
+
+
 ---
 
 ## How these fixtures are used

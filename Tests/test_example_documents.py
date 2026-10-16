@@ -57,8 +57,12 @@ EXPECTED = {
         "target": "9 sketches -> 9 Edges -> 3 corner Patches, "
                   "3 blendable seams (X/Y/Z)",
     },
-}
+    "SketchOnly_Demo01Subset.FCStd": {
+        "sketches": ['Sketch014', 'Sketch015', 'Sketch016', 'Sketch017', 'Sketch018', 'Sketch019', 'Sketch020', 'Sketch021', 'Sketch022', 'Sketch023', 'Sketch024', 'Sketch025', 'Sketch026', 'Sketch027', 'Sketch028', 'Sketch029', 'Sketch030', 'Sketch031', 'Sketch032', 'Sketch033', 'Sketch034', 'Sketch035', 'Sketch036', 'Sketch037', 'Sketch038', 'Sketch039', 'Sketch040', 'Sketch041', 'Sketch042', 'Sketch043', 'Sketch044', 'Sketch045', 'Sketch046', 'Sketch047', 'Sketch048', 'Sketch049', 'Sketch050', 'Sketch051', 'Sketch052', 'Sketch053', 'Sketch054', 'Sketch055', 'Sketch056', 'Sketch057', 'Sketch058', 'Sketch059', 'Sketch060', 'Sketch061', 'Sketch062', 'Sketch063', 'Sketch064', 'Sketch065', 'Sketch066', 'Sketch067', 'Sketch068', 'Sketch069', 'Sketch070', 'Sketch071', 'Sketch072', 'Sketch073', 'Sketch074', 'Sketch075', 'Sketch076', 'Sketch077', 'Sketch078', 'Sketch079', 'Sketch080', 'Sketch081', 'Sketch082', 'Sketch083', 'Sketch084', 'Sketch085', 'Sketch086', 'Sketch087', 'Sketch088', 'Sketch089', 'Sketch090', 'Sketch091', 'Sketch092', 'Sketch093', 'Sketch094', 'Sketch095', 'Sketch096', 'Sketch097', 'Sketch098', 'Sketch099', 'Sketch100', 'Sketch101', 'Sketch102', 'Sketch103', 'Sketch104'],
+        "target": "Demo 01 sketch-only subset (91 sketches)",
+    },
 
+}
 
 def _inspect(fname):
     """Open an example and return (sketch_names, silk_object_names, others)
@@ -164,6 +168,14 @@ def test_example_cornercube(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+
+def test_example_demo01_subset(doc):
+    errors, checks = [], []
+    _assert_example_sketch_only(errors, checks, "SketchOnly_Demo01Subset.FCStd")
+    checks.append("target: "
+                  + EXPECTED["SketchOnly_Demo01Subset.FCStd"]["target"])
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
 ALL_TESTS = [
     test_examples_dir_has_readme_and_docs,
     test_every_example_is_sketch_only,
@@ -171,4 +183,5 @@ ALL_TESTS = [
     test_example_two_patches,
     test_example_corner4,
     test_example_cornercube,
+    test_example_demo01_subset,
 ]
