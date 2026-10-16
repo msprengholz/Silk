@@ -699,6 +699,321 @@ def band_diagnosis(p, ea, ss):
            _edges_str(p, along_letter), n_along, excluded, left, fix))
 
 
+# ---- the 4-strip corner ring and its subgrid chain (#91) ----------------
+#
+# Where four Patches meet at a shared junction, the four ring Blend strips
+# enclose the corner cell. Upstream Silk builds that corner from FOUR 3x3
+# subgrids -- `SubGrid33_2Grid64` over each consecutive strip pair, then
+# `ControlGrid66_4Sub` to assemble the 6x6 -- and the surface comes from
+# `CubicSurface_66`. That chain is a genuine C1-ish 4-sided blend, not the
+# boundary-only `ControlGrid66_4` fill #28 shipped.
+#
+# This is a newer, faithful PORT of the two upstream classes' execute()
+# bodies into Silk's own machinery. The legacy classes are restore shims
+# (#7) and are never called at runtime; they remain the oracle (a test
+# feeds both the same grids and requires pole parity).
+#
+# Grid convention (confirmed, not assumed): each strip stores its blend's
+# control net as 4 rows (V, along the seam) x 6 poles (U, across the
+# band), flat `V * 6 + U` -- exactly the 6-wide x 4-tall layout
+# `SubGrid33_2Grid64` reads, whose four corners are flat 0 / 5 / 18 / 23.
+#
+# Everything here is pure geometry: no document, no objects, no console.
+
+# The flat corner indices of a 24-pole 4x6 grid, in upstream's corner
+# order ([0, 5, 18, 23] = (V0U0, V0U5, V3U0, V3U5)).
+CORNER_IDX = (0, 5, 18, 23)
+
+# The parametric ends of the junction seam row after orientation: every
+# strip's junction-end row is placed at V = 3 (`_orient_junction_row`),
+# and upstream's `SubGrid33_2Grid64` only accepts the shared corner at
+# (V3, U5) on the first grid and (V3, U0) on the second. `3` is flat 23,
+# `2` is flat 18.
+CORNER_COMMON = (3, 2)
+
+
+def _corner_pts(grid):
+    return [grid[k] for k in CORNER_IDX]
+
+
+def reverse_grid_rows(poles, weights):
+    """A 24-pole 4x6 grid with its V (row) order reversed.
+
+    The same strip surface with v -> 1 - v: used to bring a strip's
+    junction-end row to V = 3 so the subgrid chain's fixed index
+    convention applies to every strip in the ring (#91)."""
+    p = [poles[(3 - v) * 6 + u] for v in range(4) for u in range(6)]
+    w = [weights[(3 - v) * 6 + u] for v in range(4) for u in range(6)]
+    return p, w
+
+
+def orient_junction_row(poles, weights, junction_row):
+    """The 24-pole grid with its junction-end row at V = 3.
+
+    `junction_row` (0 or 3) is the row the ring's corner cell sits
+    against, derived by the caller from the patches' band cells. A grid
+    already carrying it at row 3 is returned UNCHANGED (same objects), so
+    the canonical layout takes the byte-identical path."""
+    if junction_row == 3:
+        return list(poles), list(weights)
+    if junction_row != 0:
+        return None, None
+    return reverse_grid_rows(poles, weights)
+
+
+def pair_common(grid_0, grid_1, tol):
+    """(i, j): the corner of grid_0 that coincides with the corner of
+    grid_1, as corner INDICES into CORNER_IDX, at `tol`.
+
+    Returns ((i, j), None) or (None, reason). Upstream reports rather than
+    refuses a multiple match, then trips over an unbound local later; here
+    it is a named refusal."""
+    c0, c1 = _corner_pts(grid_0), _corner_pts(grid_1)
+    found = None
+    for i in range(4):
+        for j in range(4):
+            if (c0[i] - c1[j]).Length <= tol:
+                if found is not None:
+                    return None, ("the two grids share more than one corner "
+                                  "at tolerance %g" % tol)
+                found = (i, j)
+    if found is None:
+        return None, ("the two grids share no corner at tolerance %g" % tol)
+    return found, None
+
+
+def subgrid33_2grid64(poles_0, weights_0, poles_1, weights_1, tol=1e-6):
+    """One corner pair -> its 3x3 subgrid (#91).
+
+    Faithful port of `ArachNURBS.SubGrid33_2Grid64.execute` (adjust_0 /
+    adjust_1 = 0, reverse = False, which is every use in the corner
+    chain): find the shared corner, read the two seam rows that form the
+    V at it, extrapolate the two interior rows from tangent ratios and
+    average them, and cross-multiply the two boundary weights times the
+    shared corner weight.
+
+    Returns (poles9, weights9, None) or (None, None, reason)."""
+    g0 = list(poles_0)
+    g1 = list(poles_1)
+    w0 = list(weights_0)
+    w1 = list(weights_1)
+    if not (len(g0) == len(w0) == len(g1) == len(w1) == 24):
+        return None, None, ("a corner pair needs two 24-pole 4x6 grids "
+                            "(got %d/%d)" % (len(g0), len(g1)))
+
+    common, why = pair_common(g0, g1, tol)
+    if common is None:
+        return None, None, why
+    # upstream swaps the two grids when the shared corner sits on the
+    # "wrong" pair of corners, then re-finds it. Ported as a swap of the
+    # local grids, so no property is ever written.
+    if common[0] in (1, 2) and common[1] in (0, 3):
+        g0, g1 = g1, g0
+        w0, w1 = w1, w0
+        common, why = pair_common(g0, g1, tol)
+        if common is None:
+            return None, None, why
+
+    i, j = common
+    if i == 0:
+        v_col0 = [g0[0], g0[1], g0[2]]
+        v_col0_w = [w0[0], w0[1], w0[2]]
+        v_col1 = [g0[6], g0[7], g0[8]]
+    elif i == 3:
+        v_col0 = [g0[23], g0[22], g0[21]]
+        v_col0_w = [w0[23], w0[22], w0[21]]
+        v_col1 = [g0[17], g0[16], g0[15]]
+    else:
+        return None, None, ("a shared corner sits on a cross-seam side "
+                            "(corner %d on the first grid); the ring is not "
+                            "consistently oriented" % i)
+
+    if j == 1:
+        u_row0 = [g1[5], g1[4], g1[3]]
+        u_row0_w = [w1[5], w1[4], w1[3]]
+        u_row1 = [g1[11], g1[10], g1[9]]
+    elif j == 2:
+        u_row0 = [g1[18], g1[19], g1[20]]
+        u_row0_w = [w1[18], w1[19], w1[20]]
+        u_row1 = [g1[12], g1[13], g1[14]]
+    else:
+        return None, None, ("a shared corner sits on a cross-seam side "
+                            "(corner %d on the second grid); the ring is not "
+                            "consistently oriented" % j)
+
+    span_v = (v_col1[0] - v_col0[0]).Length
+    span_u = (u_row1[0] - u_row0[0]).Length
+    if span_v <= 0.0 or span_u <= 0.0:
+        return None, None, ("a degenerate seam row feeds this corner (two "
+                            "coincident poles)")
+    u_tan_ratio = (u_row0[1] - u_row0[0]).Length / span_v
+    v_tan_ratio = (v_col0[1] - v_col0[0]).Length / span_u
+
+    p00 = u_row0[0]
+    p01 = u_row0[1]
+    p02 = u_row0[2]
+    p10 = v_col0[1]
+    p20 = v_col0[2]
+    p11_u = p01 + (u_row0[1] - u_row1[1]) * v_tan_ratio
+    p12 = p02 + (u_row0[2] - u_row1[2]) * v_tan_ratio
+    p11_v = p10 + (v_col0[1] - v_col1[1]) * u_tan_ratio
+    p21 = p20 + (v_col0[2] - v_col1[2]) * u_tan_ratio
+    p11 = (p11_u + p11_v) * 0.5
+    p22 = ((p12 + (p21 - p11)) + (p21 + (p12 - p11))) * 0.5
+
+    w00 = u_row0_w[0]
+    w01 = u_row0_w[1]
+    w02 = u_row0_w[2]
+    w10 = v_col0_w[1]
+    w20 = v_col0_w[2]
+    w11 = w01 * w10
+    w12 = w02 * w10
+    w21 = w01 * w20
+    w22 = w02 * w20
+
+    return ([p00, p01, p02, p10, p11, p12, p20, p21, p22],
+            [w00, w01, w02, w10, w11, w12, w20, w21, w22], None)
+
+
+# The 6x6 assembly map of `ControlGrid66_4Sub.execute`: each 3x3 subgrid
+# owns one corner of the 6x6, and the two subgrids that share an edge
+# contribute half of it (one reads its own rows, the neighbour its
+# columns). Entry k is (subgrid index, pole index within that subgrid).
+_CG66_MAP = [
+    (0, 0), (0, 1), (0, 2), (1, 6), (1, 3), (1, 0),
+    (0, 3), (0, 4), (0, 5), (1, 7), (1, 4), (1, 1),
+    (0, 6), (0, 7), (0, 8), (1, 8), (1, 5), (1, 2),
+    (3, 2), (3, 5), (3, 8), (2, 8), (2, 7), (2, 6),
+    (3, 1), (3, 4), (3, 7), (2, 5), (2, 4), (2, 3),
+    (3, 0), (3, 3), (3, 6), (2, 2), (2, 1), (2, 0),
+]
+
+
+def control_grid66_4sub(subgrids):
+    """Four 3x3 subgrids -> the assembled 6x6 (poles36, weights36).
+
+    Port of `ArachNURBS.ControlGrid66_4Sub.execute`, verbatim index for
+    index (`_CG66_MAP` is its pole list read as (subgrid, pole) pairs)."""
+    poles, weights = [], []
+    for si, k in _CG66_MAP:
+        sub_p, sub_w = subgrids[si]
+        poles.append(sub_p[k])
+        weights.append(sub_w[k])
+    return poles, weights
+
+
+def corner_grid(grids, tol=1e-6):
+    """Four 24-pole grids (ring order) -> the corner's 6x6.
+
+    `grids` are the strips' control nets with each junction-end row at
+    V = 3, given in cyclic order. The ring's rotational direction matters:
+    upstream accepts only the shared corner at (V3, U5) on the first grid
+    and (V3, U0) on the second, and a ring handed over the other way
+    presents every pair MIRRORED -- which assembles into a grid whose
+    boundary does not match the ring's own. So a ring whose every pair is
+    mirrored is reversed (`grids[1:]` reversed, keeping the first pair's
+    orientation); a ring that is not consistently oriented either way is
+    refused by name.
+
+    Returns (poles36, weights36, None) or (None, None, reason)."""
+    pairs = []
+    mirrored = []
+    for i in range(4):
+        a, b = grids[i], grids[(i + 1) % 4]
+        common, why = pair_common(a[0], b[0], tol)
+        if common is None:
+            return None, None, ("strip %d and strip %d: %s" % (i, (i + 1) % 4,
+                                                                why))
+        pairs.append(common)
+        mirrored.append((common[1], common[0]))
+    if all(c == CORNER_COMMON for c in pairs):
+        pass
+    elif all(c == CORNER_COMMON for c in mirrored):
+        grids = [grids[0]] + list(reversed(grids[1:]))
+    else:
+        return None, None, ("the four strips are not a consistently oriented "
+                            "ring (shared corners %r)" % (pairs,))
+
+    subgrids = []
+    for i in range(4):
+        a, b = grids[i], grids[(i + 1) % 4]
+        p, w, why = subgrid33_2grid64(a[0], a[1], b[0], b[1], tol)
+        if p is None:
+            return None, None, ("strip %d and strip %d: %s"
+                                % (i, (i + 1) % 4, why))
+        subgrids.append((p, w))
+    p36, w36 = control_grid66_4sub(subgrids)
+    return p36, w36, None
+
+
+def _share_patch(a, b):
+    pa = [getattr(a, "PatchA", None), getattr(a, "PatchB", None)]
+    pb = [getattr(b, "PatchA", None), getattr(b, "PatchB", None)]
+    return any(x is not None and x is y for x in pa for y in pb)
+
+
+def _doc_index(obj):
+    doc = getattr(obj, "Document", None)
+    if doc is None:
+        return 0
+    for k, o in enumerate(doc.Objects):
+        if o is obj:
+            return k
+    return 0
+
+
+def corner_ring(strips):
+    """Order 4 Blend strips into their cyclic ring, deterministically.
+
+    Identity-only, like the seam resolver: two strips are adjacent iff
+    they share a PATCH object. The four must form one 4-cycle (each
+    adjacent to exactly two others) -- that is what "four strips ring one
+    junction" means, and it is what a non-corner selection fails.
+
+    The ring direction is fixed by `corner_grid`, so the only choice made
+    here is the START: the strip earliest in the document, and the
+    neighbour later in document order. That makes the result independent
+    of the click order the strips arrived in.
+
+    Returns (ordered, None) or (None, reason)."""
+    strips = list(strips)
+    if len(strips) != 4:
+        return None, ("a corner ring is exactly 4 blends (got %d)"
+                      % len(strips))
+    seen = {}
+    for i, s in enumerate(strips):
+        for j in range(i):
+            if strips[j] is s:
+                return None, ("%s is in the ring twice" % s.Name)
+        seen[i] = s
+    adj = {i: set() for i in range(4)}
+    for i in range(4):
+        for j in range(i + 1, 4):
+            if _share_patch(strips[i], strips[j]):
+                adj[i].add(j)
+                adj[j].add(i)
+    for i in range(4):
+        if len(adj[i]) != 2:
+            return None, ("%s shares a patch with %d of the other blends; "
+                          "four blends ring a junction only when each one "
+                          "meets exactly two of the others"
+                          % (strips[i].Name, len(adj[i])))
+    start = min(range(4), key=lambda i: _doc_index(strips[i]))
+    nxt = min(adj[start], key=lambda i: _doc_index(strips[i]))
+    order = [start, nxt]
+    while len(order) < 4:
+        cur = order[-1]
+        step = [k for k in adj[cur] if k not in order]
+        if len(step) != 1:
+            return None, ("the four blends do not form a single ring "
+                          "(the walk from %s is ambiguous)" % strips[start].Name)
+        order.append(step[0])
+    if order[0] not in adj[order[-1]]:
+        return None, ("the four blends do not form a single ring (the walk "
+                      "from %s does not close)" % strips[start].Name)
+    return [strips[i] for i in order], None
+
+
 # ---- hidden-cell bookkeeping ------------------------------------------
 
 def ensure_hidden_idxs_property(p):
