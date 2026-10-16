@@ -12,7 +12,9 @@ whole model by hand, with the "target" line below as the goal.
 The file **names** and the **sketch names inside** carry the intent, so
 the topology is readable without opening the binary `.FCStd`. The sketch
 names are the contract the fixture tests
-(`Tests/test_example_documents.py`) assert.
+(`Tests/test_example_documents.py`) assert — and for
+`SketchOnly_Demo01Subset.FCStd` that contract is *derived from the source
+demo file at test time*, not hand-written (#98 review).
 
 The set is a **progression**, not a single shape:
 a simple closed quad → a two-patch chain with a blendable seam → a four
@@ -92,12 +94,28 @@ a simple closed quad → a two-patch chain with a blendable seam → a four
 
 ## SketchOnly_Demo01Subset.FCStd — Demo 01 sketch-only subset
 
-- **91 sketches** (`Sketch014`..`Sketch104`) — the inputs carried over
-  from `Resources/Demo_files/Silk_Demo_01.FCStd`. **Zero** Edge / Patch /
-  Blend objects. A human (or agent) clicks **Edge -> Patch -> Blend**
-  for as far as the *linear* workflow reaches (7 Edges -> 2 Patches -> 1
-  Blend); the 4 junction rings themselves require the triangular 4th
-  member that is tracked separately (#98) and are *not* buildable yet.
+- **29 sketches** (`Sketch014`..`Sketch045`) — **exactly** the sketch set
+  of `Resources/Demo_files/Silk_Demo_01.FCStd`, copied geometry-for-
+  geometry (placements preserved; constraints copied best-effort).
+  **Zero** Edge / Patch / Blend objects.
+- The guard (`Tests/test_example_documents.py`) does **not** trust a
+  hand-written list here: it unzips the demo's `Document.xml` and asserts
+  the fixture carries the demo's own 29 sketch names — nothing more,
+  nothing less.
+- **What a click-through reaches**: 16 of the 29 sketches feed **12
+  whole-sketch Edges** (4 outer cross-section edges, 4 rib curves, 4
+  node-pair hoop edges). The demo's five faces are bounded by those
+  curves, but the four ring faces (front/top/bottom/back) use **half
+  ribs** (`u` in [0.5, 1] — the demo stores one symmetric half and
+  mirrors it), and a Silk Edge consumes a whole sketch. Measured result:
+  the **Right** end cap (whose four curves really are whole sketches)
+  rebuilds as one Patch; the other four `create_patch` calls refuse with
+  "do not close a loop" naming the outer edge that shares no corner. No
+  seam can be blended, so no junction can be attempted — the exact
+  refusal texts are pinned in `Tests/test_demo01_rebuild.py`.
+- The full mapping (which sketch feeds which stored curve, per-edge
+  tables, raw counts) is `docs/research/silk-demo-01-inventory.md`; the
+  junction table is `docs/research/silk-demo-01-junction-table.md`.
 
 
 ---

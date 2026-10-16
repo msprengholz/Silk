@@ -12,12 +12,24 @@ These tests assert the fixture invariant the whole point relies on:
 so a broken or accidentally-populated example fails here rather than
 corrupting a human-test round.
 
+#98 review: `SketchOnly_Demo01Subset.FCStd` shipped with 91 sketches
+(Demo 01's 29 plus 62 from Demos 02/03) while the guard stayed green,
+because its expectation was the hand-written list of what had been
+saved. The Demo 01 subset expectation is therefore DERIVED at test time
+from the demo file itself -- `Resources/Demo_files/Silk_Demo_01.FCStd`
+is unzipped and its `Document.xml` parsed for the stored Sketch object
+names (zipfile + regex, the census technique, no FreeCAD needed). A
+fixture carrying other demos' or stale sketches cannot ship green again:
+the guard compares against the demo's own set, both directions.
+
 A test takes one document argument (the harness's fresh scratch doc);
 the example files are opened, inspected and closed inside it.
 """
 
 import FreeCAD
 import os
+import re
+import zipfile
 
 # Thread-safety is irrelevant: RPC runs on the GUI thread. The examples
 # directory is on the well-known path shared by every launcher.
@@ -25,7 +37,28 @@ EXAMPLES_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..",
     "Resources", "Test_files", "examples")
 
+# The source demo the subset fixture must mirror exactly (#98).
+DEMO01 = os.path.normpath(os.path.join(
+    EXAMPLES_DIR, "..", "..", "Demo_files", "Silk_Demo_01.FCStd"))
+
 SILK_OBJECT_TYPES = ("Edge", "Patch", "Blend")
+
+
+def demo01_sketch_names():
+    """The Demo 01 sketch set, read OFFLINE from the demo's own
+    `Document.xml` (zipfile + regex -- the census technique, no FreeCAD,
+    no dependency on what the fixture happens to contain).
+
+    This is the expectation the subset guard compares against; deriving
+    it from the demo is what makes a wrong fixture (the 91-sketch first
+    attempt) impossible to ship green.
+    """
+    with zipfile.ZipFile(DEMO01) as z:
+        xml = z.read("Document.xml").decode("utf-8", "replace")
+    names = re.findall(r'<Object name="(Sketch\d+)"', xml)
+    if not names:
+        raise RuntimeError("no Sketch objects found in %s" % DEMO01)
+    return sorted(names, key=lambda s: int(s[6:]))
 
 # Documented build targets -- kept in lock-step with the examples/ README.
 EXPECTED = {
@@ -58,8 +91,13 @@ EXPECTED = {
                   "3 blendable seams (X/Y/Z)",
     },
     "SketchOnly_Demo01Subset.FCStd": {
-        "sketches": ['Sketch014', 'Sketch015', 'Sketch016', 'Sketch017', 'Sketch018', 'Sketch019', 'Sketch020', 'Sketch021', 'Sketch022', 'Sketch023', 'Sketch024', 'Sketch025', 'Sketch026', 'Sketch027', 'Sketch028', 'Sketch029', 'Sketch030', 'Sketch031', 'Sketch032', 'Sketch033', 'Sketch034', 'Sketch035', 'Sketch036', 'Sketch037', 'Sketch038', 'Sketch039', 'Sketch040', 'Sketch041', 'Sketch042', 'Sketch043', 'Sketch044', 'Sketch045', 'Sketch046', 'Sketch047', 'Sketch048', 'Sketch049', 'Sketch050', 'Sketch051', 'Sketch052', 'Sketch053', 'Sketch054', 'Sketch055', 'Sketch056', 'Sketch057', 'Sketch058', 'Sketch059', 'Sketch060', 'Sketch061', 'Sketch062', 'Sketch063', 'Sketch064', 'Sketch065', 'Sketch066', 'Sketch067', 'Sketch068', 'Sketch069', 'Sketch070', 'Sketch071', 'Sketch072', 'Sketch073', 'Sketch074', 'Sketch075', 'Sketch076', 'Sketch077', 'Sketch078', 'Sketch079', 'Sketch080', 'Sketch081', 'Sketch082', 'Sketch083', 'Sketch084', 'Sketch085', 'Sketch086', 'Sketch087', 'Sketch088', 'Sketch089', 'Sketch090', 'Sketch091', 'Sketch092', 'Sketch093', 'Sketch094', 'Sketch095', 'Sketch096', 'Sketch097', 'Sketch098', 'Sketch099', 'Sketch100', 'Sketch101', 'Sketch102', 'Sketch103', 'Sketch104'],
-        "target": "Demo 01 sketch-only subset (91 sketches)",
+        # #98 review: NOT hand-written -- derived from the demo itself at
+        # test time (`demo01_sketch_names()`), so the guard cannot go
+        # green while the fixture carries the wrong sketch set.
+        "sketches": None,
+        "expected_from_demo": "Silk_Demo_01.FCStd",
+        "target": "Demo 01 sketch-only subset (the demo's own 29 "
+                  "sketches, Sketch014..Sketch045)",
     },
 
 }
@@ -84,6 +122,25 @@ def _inspect(fname):
         FreeCAD.closeDocument(doc.Name)
 
 
+def _expected_sketches(fname, errors, checks):
+    """The documented sketch set for `fname`; for the Demo 01 subset this
+    is DERIVED from the demo file (see `demo01_sketch_names`), never from
+    what the fixture happens to contain."""
+    entry = EXPECTED[fname]
+    if entry.get("expected_from_demo"):
+        try:
+            names = demo01_sketch_names()
+        except Exception as exc:
+            errors.append("%s: cannot derive the expected sketch set from "
+                          "the demo (%s): %r"
+                          % (fname, entry["expected_from_demo"], exc))
+            return None
+        checks.append("%s: expectation derived from %s (%d sketches)"
+                      % (fname, entry["expected_from_demo"], len(names)))
+        return names
+    return entry["sketches"]
+
+
 def _assert_example_sketch_only(errors, checks, fname):
     info = _inspect(fname)
     if info is None:
@@ -92,17 +149,23 @@ def _assert_example_sketch_only(errors, checks, fname):
     sketches, silk, others = info
     checks.append("%s: %d sketches, %d silk objects"
                   % (fname, len(sketches), len(silk)))
-    expected = EXPECTED[fname]["sketches"]
+    expected = _expected_sketches(fname, errors, checks)
     if silk:
         errors.append("%s must open with ZERO Silk objects, found %s"
                       % (fname, silk))
     if others:
         errors.append("%s contains non-sketch objects %s"
                       % (fname, others))
-    for name in expected:
-        if name not in sketches:
-            errors.append("%s missing documented sketch %r (have %s)"
-                          % (fname, name, sketches))
+    if expected is None:
+        return
+    missing = [name for name in expected if name not in sketches]
+    extra = [name for name in sketches if name not in expected]
+    if missing:
+        errors.append("%s missing documented sketch(es) %s (have %s)"
+                      % (fname, missing, sketches))
+    if extra:
+        errors.append("%s carries sketches that are not in the documented "
+                      "set: %s" % (fname, extra))
     if len(sketches) != len(expected):
         errors.append("%s expected %d sketches, found %d"
                       % (fname, len(expected), len(sketches)))
