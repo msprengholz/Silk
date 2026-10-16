@@ -14,7 +14,7 @@ floor.
    `k_gap` (**1.665e-1 vs 8.249e-2**) or in `g1_deg` (**1.10° vs 0.155°**), so
    the order knob is not doing what its name says here.
 2. **Silk's edge blend is the strong link** — G1-exact (`g1 = 0.0000°`) with
-   `k_gap` ≤ **2.528e-4 /mm** (12 of 14 seams ≤ 1.42e-4, three exactly 0).
+   `k_gap` ≤ **2.528e-4 /mm** (13 of 14 seams ≤ 1.419e-4, three exactly 0).
    That is ~120× below the corner's 3.1e-2.
 3. **The maths is not the limit** — on a synthetic junction whose exact G2
    continuation is known, a control-net **solve** recovers it exactly
@@ -136,7 +136,7 @@ different objects:
 
 **Edge blends (`ControlGrid64_2Grid44`) — 14 seams.** g1 max **0.0000°**
 (G1-exact); `k_gap` ∈ [0, 2.528e-4] /mm; worst `twist_gap` 5.417e-3 /mm.
-Three seams are exactly 0; the worst three are 2.528e-4, 1.419e-4, 1.045e-4.
+Three seams are exactly 0; only one exceeds 1.419e-4 (the 2.528e-4 seam).
 
 **Hard-corner sub-surfaces (`ControlGrid64_3_1Grid44`) — 7 seams.** These are
 the three-patch HARD corner surfaces, not edge blends: their matched boundary
