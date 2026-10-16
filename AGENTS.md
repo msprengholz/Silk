@@ -86,12 +86,40 @@ creates them anymore.
 - Custom view provider: `BlendViewProvider` (custom tree icon)
 - Surface built via `AN.CubicSurface_64` (NOT manual knot insertion)
 
+### Corner Blend (`SilkCorner.py`)
+- `Part::FeaturePython`; object_type="CornerBlend"; input = `Strips`, the
+  four ring `Blend`s around one junction, **in any order**.
+- Builds the real subgrid chain — `SubGrid33_2Grid64` ×4 →
+  `ControlGrid66_4Sub` → `CubicSurface_66` — ported into `SilkMachinery`
+  (`corner_ring`, `corner_grid`, `subgrid33_2grid64`, `control_grid66_4sub`)
+  from the legacy classes. Those stay **inert restore shims** and serve as
+  the pole-for-pole test oracle (parity `0.000e+00`).
+- A strip's `Poles` is flat `V*6 + U` — 4 rows × 6 poles, corners at flat
+  `{0, 5, 18, 23}` — exactly the grid `SubGrid33_2Grid64` reads. Upstream's
+  own notes call it a "6x4 grid": the same object, axes named differently.
+  It is **not** a transpose, and nothing needs transposing.
+- `corner_ring` fixes the ring start (earliest in the document; adjacency =
+  a shared Patch) and `corner_grid` normalizes direction, so the fill does
+  not depend on click order — but the direction is **not** free (the legacy
+  chain's output depends on it).
+- Refuses **by name and creates nothing** unless it gets exactly four strips
+  forming one ring around one junction (the #80/#83 lesson: never park a dead
+  object). An existing corner for the same strip set is an idempotent no-op.
+- Fourth wizard step and fourth toolbar command (`Silk_CreateCornerBlend`);
+  the toolbar path opens its own transaction.
+- Weights are carried — rational weights are possible.
+- **No continuity is asserted.** The construction is pole-identical to the
+  reference chain, so it inherits that chain's measured behaviour (#97):
+  C0 exact, G1 ≤ 0.48°, **not G2**. See the continuity-instrument section
+  above; #100 is the investigation of what G2 would take.
+
 ## Full Workflow Pipeline
 ```
 Sketches (9 reference sketches)
   → Edges (7, each linked to 1-2 sketches via Sketches property)
     → Patch (2 from 4 Edges each)
       → Blend (1 between the 2 Patch)
+        → Corner Blend (at a junction where 4 Patch meet; fed the 4 ring Blend)
 ```
 
 ## Module Reload Pattern

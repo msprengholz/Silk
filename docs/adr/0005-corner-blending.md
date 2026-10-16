@@ -25,10 +25,13 @@ the original demos (`Resources/Demo_files/Silk_Demo_01.FCStd`):
 SubGrid33_2Grid64 ×4  →  ControlGrid66_4Sub  →  CubicSurface_66
 ```
 
-- `SubGrid33_2Grid64` (`ArachNURBS.py:7826`) takes **two 6x4 grids** meeting at a
-  corner and builds a 3x3 corner partial grid by reading *two* rows/columns of
-  each — the shared boundary row **and the row behind it** — extrapolating both
-  into the gap and averaging them. That is where tangent information enters.
+- `SubGrid33_2Grid64` (`ArachNURBS.py:7826`) takes **two 24-pole grids**
+  (each stored 4 rows × 6 poles, flat `V*6 + U`, corners at `{0, 5, 18, 23}`)
+  meeting at a corner and builds a 3x3 corner partial grid by reading *two*
+  rows/columns of each — the shared boundary row **and the row behind it** —
+  extrapolating both into the gap and averaging them. That is where tangent
+  information enters, and it is also where the construction stops: no
+  curvature row is ever read, which is why it reaches G1 and not G2.
 - `ControlGrid66_4Sub` (`ArachNURBS.py:8077`) is pure assembly of four such 3x3
   grids into the 6x6.
 - Upstream tooltip: *"Fills four sided holes between blends (only four sided
