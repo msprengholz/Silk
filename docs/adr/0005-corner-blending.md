@@ -80,10 +80,37 @@ So upstream's "smooth transitions across the four original faces" is **G1**, not
 G2 -- and the port in #91 reproduces that bar. The workbench's own `CornerBlend`
 before the port measures **C0** with a normal gap up to 2.1 deg: the same object,
 an order of magnitude worse. **The stage's target is therefore the reference bar
-(G1, <= 0.5 deg), not a G2 claim.** A G2 target is not supported by measurement
-for either mechanism: the FreeCAD order-2 fill's G2-ness is itself unmeasured,
-because the Phase B probe read normal gaps only. Any future G2 claim has to be
-read off `k_gap` / `twist_gap`.
+(G1, <= 0.5 deg), not a G2 claim.**
+
+## Measurement update (#100)
+
+#100 measured what G2 would take (`docs/research/silk-corner-g2.md`), and the
+result is that **the G1 wall is the construction, not the maths.** The shipped
+`SubGrid33_2Grid64`/`corner_grid` reads two rows of each neighbour (position and
+tangent) and averages two extrapolations; matching a corner's rows 0, 1, 2 to
+its neighbours' is linear algebra on the control net. On a **synthetic junction
+of compatible neighbours** -- one known smooth surface, whose exact G2
+continuation is known by construction -- a control-net solve recovers that
+continuation exactly (`k_gap` 6.0e-17, `|solved - T|` 2.3e-13 mm), while the
+shipped averaging stops at `k_gap` 4.1e-4. On the **demo's real junctions** the
+same solve reaches only `k_gap` 7.1e-3 /mm (from 3.1e-2), because the four
+legacy blends' second-order data does not agree at the junction: the real-data
+limit is **neighbour incompatibility**, and the neighbours' own continuity knobs
+(`ControlGrid64_2Grid44.scale_tangent_*` / `scale_inner_*` / `autoG3`) are the
+lever (#102). Silk's **edge blend** is the strong link -- G1-exact, `k_gap` <=
+2.5e-4 /mm, ~120x below the corner's. FreeCAD's `Surface::Filling` at
+`BoundaryOrder = 2` is **not** G2 here and measures *worse* than `= 1`
+(`k_gap` 1.665e-1 vs 8.249e-2; `g1` 1.10 deg vs 0.155 deg), so Q7's "order-2
+build" opt-in must not be read as a G2 claim. The stage target stays G1
+(<= 0.5 deg); a G2 target is now supported by measurement only up to the
+neighbours' compatibility.
+
+**Instrument correction (#100).** #97's `twist_gap` figures are
+orientation-suspect and are not evidence: on a *reversed* seam the geodesic
+torsion enters with a sign flip, so `twist_gap` reads ~2|tau| even on a smooth
+seam (a seam with `k_gap` 2.1e-6 reads `twist_gap` 5.3e-3 in #100's raw
+edge-blend data). The G2 verdict above rests on `k_gap` alone, which is
+unaffected. A reversal-invariant torsion metric is #101.
 
 ## Baseline
 

@@ -199,6 +199,12 @@ have proven G2. The 4-junction interior needs no seam test: each
 * `twist_gap` history: `classify` never reads it (unchanged). No G2 label in
   this finding uses it; it is reported as an extra, un-calibrated-in-label
   quantity.
+* **Correction (#100).** The `twist_gap` figures above (up to 4.1e-2 /mm) are
+  orientation-suspect and are **not** evidence: on a *reversed* seam the
+  geodesic torsion enters with a sign flip, so `twist_gap` reads ~2|tau| even
+  where the surface is smooth (a #100 edge-blend seam with `k_gap` 2.1e-6 reads
+  `twist_gap` 5.3e-3). The G2 verdict here rests on `k_gap` alone and stands.
+  The reversal-invariant metric is #101.
 * The demo was measured at n = 41 stations; a finer sweep could move the
   0.4757° worst-case marginally, but it is bounded by the exact evaluator, not
   by sampling.

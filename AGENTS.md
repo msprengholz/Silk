@@ -34,12 +34,27 @@ control net exactly, **carrying the weights**, and add the combinatorial
 `c0_controlnet`. `Tests/continuity_calibration.py` is the soundness harness:
 `solve_uv`'s floor (4.5e-13 mm), every quantity's error floor, a known G1 angle,
 a known curvature jump -- which is also the proof that **`g1_deg` cannot
-establish G2** -- and an independent reflected-3D cross-check. **G2 is only ever
-the `k_gap` / `twist_gap` claim.** No test asserts a continuity label
+establish G2** -- and an independent reflected-3D cross-check. **`k_gap` is the
+G2 evidence.** `twist_gap` carries an orientation caveat: the seam
+correspondence is the caller's, and on a *reversed* seam the geodesic torsion
+enters with a sign flip, so `twist_gap` reads ~2|tau| even where the surface is
+smooth -- visible in #100's raw edge-blend data, where a seam with `k_gap`
+2.1e-6 reads `twist_gap` 5.3e-3. Only non-reversed values count as evidence
+until the metric is made reversal-invariant (#101); `k_gap` is unaffected
+(it is an absolute difference of scalars). No test asserts a continuity label
 (`test_no_continuity_threshold_in_suite`); the manual scripts
-(`Tests/g2_demo_corner.py`, `Tests/g2_corner_measurement.py`) carry
-`MANUAL = True` and are asserted reachable. Measured reference corner
-(`Silk_Demo_01`): C0 exact, G1 <= 0.48 deg, **not G2** (`k_gap` <= 3.1e-2 /mm).
+(`Tests/g2_demo_corner.py`, `Tests/g2_corner_measurement.py`,
+`Tests/g2_corner_solve.py`, `Tests/g2_edge_blend_probe.py`,
+`Tests/g2_corner_fill_continuity.py`) carry `MANUAL = True` and are asserted
+reachable. Measured reference corner (`Silk_Demo_01`): C0 exact, G1 <= 0.48 deg,
+**not G2** (`k_gap` <= 3.1e-2 /mm). #100 then measured what G2 would take
+(`docs/research/silk-corner-g2.md`): **the maths is not the limit** -- on a
+junction of compatible neighbours a control-net solve recovers the exact G2
+continuation (`k_gap` 6.0e-17), where the shipped two-row average stops at
+4.1e-4; on the demo's legacy neighbours the attainable `k_gap` is 7.1e-3 /mm,
+set by the neighbours' mutual incompatibility (#102). FreeCAD's
+`Surface::Filling` at `BoundaryOrder = 2` is **not** G2 here and measures worse
+than `= 1` (`k_gap` 1.7e-1 vs 8.2e-2).
 
 ## Core Object Architecture
 
@@ -110,8 +125,13 @@ creates them anymore.
 - Weights are carried — rational weights are possible.
 - **No continuity is asserted.** The construction is pole-identical to the
   reference chain, so it inherits that chain's measured behaviour (#97):
-  C0 exact, G1 ≤ 0.48°, **not G2**. See the continuity-instrument section
-  above; #100 is the investigation of what G2 would take.
+  C0 exact, G1 ≤ 0.48°, **not G2**. #100 measured what G2 would take
+  (`docs/research/silk-corner-g2.md`): the bar is a control-net **solve** of the
+  corner's 4 free central poles, not the two-row average — exact on a junction
+  of compatible neighbours (`k_gap` 6.0e-17), 7.1e-3 /mm on the demo's legacy
+  neighbours, where the limit is the neighbours' disagreement (#102). FreeCAD's
+  order-2 fill is not the route. Silk's **edge blend** is the strong link:
+  G1-exact, `k_gap` ≤ 2.5e-4 /mm.
 
 ## Full Workflow Pipeline
 ```
