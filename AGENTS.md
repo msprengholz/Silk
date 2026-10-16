@@ -18,6 +18,13 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
 
 Wayfinder discussion and the code that grows from it live in **separate contexts**. The main session is for discussion, decisions, and recording them (map #1 on the tracker). Implementation is always **handed off**: each build ticket goes to a **subagent in a fresh context** (per-ticket, TDD + oracle, returns a diff + report), reviewed before the ticket is marked done. Hand every build off to a subagent; keep code out of the discussion context.
 
+### Measurement rule (standing)
+
+A measurement that decides a product choice names its instrument, keeps its raw
+output, publishes its error floor, and carries either a known-answer calibration
+or an independent cross-check. A number quoted from a label, with no preserved
+output, is not a measurement.
+
 ## Core Object Architecture
 
 Three types, one per process step (#42): `Edge` → `Patch` → `Blend`.
