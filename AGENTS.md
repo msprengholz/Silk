@@ -103,7 +103,9 @@ creates them anymore.
 
 ### Corner Blend (`SilkCorner.py`)
 - `Part::FeaturePython`; object_type="CornerBlend"; input = `Strips`, the
-  four ring `Blend`s around one junction, **in any order**.
+  ring `Blend`s around one junction — **four** at a 4-patch junction,
+  **three** at a 3-patch hard corner (the triangular 4th member is then
+  built invisibly; the user never picks upstream types) — **in any order**.
 - Builds the real subgrid chain — `SubGrid33_2Grid64` ×4 →
   `ControlGrid66_4Sub` → `CubicSurface_66` — ported into `SilkMachinery`
   (`corner_ring`, `corner_grid`, `subgrid33_2grid64`, `control_grid66_4sub`)
@@ -117,9 +119,17 @@ creates them anymore.
   a shared Patch) and `corner_grid` normalizes direction, so the fill does
   not depend on click order — but the direction is **not** free (the legacy
   chain's output depends on it).
-- Refuses **by name and creates nothing** unless it gets exactly four strips
-  forming one ring around one junction (the #80/#83 lesson: never park a dead
-  object). An existing corner for the same strip set is an idempotent no-op.
+- Refuses **by name and creates nothing** unless it gets four strips forming
+  one ring, or three strips forming a 3-cycle (the #80/#83 lesson: never park a
+  dead object). An existing corner for the same strip set is an idempotent no-op.
+- **The 3-valent path currently refuses at the member stage** (honest, measured):
+  the triangular-member search feeds each patch's full 4x4 base net instead of
+  the ring's corner cell, and the degenerate apex then trips the strict
+  shared-corner match (`pair_common`) that upstream merely warned about. The
+  cube-corner fixture `Tests/cube_corner_model.py` + `Tests/test_cube_corner_3valent.py`
+  records this exactly; the positive contract (36 poles, 1+ faces, idempotent)
+  is pre-written in that test's docstring and it must be rewritten (it will
+  fail) when the two fixes land.
 - Fourth wizard step and fourth toolbar command (`Silk_CreateCornerBlend`);
   the toolbar path opens its own transaction.
 - Weights are carried — rational weights are possible.
@@ -131,7 +141,9 @@ creates them anymore.
   of compatible neighbours (`k_gap` 6.0e-17), 7.1e-3 /mm on the demo's legacy
   neighbours, where the limit is the neighbours' disagreement (#102). FreeCAD's
   order-2 fill is not the route. Silk's **edge blend** is the strong link:
-  G1-exact, `k_gap` ≤ 2.5e-4 /mm.
+  G1-exact, `k_gap` ≤ 2.5e-4 /mm. Corner taxonomy/census and the G2 maths:
+  `docs/research/silk-corner-type-taxonomy.md`, `silk-demo-blend-census.md`,
+  `silk-g2-math-overview.md`.
 
 ## Full Workflow Pipeline
 ```
@@ -139,7 +151,8 @@ Sketches (9 reference sketches)
   → Edges (7, each linked to 1-2 sketches via Sketches property)
     → Patch (2 from 4 Edges each)
       → Blend (1 between the 2 Patch)
-        → Corner Blend (at a junction where 4 Patch meet; fed the 4 ring Blend)
+        → Corner Blend (at a junction where 3 or 4 Patch meet; fed the ring
+          Blend(s) — the 3-patch triangular 4th member is built invisibly)
 ```
 
 ## Module Reload Pattern

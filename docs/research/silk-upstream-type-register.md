@@ -9,9 +9,9 @@ employed, parked-with-decision, not-used. Reason is one line.
 | Type | Role | Employed by our workflow (location) | Status | Reasoning |
 |---|---|---|---|---|
 | ControlGrid44_4 | 4x4 base patch grid | SilkPatch equivalent | employed | We build the base patch grid directly rather than via ControlGrid44_4. |
-| ControlGrid44_2EdgeSegments | 2-curve corner cell | not employed | not-used | Blocking triangular 4th member next build. |
+| ControlGrid44_2EdgeSegments | 2-curve corner cell | SilkCorner.corner_inputs (member input) | employed | Feeds the triangular 4th member; the member-input selection is one of the two diagnosed refusal causes (see silk-corner-type-taxonomy.md). |
 | ControlGrid64_2Grid44 | 6x4 two-patch blend grid | SilkBlend | employed | Equivalent blend via AN blend helper + CubicSurface_64. |
-| ControlGrid64_3_1Grid44 | triangular 4th member | upcoming | not-used | Upcoming triangular member. |
+| ControlGrid64_3_1Grid44 | triangular 4th member | SilkMachinery.control_grid64_3_1 (hidden in CornerBlend) | employed | Ported faithfully and unit-tested; positive 3-valent build still refused (degenerate-corner match + member input). |
 | ControlGrid66_4Sub | four-subgrid corner fill | SilkMachinery/SilkCorner | employed | Four-ring fill from four sub cells. |
 | SubGrid33_2Grid64 | 3x3 sub-cell | SilkMachinery | employed | Employed sub-cell conversion. |
 | CubicSurface_44 | bicubic base surface | not employed | not-used | Patches create BSpline directly. |

@@ -2,6 +2,7 @@
 
 Source: read directly from the three demo files' `Document.xml` link graphs (offline, no FreeCAD
 GUI) plus upstream's own class help. Each fact below cites the upstream object that states it.
+The full four-file census (Demos 01/02/03 + `CadDivision_19`) is `docs/research/silk-demo-blend-census.md`.
 
 ## The three concretely observed corner families
 
@@ -65,27 +66,42 @@ So a junction type decides the construction, not the user's tool preference.
 | Upstream corner | Role | Employed by us? |
 |---|---|---|
 | `ControlGrid44_4` (4×4 base grid) | base patch | equivalent rôle via `SilkPatch`'s own 16-pole grid |
-| `ControlGrid44_2EdgeSegments` (2-curve corner cell) | ring-member input | **not yet** — blocking D01 four-fill member |
+| `ControlGrid44_2EdgeSegments` (2-curve corner cell) | ring-member input | **build path, pending** — fed to the triangular member inside `SilkCorner.corner_inputs`; the current input selection (patch base net, not the ring's corner cell) is one of the two diagnosed refusal causes |
 | `ControlGrid64_2Grid44` (6×4 2-patch blend) | ring member | equivalent via `SilkBlend` (`blend_poly_2x4_1x6` → `CubicSurface_64`) |
-| `ControlGrid64_3_1Grid44` (the triangular 4th member) | ring member @ 3-valent | upcoming build (#100/#97-culture measurement first) |
+| `ControlGrid64_3_1Grid44` (the triangular 4th member) | ring member @ 3-valent | **employed as machinery** (`SilkMachinery.control_grid64_3_1`, hidden inside `CornerBlend`); positive 3-valent build still refused — see "current 3-valent state" |
 | `SubGrid33_2Grid64` | 4-members → 4-sub corner | employed (`SilkMachinery`) |
 | `ControlGrid66_4Sub` / `CubicSurface_66` | 4-patch fill | employed |
 | `ControlGrid3Star66_3Sub` / `ControlGridNStar66_NSub` | soft N-valent star cup | parked for later (D02/D03 deferral) |
 | `CubicNStarSurface_NStar66` (+ `StarTrim`) | star cup output / pinch repair | parked |
 
 Decision recorded:
-- Corner stage scoped to **Demo 01** (four 3-valent hard corners). The triangular 4th member will be
-  built into the corner stage invisibly (per the earlier decision), faithful, then measured in the
-  #100/#97 instrument with its G1-loss floor published.
-- The **star family is deferred** to a later subproject with Demos 02/03.
+- Corner stage scoped to **Demo 01** (four 3-valent hard corners). The triangular 4th member is
+  built into the corner stage invisibly (per the earlier decision), faithful to upstream; the
+  machinery is in and unit-tested, but the positive 3-valent build still refuses — see below.
+- The **star family is deferred** to a later subproject with Demos 02/03 (which also carries the
+  missing-class finding from the census: Demo 02's stored `ArachNURBS.ControlGrid3Star66_3Sub`
+  does not exist in today's `ArachNURBS.py`).
 - FreeCAD `Surface::Filling` remains a per-hole fallback option (owner: other corner types have
   no stable Silk solution), but is no longer the primary component for any corner the four-ring path
   can fill.
 - Register + drift-guard added so every ArachNURBS corner type is classified before the suite goes green.
 
-Pending: #98's subagent rate-limited and errored; its fixtures + junction table still need re-firing.
-The topology and recipe above are already extracted offline, so #98's content is narrowed to:
-(1) generate the sketch-only example fixture in `Resources/Test_files/examples/`,
-(2) assert it stays sketch-only (guard test),
-(3) programmatic rebuild of four junctions via `SilkWorkflowOps`,
-(4) publish the junction table against measured reference.
+## Current 3-valent state (measured on the cube-corner fixture)
+
+`Tests/cube_corner_model.py` builds three planar patches meeting like a cube corner (oracle-green,
+strips resolve as the 3-cycle ring). `create_corner_blend` still refuses:
+
+> `Silk: cannot create a corner blend from these 3 blends -- could not build triangular 4th member. Nothing was created.`
+
+Two diagnosed causes (both in the member stage, not the fixture):
+
+1. **Member input**: the search feeds each patch's full 4x4 base net to `control_grid64_3_1`, so the
+   degenerate row lands on a patch vertex — never the ring's corner-cell outer corner (0.1 off the
+   junction on both seams).
+2. **Degenerate-corner matching**: with the actual corner cell, the collapsed row holds the apex in
+   two corner slots, and the strict `pair_common` refuses ("share more than one corner") where
+   upstream `SubGrid33_2Grid64.execute` warned and kept the last match.
+
+`Tests/test_cube_corner_3valent.py` records exactly this; its docstring pre-writes the positive
+contract (36 poles, 1+ faces, non-empty shape, idempotent) and the test must be rewritten (it will
+fail) when the fixes land. No k_gap is measurable until then (no corner surface exists).
