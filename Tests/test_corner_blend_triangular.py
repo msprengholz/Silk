@@ -63,8 +63,9 @@ def test_3valent_cornerblend_refuses_real_corner_three_subsets(doc):
     other two). Every subset is refused BY NAME and leaves no
     CornerBlend behind (#80/#83). This is the end-to-end exercise of
     `create_corner_blend` on three real Blend strips available in the
-    fixtures; success would require a genuine triangular (3-patch)
-    junction fixture, which does not exist yet."""
+    fixtures; the genuine 3-patch (cube corner) counterpart now lives in
+    Tests/cube_corner_model.py and is driven by
+    Tests/test_cube_corner_3valent.py."""
     cm.build_corner_model(doc)
     strips = [doc.getObject(n) for n in ("B12", "B24", "B43", "B31")]
     errors = []
@@ -89,18 +90,27 @@ def test_3valent_cornerblend_refuses_real_corner_three_subsets(doc):
 
 def test_3valent_cornerblend_measurement_unavailable(doc):
     """k_gap measurement on a 3-valent corner is not available: the
-    repo's only corner fixture is the 4-valent 2x2 dome (Tests/corner_model),
-    and no three of its ring blends form the 3-cycle `corner_ring_3`
-    requires, so no executable 3-valent CornerBlend (and therefore no
-    surface to feed to g2_oracle.measure_seam) can be produced from the
-    available fixtures. Synthetic triangular geometry would be needed; not
-    added here because inventing a 3-patch junction by hand is out of
-    scope of validation-only work and would not be a faithful instrument
-    reading. This test records that limitation rather than asserting a
-    continuity label (which would cross the label guard)."""
+    3-patch cube-corner fixture now EXISTS (Tests/cube_corner_model.py),
+    its three strips resolve as the 3-cycle ring, but the corner build is
+    refused by name before any surface is constructed --
+
+        Silk: cannot create a corner blend from these 3 blends -- could
+        not build triangular 4th member. Nothing was created.
+
+    (the triangular-member search feeds each patch's FULL 4x4 base grid,
+    whose corners are the patch vertices -- never the ring's shared
+    corner, the patch's corner-CELL outer corner). With no CornerBlend
+    object there is no surface for g2_oracle.measure_seam to measure, so
+    k_gap stays unmeasured. Tests/test_cube_corner_3valent.py executes
+    that attempt and records the refusal; this test points at it. No
+    continuity label is asserted here or anywhere in this suite (which
+    would cross the label guard)."""
     return {"pass": True, "errors": [],
-            "checks": ["no 3-valent fixture present; k_gap not measured -- "
-                       "see test docstring"]}
+            "checks": ["3-valent fixture exists (Tests/cube_corner_model.py) "
+                       "but the corner build refuses ('could not build "
+                       "triangular 4th member'), so no CornerBlend surface "
+                       "exists -> k_gap not measured -- see "
+                       "Tests/test_cube_corner_3valent.py"]}
 
 ALL_TESTS = [
     test_triangular_member_nonzero_and_no_fold,
