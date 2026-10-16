@@ -63,6 +63,14 @@ import Part
 from FreeCAD import Base
 
 from Tests import g2_oracle as G
+import Tests.silk_nurbs as SN
+import Tests.continuity_analytic as CA
+
+# Manual-only: not discovered by Tests/suite.py (filename is not test_*.py).
+# Tests/test_continuity_instrument.py asserts this marker and `main`'s
+# reachability, so a rename or a syntax break is caught without running the
+# measurement.  See Tests/g2_demo_corner.py for the same convention.
+MANUAL = True
 
 # star-frame geometry of the corner-model junction (see module docstring)
 CELL = {"Patch44": 3, "Patch002": 3, "Patch003": 1, "Patch001": 1}
@@ -266,10 +274,31 @@ def measure_nstar(doc, n=21):
     return report
 
 
+def _analytic_seam(cb_poles, strip_poles, cedge, edge, rev, n=21):
+    """Exact control-net reading of one CornerBlend/strip boundary pair.
+
+    The CornerBlend is a 6x6 `NURBS_Cubic_66_surf` and each strip a 6x4
+    `NURBS_Cubic_64_surf`; both carry unit weights in this fixture, and the
+    analytic layer is the arbiter for the sampled oracle.  The control net
+    is the source of truth, so the C0 slot is exact up to rounding.
+    """
+    cb_surf = SN.NurbsSurface.from_flat(list(cb_poles), [1.0] * 36, 6, 6,
+                                        SN.KNOTS_6, SN.KNOTS_6)
+    st_surf = SN.NurbsSurface.from_flat(list(strip_poles), [1.0] * 24, 6, 4,
+                                        SN.KNOTS_6, SN.KNOTS_4)
+    return CA.measure_edges(cb_surf, cedge, rev, st_surf, edge, False, n=n)
+
+
 def measure_corner_blend(doc, n=21):
     """Continuity of the existing CornerBlend boundary against the ring
     blends it is built from (its neighbours); each strip is itself C0/G1 to
-    the patches, so this is the corner's boundary continuity."""
+    the patches, so this is the corner's boundary continuity.
+
+    Reports both instruments: the sampled curvature oracle (`g2_oracle`,
+    the instrument the yellow map number was attributed to) and the exact
+    control-net arbiter (`continuity_analytic`).  c0_net is the
+    combinatorial C0 gap -- the control net's own answer, no evaluation.
+    """
     cb = doc.getObject("CornerBlend")
     if cb is None:
         print("no CornerBlend in this document")
@@ -287,17 +316,29 @@ def measure_corner_blend(doc, n=21):
                                 ("v0", [0, 1, 2, 3, 4, 5]),
                                 ("v1", [30, 31, 32, 33, 34, 35])):
                 cbrow = [cb.Poles[i] for i in idxs]
-                if min((cbrow[a] - srow[b]).Length
-                       for a in range(6) for b in (0, 5)) > 1e-6:
+                # A true boundary pair matches along the WHOLE row, forward
+                # or reversed.  Testing only the two endpoints (the old
+                # heuristic) matched unrelated edges whose ends happened to
+                # be shared, producing eight spurious 10-15 mm "seams".
+                rev = None
+                for cand in (False, True):
+                    ref = list(reversed(srow)) if cand else srow
+                    if all((cbrow[k] - ref[k]).Length < 1e-6
+                           for k in range(6)):
+                        rev = cand
+                        break
+                if rev is None:
                     continue
-                rev = (cbrow[0] - srow[0]).Length > 1e-9
                 scb, acb = G.edge_seam(cb_surf, cedge, reverse=rev)
                 sst, ast = G.edge_seam(strip_surf, edge)
                 r = G.measure_seam(cb_surf, scb, acb, strip_surf, sst, ast, n=n)
-                out.append((s.Name, cedge, edge, r))
-                print("  CB.%-3s vs %s.%-2s c0=%.2e g1=%.4f deg k_gap=%.3e -> %s"
+                an = _analytic_seam(cb.Poles, s.Poles, cedge, edge, rev, n=n)
+                out.append((s.Name, cedge, edge, r, an))
+                print("  CB.%-3s vs %s.%-2s c0=%.2e g1=%.4f deg k_gap=%.3e "
+                      "| net c0=%.2e g1=%.4f deg k_gap=%.3e -> %s"
                       % (cedge, s.Name, edge, r["c0"], r["g1_deg"],
-                         r["k_gap"], G.classify(r)))
+                         r["k_gap"], an["c0"], an["g1_deg"], an["k_gap"],
+                         G.classify(r)))
     return out
 
 
