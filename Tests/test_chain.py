@@ -177,6 +177,162 @@ def test_chain_ground_truth(doc):
         FreeCAD.setActiveDocument(doc.Name)
 
 
+def test_chain_corner_ground_truth(doc):
+    """The 2x2 corner rebuild (ticket #91, closing #29): 24 node sketches
+    -> 12 edges -> 4 patches -> 4 ring blends -> 1 CornerBlend, entirely
+    through the ops layer, from a blank document.
+
+    The corner is the capstone of the pipeline, so this test carries the
+    full acceptance for it: every object is oracle-checked (check_edge /
+    check_patch / check_blend / check_corner_blend) AND pole-matched
+    against the stored fixture Resources/Test_files/Silk_Corner2x2.FCStd
+    at 1e-6 (12 x 4 edge poles, 4 x 16 patch poles, 4 x 24 blend poles,
+    36 corner poles). The tree census asserts criterion 3 of #40 for the
+    corner document: exactly one unified type per process step -- 12 Edge,
+    4 Patch, 4 Blend, 1 CornerBlend, no legacy Patch44 / BlendStrip /
+    ControlGrid66_4 object_type -- in process-step order (all Edges before
+    the first Patch, all Patches before the first Blend, all Blends before
+    the CornerBlend, on doc.Objects creation order, not assumed).
+    """
+    errors = []
+    checks = []
+    STRIPS = ("B12", "B24", "B43", "B31")
+
+    from Tests import corner_model as cm
+    fixture = FreeCAD.openDocument(cm.fixture_path())
+    FreeCAD.setActiveDocument(doc.Name)
+    try:
+        from SilkWorkflowOps import create_corner_blend
+        from SilkChecks import (check_edge, check_patch, check_blend,
+                                check_corner_blend)
+
+        with _CaptureConsole() as cap:
+            model = cm.build_corner_model(doc)
+            strips = [doc.getObject(n) for n in STRIPS]
+            corner = create_corner_blend(*strips)
+
+            # 24 sketches -> 12 edges
+            edge_devs = []
+            for name, e in model["edges"].items():
+                for cname, ok, detail in check_edge(e):
+                    if not ok:
+                        errors.append("%s %s: %s" % (name, cname, detail))
+                stored = fixture.getObject(name).Poles
+                dev = max((p - s).Length for p, s in zip(e.Poles, stored))
+                edge_devs.append(dev)
+                if dev > TOL:
+                    errors.append("%s poles deviate %.3e from fixture"
+                                  % (name, dev))
+            checks.append("12 edges: oracle green, max pole dev %.3e vs "
+                          "fixture within %.0e" % (max(edge_devs), TOL))
+
+            # 12 edges -> 4 unified Patches (the stored Edges list IS the
+            # resolved boundary cycle, so the oracle is fed p.Edges, #67)
+            patch_devs = []
+            for name, p in model["patches"].items():
+                for cname, ok, detail in check_patch(p, list(p.Edges)):
+                    if not ok:
+                        errors.append("%s %s: %s" % (name, cname, detail))
+                stored = fixture.getObject(name).Poles
+                dev = max((pp - ss).Length
+                          for pp, ss in zip(p.Poles, stored))
+                patch_devs.append(dev)
+                if dev > TOL:
+                    errors.append("%s poles deviate %.3e from fixture"
+                                  % (name, dev))
+            checks.append("4 patches: oracle green on their own Edges list, "
+                          "16 poles each, max pole dev %.3e vs fixture "
+                          "within %.0e" % (max(patch_devs), TOL))
+
+            # 4 patches -> 4 ring Blends
+            blend_devs = []
+            for name, b in model["strips"].items():
+                ref = fixture.getObject(name).Poles
+                for cname, ok, detail in check_blend(
+                        b, b.PatchA, b.PatchB, reference_poles=ref):
+                    if not ok:
+                        errors.append("%s %s: %s" % (name, cname, detail))
+                dev = max((pp - ss).Length for pp, ss in zip(b.Poles, ref))
+                blend_devs.append(dev)
+                if dev > TOL:
+                    errors.append("%s poles deviate %.3e from fixture"
+                                  % (name, dev))
+            checks.append("4 ring blends: oracle green incl. 24-pole match "
+                          "vs fixture, max pole dev %.3e within %.0e"
+                          % (max(blend_devs), TOL))
+
+            # 4 ring blends -> 1 CornerBlend; oracle green (CB1-CB4) and
+            # 36 poles matched against the stored fixture corner
+            if corner is None:
+                errors.append("corner blend was not created")
+            else:
+                for cname, ok, detail in check_corner_blend(corner, *strips):
+                    if not ok:
+                        errors.append("corner %s: %s" % (cname, detail))
+                stored = fixture.getObject("CornerBlend").Poles
+                cdev = max((p - s).Length
+                           for p, s in zip(corner.Poles, stored))
+                if len(stored) != 36 or cdev > TOL:
+                    errors.append("corner poles deviate %.3e from fixture "
+                                  "(%d stored poles)" % (cdev, len(stored)))
+                checks.append("1 corner blend: CB1-CB4 green, 36 poles, "
+                              "max pole dev %.3e vs fixture within %.0e"
+                              % (cdev, TOL))
+
+        # Tree census (#40 criterion 3 for the corner document)
+        census_before = len(errors)
+        allowed = ("Edge", "Patch", "Blend", "CornerBlend")
+        silk_types = []
+        for o in doc.Objects:
+            if o.isDerivedFrom("Sketcher::SketchObject"):
+                continue
+            t = getattr(o, "object_type", None)
+            if t is None:
+                errors.append("tree census: %s (%s) has no object_type"
+                              % (o.Name, o.TypeId))
+            else:
+                silk_types.append(t)
+        bad = sorted({t for t in silk_types if t not in allowed})
+        if bad:
+            errors.append("tree census: legacy object_type(s) in rebuilt "
+                          "corner tree: %s" % ", ".join(bad))
+        counts = {t: silk_types.count(t) for t in allowed}
+        for t, want in (("Edge", 12), ("Patch", 4), ("Blend", 4),
+                        ("CornerBlend", 1)):
+            if counts[t] != want:
+                errors.append("tree census: %d %s object(s) in rebuilt "
+                              "corner tree (want %d)" % (counts[t], t, want))
+        idx = {t: [i for i, o in enumerate(doc.Objects)
+                   if getattr(o, "object_type", None) == t]
+               for t in allowed}
+        if all(idx[t] for t in allowed):
+            if not (max(idx["Edge"]) < min(idx["Patch"])
+                    and max(idx["Patch"]) < min(idx["Blend"])
+                    and max(idx["Blend"]) < min(idx["CornerBlend"])):
+                errors.append("tree census: process-step order violated "
+                              "(Edge idxs %s, Patch idxs %s, Blend idxs %s, "
+                              "CornerBlend idxs %s)"
+                              % (idx["Edge"], idx["Patch"], idx["Blend"],
+                                 idx["CornerBlend"]))
+        else:
+            errors.append("tree census: type(s) missing, order not "
+                          "checkable (%s)" % idx)
+        if len(errors) > census_before:
+            checks.append("tree census: see errors")
+        else:
+            checks.append("tree census: 12 Edge / 4 Patch / 4 Blend / "
+                          "1 CornerBlend, unified types only, in "
+                          "process-step order")
+
+        errors += [f"console error: {e}" for e in cap.errors]
+
+        return {"pass": not errors, "errors": errors, "checks": checks}
+    finally:
+        FreeCAD.closeDocument(fixture.Name)
+        FreeCAD.setActiveDocument(doc.Name)
+
+
 ALL_TESTS = [
     test_chain_ground_truth,
+    test_chain_corner_ground_truth,
 ]

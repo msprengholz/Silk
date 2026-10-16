@@ -1,12 +1,13 @@
 """
 Visible-command contract for InitGui.py (ticket #50).
 
-The ticket shrinks the workbench's VISIBLE surface to five commands --
-the workflow triad (Edge -> Patch -> Blend), the guide, and the dev hot
-reload -- and groups them. The thing that can silently go wrong is the
-other direction: a name that is no longer visible but is still needed to
-RESTORE an old document, or a grouped structure that names something the
-user can no longer reach (or that does not exist at all).
+The ticket shrinks the workbench's VISIBLE surface to six commands --
+the workflow tetrad (Edge -> Patch -> Blend -> Corner Blend), the guide,
+and the dev hot reload -- and groups them. The thing that can silently go
+wrong is the other direction: a name that is no longer visible but is
+still needed to RESTORE an old document, or a grouped structure that
+names something the user can no longer reach (or that does not exist at
+all).
 
 So these tests assert three things:
 
@@ -51,11 +52,12 @@ INITGUI = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "..", "Resources", "Test_files")
 
-# The five, spelled out independently of InitGui.py's own constants so a
-# typo in the file cannot make the test agree with itself.
+# The visible set, spelled out independently of InitGui.py's own
+# constants so a typo in the file cannot make the test agree with itself.
 EXPECTED_VISIBLE = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend",
-                    "Silk_Guide", "Reload_Silk"]
-EXPECTED_WORKFLOW = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend"]
+                    "Silk_CreateCornerBlend", "Silk_Guide", "Reload_Silk"]
+EXPECTED_WORKFLOW = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend",
+                     "Silk_CreateCornerBlend"]
 EXPECTED_GROUPS = ["Workflow", "Guide", "Dev"]
 
 # Modules a legacy document's proxy needs at open time (ticket #50).
@@ -153,9 +155,10 @@ def document_modules(path):
     return sorted(m for m in mods if m and "." not in m)
 
 
-def test_visible_commands_are_exactly_the_five(doc):
-    """VISIBLE_COMMANDS is exactly the five, in workflow order, and none of
-    the thirty legacy command names survives in ANY visible structure."""
+def test_visible_commands_are_exactly_the_expected_set(doc):
+    """VISIBLE_COMMANDS is exactly the expected set, in workflow order, and
+    none of the thirty legacy command names survives in ANY visible
+    structure."""
     errors, checks = [], []
     mod, _tree = load_initgui()
     silk = mod.Silk
@@ -282,18 +285,30 @@ def test_grouped_structures_reference_only_visible_commands(doc):
     check(list(probe.list) == EXPECTED_VISIBLE,
           "self.list is %r, expected %r" % (probe.list, EXPECTED_VISIBLE),
           errors)
-    checks.append("Silk -> Workflow[3] / Guide[1] / Dev[1]; toolbar "
-                  "Edge,Patch,Blend | Guide | Reload")
+    checks.append("Silk -> Workflow[4] / Guide[1] / Dev[1]; toolbar "
+                  "Edge,Patch,Blend,Corner | Guide | Reload")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 def test_every_visible_command_is_registered(doc):
-    """Each of the five was really handed to Gui.addCommand.
+    """Each visible command was really handed to Gui.addCommand.
 
     Verified through public API only: Gui.listCommands() lists what the
-    command manager holds, and the QAction it built carries the command
-    name as its objectName with a non-empty label. A name that is listed
-    but never registered is absent from listCommands() and fails here."""
+    command manager holds, and Gui.Command.get(name).getAction() returns
+    the real QAction the command manager builds for it, carrying the
+    command name as its objectName and a non-empty label. A name that is
+    listed but never registered is absent from listCommands() and
+    Gui.Command.get returns None.
+
+    Why getAction() and not MainWindow.findChild(QAction, name): FreeCAD
+    builds a command's QAction when the command first lands in a toolbar
+    or menu, i.e. at Workbench.Initialize() time. A long-running dev
+    session therefore has actions only for the commands its toolbar was
+    built with, so findChild would silently test the session's startup
+    generation, not the code under test. Gui.Command.getAction() builds
+    the action on demand from the registered command, so the check is
+    generation-honest in a fresh session and in a hot-reloaded one alike.
+    """
     errors, checks = [], []
     if Gui is None:
         errors.append("no Gui: Gui.listCommands() unavailable, cannot "
@@ -314,26 +329,24 @@ def test_every_visible_command_is_registered(doc):
           "listed but NOT registered with FreeCAD: %r" % missing, errors)
 
     # the command manager built a real action for each one
-    try:
-        from PySide6 import QtGui
-        QAction = QtGui.QAction
-    except ImportError:
-        from PySide import QtGui
-        QAction = QtGui.QAction
-    mw = Gui.getMainWindow()
-    acted, labelled = [], []
+    acted = []
     for name in silk.VISIBLE_COMMANDS:
-        action = mw.findChild(QAction, name)
-        if action is None:
-            errors.append("no QAction named %s -- the command exists but "
-                          "FreeCAD built no action for it" % name)
+        command = Gui.Command.get(name)
+        if command is None:
+            errors.append("no command named %s -- absent from FreeCAD's "
+                          "command manager" % name)
+            continue
+        actions = command.getAction() or []
+        if not actions:
+            errors.append("command %s built no QAction" % name)
             continue
         acted.append(name)
-        if not action.text().strip():
+        wrong = [a for a in actions if a.objectName() != name]
+        if wrong:
+            errors.append("QAction(s) of %s carry the wrong objectName: %r"
+                          % (name, [a.objectName() for a in wrong]))
+        if not actions[0].text().strip():
             errors.append("QAction %s has an empty label" % name)
-        elif name in labelled:
-            errors.append("QAction %s duplicates %s" % (name, labelled[-1]))
-        labelled.append(name)
 
     checks.append("Gui.listCommands() holds all %d: %s"
                   % (len(acted), ", ".join(acted)))
@@ -502,7 +515,7 @@ def test_initialize_survives_freecad_namespace_strip(doc):
 
 
 ALL_TESTS = [
-    test_visible_commands_are_exactly_the_five,
+    test_visible_commands_are_exactly_the_expected_set,
     test_grouped_structures_reference_only_visible_commands,
     test_every_visible_command_is_registered,
     test_initialize_keeps_the_legacy_import_block,

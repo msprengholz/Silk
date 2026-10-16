@@ -218,11 +218,11 @@ def test_panel_lands_in_the_native_task_panel(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_section_stack_has_three_ordered_sections_and_takes_no_focus(doc):
-    """The three sections are Edge / Patch / Blend in that order, as
-    header/content pairs in the section stack, and the stack takes no
-    focus (focusPolicy NoFocus) so the 3D view keeps it -- which is
-    exactly why confirm cannot be a keyPressEvent."""
+def test_section_stack_has_four_ordered_sections_and_takes_no_focus(doc):
+    """The four sections are Edge / Patch / Blend / Corner Blend in that
+    order, as header/content pairs in the section stack, and the stack
+    takes no focus (focusPolicy NoFocus) so the 3D view keeps it -- which
+    is exactly why confirm cannot be a keyPressEvent."""
     errors, checks = [], []
     from PySide import QtCore
     from SilkTaskPanel import SECTION_EDGE, SECTION_TITLES
@@ -232,13 +232,13 @@ def test_section_stack_has_three_ordered_sections_and_takes_no_focus(doc):
         return {"pass": False, "errors": errors, "checks": checks}
     try:
         # #71: the container is a header/content stack, not a QToolBox.
-        # The structural properties this test cared about -- three
-        # sections, the right titles, no focus stolen from the 3D view --
+        # The structural properties this test cared about -- the sections,
+        # the right titles, no focus stolen from the 3D view --
         # are unchanged; only the widget behind them moved. The folding
         # behaviour a QToolBox could not express is asserted by
         # test_sections_are_header_content_pairs_not_a_toolbox.
         tb = panel.sections
-        check(tb.count() == 3, "stack has %d sections, expected 3" % tb.count(),
+        check(tb.count() == 4, "stack has %d sections, expected 4" % tb.count(),
               errors)
         titles = tb.header_titles()
         check(titles == list(SECTION_TITLES),
@@ -3794,8 +3794,8 @@ def test_sections_are_header_content_pairs_not_a_toolbox(doc):
               "cannot sit under the section above it there", errors)
         check(not [w for w in panel.findChildren(QtWidgets.QToolBox)],
               "a QToolBox survives somewhere in the panel", errors)
-        check(sections.count() == 3,
-              "the stack has %d sections, expected 3" % sections.count(),
+        check(sections.count() == 4,
+              "the stack has %d sections, expected 4" % sections.count(),
               errors)
         check(sections.header_titles() == list(SECTION_TITLES),
               "header titles %r != %r" % (sections.header_titles(),
@@ -3823,7 +3823,7 @@ def test_sections_are_header_content_pairs_not_a_toolbox(doc):
         check(sections.current_index() == SECTION_NONE,
               "folding everything left %r open" % sections.current_index(),
               errors)
-        check(not any(sections.page(i).isVisible() for i in range(3)),
+        check(not any(sections.page(i).isVisible() for i in range(4)),
               "a page is still visible with every section folded", errors)
         check(list(folded.values()) == sorted(folded.values()),
               "the headers are not in order on screen: %s" % folded, errors)
@@ -3889,9 +3889,63 @@ def test_sections_are_header_content_pairs_not_a_toolbox(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_corner_section_collects_four_blends_and_builds_the_corner(doc):
+    """The fourth section collects the 4 ring blends and ONE Enter builds
+    the corner: exactly one CornerBlend, oracle-green (CB1-CB4). The
+    section is capped at 4 (a 5th click is ignored)."""
+    errors, checks = [], []
+    import SilkChecks
+    import Tests.corner_model as cm
+    from SilkTaskPanel import SECTION_CORNER
+    from Tests.test_seam_resolver import _Capture
+
+    cm.build_corner_model(doc)
+    strips = [doc.getObject(n) for n in ("B12", "B24", "B43", "B31")]
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.sections.open(SECTION_CORNER)
+        check(panel.open_section() == SECTION_CORNER,
+              "the panel did not open the Corner Blend section", errors)
+        for s in strips:
+            _click(s)
+        got = panel.collected(SECTION_CORNER)
+        check(len(got) == 4,
+              "the corner section collected %d blends, want 4" % len(got),
+              errors)
+        # a 5th click on an already-collected strip is a no-op (not a dup)
+        _click(strips[0])
+        check(len(panel.collected(SECTION_CORNER)) == 4,
+              "a repeated click grew the corner collection past 4", errors)
+        check(panel.can_confirm(), "4 collected blends cannot be confirmed",
+              errors)
+
+        with _Capture() as cap:
+            applied = panel.panel_confirm()
+        doc.recompute()
+        corners = [o for o in doc.Objects
+                   if getattr(o, "object_type", "") == "CornerBlend"]
+        check(applied and len(corners) == 1,
+              "confirm produced %d CornerBlend(s), applied=%s, errors=%r"
+              % (len(corners), applied, cap.errors), errors)
+        if len(corners) == 1:
+            res = SilkChecks.check_corner_blend(corners[0], *strips)
+            failed = [(n, d) for n, ok, d in res if not ok]
+            check(not failed, "the panel's corner is not oracle-green: %s"
+                  % failed, errors)
+            checks.append("corner %s built by one confirm: CB1-CB4 green"
+                          % corners[0].Name)
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_panel_lands_in_the_native_task_panel,
-    test_section_stack_has_three_ordered_sections_and_takes_no_focus,
+    test_section_stack_has_four_ordered_sections_and_takes_no_focus,
     test_enter_shortcut_is_application_scoped_for_both_enter_keys,
     test_edge_stage_collect_one_sketch_then_confirm,
     test_edge_stage_two_sketches_reach_the_2n_mode,
@@ -3939,5 +3993,7 @@ ALL_TESTS = [
     test_sections_are_header_content_pairs_not_a_toolbox,
     test_enter_in_a_band_editor_commits_then_confirms,
     test_in_progress_band_edit_is_committed_not_dropped_by_a_refresh,
+    # #91: the fourth section builds the corner in one confirm
+    test_corner_section_collects_four_blends_and_builds_the_corner,
     test_no_production_module_knows_the_panel,
 ]
