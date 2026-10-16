@@ -37,15 +37,18 @@ derive their reference rows from that Edge's endpoint poles (the seam
 the blend used) instead of auto-detecting the first matching corner
 pair -- which is what makes a SECOND seam on a pair sharing two edges
 (closed-ring builds) checkable. Without it, behaviour is unchanged.
-Corner blends (CB1-CB4, #28):
+Corner blends (CB1-CB4, #28; the fill is the subgrid chain since #91):
   CB1 C0 boundary: the 6x6 grid's 4 boundary sides match the 4 ring
       strips' corner-end rows, orientation-independent (1e-6)
-  CB2 interior fill: all 36 poles match the ControlGrid66_4 fill of the
-      independently derived boundary rows (1e-6)
+  CB2 interior fill: all 36 poles match the legacy subgrid chain
+      (SubGrid33_2Grid64 x4 -> ControlGrid66_4Sub) fed the same canonical
+      grids (1e-6)
   CB3 corner surface valid + no self-intersection + normal field coherent
   CB4 full 36-pole match against a provided reference (optional)
 
-Tolerances (spec #16): poles 1e-6, weights exact (1.0).
+Tolerances (spec #16): poles 1e-6. Weights are carried, not assumed:
+`blend_poly_2x4_1x6` can emit rational weights, so the corner's own
+weights are only required to be positive.
 
 MIRROR, DO NOT IMPORT: several helpers here deliberately re-derive the
 object code's tables (_detect_seam, _pinned_seam, _oracle_band_cells,
@@ -965,7 +968,7 @@ def _corner_reference_rows(strips, tol=0.01):
         pa, pb = s.PatchA, s.PatchB
         if pa is None or pb is None:
             return None, None
-        # #83: the mirror of SilkCorner._derive_rows -- the strip's side is
+        # #83: the mirror of SilkCorner.corner_inputs -- the strip's side is
         # read off the STRIP (a unified Blend pins its Edge), so a pair
         # sharing two seams cannot collapse to one side here either.
         e_a, ss_a = _oracle_side_and_end(s, pa, tol)
@@ -1018,7 +1021,7 @@ def _check_corner_blend(cb, strips, reference_poles):
     poles = cb.Poles or []
     weights = cb.Weights or []
     ok = (st == "CornerBlend" and len(poles) == 36
-          and len(weights) == 36 and all(abs(w - 1.0) < 1e-12 for w in weights)
+          and len(weights) == 36 and all(w > 0.0 for w in weights)
           and len(list(getattr(cb, "Strips", []) or [])) == 4
           and getattr(cb, "Shape", None) is not None
           and not cb.Shape.isNull())
@@ -1066,44 +1069,61 @@ def _check_corner_blend(cb, strips, reference_poles):
         results.append(("CB1_c0_boundary", cb1_dev <= TOL,
                         "max boundary deviation %.3e" % cb1_dev))
 
-    # CB2: interior fill -- all 36 poles must match the ControlGrid66_4
-    # fill of the independently derived boundary rows
+    # CB2: interior fill -- all 36 poles must match the legacy subgrid
+    # chain (SubGrid33_2Grid64 x4 -> ControlGrid66_4Sub) fed the SAME
+    # canonical grids (#91). The legacy classes are the ground-truth
+    # oracle; our machinery is required to match them pole for pole.
     try:
         import ArachNURBS as AN
+        from SilkCorner import corner_inputs, CORNER_DEFAULT_TOL
         doc = cb.Document
-        carriers = []
-        grid = None
-        try:
-            for i, row in enumerate(rows):
-                c = doc.addObject("Part::FeaturePython", "_cb_ref_poly")
-                c.addProperty("App::PropertyVectorList", "Poles", "Internal",
-                              "p").Poles
-                c.addProperty("App::PropertyFloatList", "Weights", "Internal",
-                              "w").Weights
-                c.Poles = row
-                c.Weights = [1.0] * 6
-                carriers.append(c)
-            grid = doc.addObject("Part::FeaturePython", "_cb_ref_grid")
-            AN.ControlGrid66_4(grid, *carriers)
-            grid.recompute()
-            ref_poles = list(grid.Poles) if hasattr(grid, "Poles") else []
-        finally:
-            # temp reference objects must not survive a failed build;
-            # cleanup runs before the error result below is returned
-            for name in ([grid.Name] if grid is not None else []) \
-                    + [c.Name for c in carriers]:
-                if doc.getObject(name) is not None:
-                    try:
-                        doc.removeObject(name)
-                    except Exception:
-                        pass
-        if len(ref_poles) != 36:
+        grids, _cells, why = corner_inputs(
+            list(strips), getattr(cb, "tolerance", CORNER_DEFAULT_TOL))
+        if grids is None:
             results.append(("CB2_interior_fill", False,
-                            "reference fill produced %d poles" % len(ref_poles)))
+                            "could not derive corner grids: %s" % why))
         else:
-            cb2_dev = max((p - r).Length for p, r in zip(poles, ref_poles))
-            results.append(("CB2_interior_fill", cb2_dev <= TOL,
-                            "max deviation from reference fill %.3e" % cb2_dev))
+            carriers, subs, grid = [], [], None
+            ref_poles = []
+            try:
+                for p, w in grids:
+                    c = doc.addObject("Part::FeaturePython", "_cb_ref_poly")
+                    c.addProperty("App::PropertyVectorList", "Poles",
+                                  "Internal", "p").Poles
+                    c.addProperty("App::PropertyFloatList", "Weights",
+                                  "Internal", "w").Weights
+                    c.Poles = p
+                    c.Weights = w
+                    carriers.append(c)
+                for i in range(4):
+                    sg = doc.addObject("Part::FeaturePython", "_cb_ref_sub")
+                    AN.SubGrid33_2Grid64(sg, carriers[i],
+                                         carriers[(i + 1) % 4])
+                    sg.recompute()
+                    subs.append(sg)
+                grid = doc.addObject("Part::FeaturePython", "_cb_ref_grid")
+                AN.ControlGrid66_4Sub(grid, *subs)
+                grid.recompute()
+                ref_poles = list(grid.Poles) if hasattr(grid, "Poles") else []
+            finally:
+                # temp reference objects must not survive a failed build;
+                # cleanup runs before the error result below is returned
+                for o in ([grid] if grid is not None else []) + subs + carriers:
+                    if o is not None and doc.getObject(o.Name) is not None:
+                        try:
+                            doc.removeObject(o.Name)
+                        except Exception:
+                            pass
+            if len(ref_poles) != 36:
+                results.append(("CB2_interior_fill", False,
+                                "reference chain produced %d poles"
+                                % len(ref_poles)))
+            else:
+                cb2_dev = max((p - r).Length
+                              for p, r in zip(poles, ref_poles))
+                results.append(("CB2_interior_fill", cb2_dev <= TOL,
+                                "max deviation from reference chain %.3e"
+                                % cb2_dev))
     except Exception as e2:
         results.append(("CB2_interior_fill", False,
                         "CB2 check error: %r" % e2))

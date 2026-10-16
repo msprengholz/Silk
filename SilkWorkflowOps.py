@@ -20,7 +20,7 @@ import FreeCAD
 from SilkEdge import Edge, EdgeViewProvider, classify_sketches
 from SilkPatch import Patch, PatchViewProvider
 from SilkBlend import Blend, BlendStripViewProvider, BLEND_TYPES, PATCH_TYPES
-from SilkMachinery import loop_order
+from SilkMachinery import loop_order, corner_ring
 
 
 def create_edge(sketches, name="Edge"):
@@ -289,18 +289,64 @@ def seam_inventory(doc=None):
     return entries
 
 
-def create_corner_blend(strip0, strip1, strip2, strip3, name="CornerBlend"):
-    """Create a CornerBlend filling the central region where 4 patches
-    meet (#28). Takes the 4 ring BlendStrips in cyclic order; each
-    strip's corner-end row feeds AN.ControlGrid66_4 + AN.CubicSurface_66.
+def _existing_corner_blend(doc, strips):
+    """The CornerBlend already filling exactly this strip SET, or None
+    (#28/#91 idempotency). Identity-only: a junction is identified by its
+    four blend strips, whatever order they were handed over in."""
+    want = {id(s) for s in strips}
+    for o in doc.Objects:
+        if getattr(o, "object_type", None) != "CornerBlend":
+            continue
+        have = list(getattr(o, "Strips", []) or [])
+        if len(have) == 4 and {id(s) for s in have} == want:
+            return o
+    return None
+
+
+def create_corner_blend(*strips, name="CornerBlend"):
+    """Create the CornerBlend filling the junction where 4 blend strips
+    meet (#28; rebuilt on the subgrid chain in #91).
+
+    `strips` are the 4 ring Blend strips, in any order (or one list).
+    The ring resolver orders them; the corner geometry is computed
+    BEFORE anything is constructed, so a selection that is not a 4-strip
+    ring around one shared junction is refused by name and leaves NO
+    object in the tree (the #80/#83 "invalid + Up-to-date" lesson: never
+    park a dead object in the document). A junction that already has a
+    corner returns that existing CornerBlend -- an idempotent no-op.
 
     addObject -> CornerBlend constructor -> view provider -> recompute ->
-    return the created object.
+    return the created object. GUI-free, so the panel and toolbar wrap it
+    in their own transaction.
     """
-    from SilkCorner import CornerBlend, CornerBlendViewProvider
+    from SilkCorner import (CornerBlend, CornerBlendViewProvider,
+                            corner_inputs, CORNER_DEFAULT_TOL)
     doc = FreeCAD.ActiveDocument
+    if len(strips) == 1 and isinstance(strips[0], (list, tuple)):
+        strips = list(strips[0])
+    strips = [s for s in (strips or []) if s is not None]
+    if len(strips) != 4:
+        FreeCAD.Console.PrintError(
+            "Silk: cannot create a corner blend from %d blend%s -- a corner "
+            "is the ring of exactly 4 blends around one junction. Nothing "
+            "was created.\n"
+            % (len(strips), "" if len(strips) == 1 else "s"))
+        return None
+    grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL)
+    if grids is None:
+        FreeCAD.Console.PrintError(
+            "Silk: cannot create a corner blend from these 4 blends -- %s. "
+            "Nothing was created.\n" % why)
+        return None
+    existing = _existing_corner_blend(doc, strips)
+    if existing is not None:
+        FreeCAD.Console.PrintMessage(
+            "Silk: this junction already has a corner blend (%s) -- no "
+            "second one created\n" % existing.Name)
+        return existing
+    ordered, _why = corner_ring(strips)
     obj = doc.addObject("Part::FeaturePython", name)
-    CornerBlend(obj, strip0, strip1, strip2, strip3)
+    CornerBlend(obj, ordered)
     CornerBlendViewProvider(obj.ViewObject)
     obj.ViewObject.LineWidth = 1.50
     obj.ViewObject.LineColor = (1.00, 0.67, 0.00)

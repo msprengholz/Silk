@@ -1,48 +1,140 @@
 """
-SilkCorner — CornerBlend FeaturePython for the 4-subgrid corner fill (#28).
+SilkCorner — CornerBlend FeaturePython for the 4-subgrid corner fill (#28, #91).
 
-Where 4 Patch44 objects meet at a central junction, each contributes its
-0.1x0.1 corner subgrid cell (excluded from the ring blend bands by #33).
-The CornerBlend takes the 4 ring BlendStrips (DAG: patch -> strip ->
-corner blend), extracts each strip's corner-end row — the 6-pole edge of
-the strip's blend surface at the corner-cell side — and builds a 6x6
-control grid with AN.ControlGrid66_4 + AN.CubicSurface_66 (the existing
-4-sided corner blend primitive).
+Where 4 Patch objects meet at a central junction, each contributes its
+corner subgrid cell (excluded from the ring blend bands by #33). The
+CornerBlend takes the 4 ring Blend strips (DAG: patch -> strip ->
+corner blend) and builds Silk's real corner: the four consecutive strip
+pairs each make a 3x3 subgrid (`SubGrid33_2Grid64`), the four subgrids
+assemble into a 6x6 (`ControlGrid66_4Sub`), and the surface comes from
+`CubicSurface_66` (never `buildFromPolesMultsKnots`).
 
-Strip corner-end row derivation: for each strip side (patch), the
-corner cell at the junction is the subgrid cell where the patch's two
-shared (seam) edges meet; the corner-end row is the blend row adjacent
-to that corner cell along the strip's band axis (row 3 if the corner
-cell sits above the band cell, row 0 if below).
+#91: the geometry machinery is a PURE port of the two upstream classes
+into Silk's own code -- `SilkMachinery` holds the ring resolver and the
+subgrid chain (`corner_ring`, `corner_grid`, `subgrid33_2grid64`,
+`control_grid66_4sub`, `orient_junction_row`), and this module holds the
+strip-to-grid derivation shared by the object and the ops validator
+(`corner_inputs`, `corner_from_strips`). Those upstream classes are
+restore shims (#7) and are never called at runtime; they remain the
+pole-for-pole oracle the tests compare against. The old #28 fill
+(`ControlGrid66_4`, a boundary-curve constructor whose interior was
+difference propagation) is gone.
 
 Usage:
-  1. Build the 4 ring BlendStrips (in cyclic order)
+  1. Build the 4 ring Blend strips
   2. Run create_corner_blend(strip0, strip1, strip2, strip3)
   3. The corner blend auto-updates when any linked strip recomputes
 """
 
 import FreeCAD
+from FreeCAD import Gui
 import Part
 import ArachNURBS as AN
 
-from SilkBlend import band_cells, side_and_end
-from SilkMachinery import build_intervals, split_pair
+from SilkBlend import band_cells, side_and_end, BLEND_TYPES
+from SilkMachinery import build_intervals, split_pair, corner_ring, \
+    corner_grid, orient_junction_row
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
 iconPath = path_Silk_icons + "/ControlGrid66_4Sub.svg"
 
+# The corner blend's own default tolerance for the strip-side / corner-cell
+# derivation (matches the object's `tolerance` property default).
+CORNER_DEFAULT_TOL = 0.01
+
+# The shared-corner match tolerance of the subgrid chain. Upstream's
+# `SubGrid33_2Grid64` uses `default_tol` = 1e-6; the corner poles are
+# exact, so a tight tolerance is right and cannot match two corners.
+CORNER_TOL = 1e-6
+
+
+# ---- the pure corner derivation (#91) ------------------------------------
+#
+# Both the object's `execute()` and the ops-layer validator run these, so
+# there is exactly ONE definition of "what corner does this strip set
+# make". No document, no object, no console here.
+
+def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
+    """The four strips' 24-pole grids in ring order, each with its
+    junction-end row at V = 3, plus the corner cell of each patch.
+
+    Returns (grids, corner_cells, None) or (None, None, reason). Every
+    refusal names the strip (or patch) that caused it.
+    """
+    ordered, why = corner_ring(strips)
+    if ordered is None:
+        return None, None, why
+    grids = []
+    corner_cells = {}
+    for s in ordered:
+        pa = getattr(s, "PatchA", None)
+        pb = getattr(s, "PatchB", None)
+        if pa is None or pb is None:
+            return None, None, "blend %s has no patches" % s.Name
+        e_a, ss_a = side_and_end(s, pa, tol)
+        e_b, ss_b = side_and_end(s, pb, tol)
+        if not e_a or not e_b:
+            return None, None, ("blend %s: no shared edge between %s and %s"
+                                % (s.Name, pa.Name, pb.Name))
+        bca = band_cells(pa, e_a, ss_a)
+        bcb = band_cells(pb, e_b, ss_b)
+        if len(bca) != 1 or len(bcb) != 1:
+            return None, None, ("blend %s: its band must cover exactly 1 cell "
+                                "per side (got %d/%d)"
+                                % (s.Name, len(bca), len(bcb)))
+        li_map = {}
+        for pth, e, bc in ((pa, e_a, bca), (pb, e_b, bcb)):
+            iu_c, iv_c, nu, nv = CornerBlend._corner_cell(pth, ordered, tol)
+            if iu_c is None or iv_c is None:
+                return None, None, ("patch %s: corner cell at the 4-patch "
+                                    "junction not found" % pth.Name)
+            iu_b, iv_b = divmod(bc[0], nv)
+            # corner-end row: 3 if the corner cell sits above the band
+            # cell along the band axis, else 0
+            if e[0] == "U":
+                li_map[pth.Name] = 3 if iu_c > iu_b else 0
+            else:
+                li_map[pth.Name] = 3 if iv_c > iv_b else 0
+            corner_cells[pth.Name] = (pth, iu_c, iv_c, nu, nv)
+        if li_map[pa.Name] != li_map[pb.Name]:
+            return None, None, ("blend %s: its two patches disagree about "
+                                "which end is the junction (twisted input)"
+                                % s.Name)
+        poles = list(getattr(s, "Poles", None) or [])
+        weights = list(getattr(s, "Weights", None) or [])
+        if len(poles) != 24 or len(weights) != 24:
+            return None, None, ("blend %s: expected a 24-pole grid, got %d "
+                                "poles / %d weights"
+                                % (s.Name, len(poles), len(weights)))
+        grids.append(orient_junction_row(poles, weights, li_map[pa.Name]))
+    return grids, corner_cells, None
+
+
+def corner_from_strips(strips, tol=CORNER_DEFAULT_TOL):
+    """The full corner: four strips -> (poles36, weights36, corner_cells).
+
+    Returns (p36, w36, corner_cells, None) or (None, None, None, reason).
+    """
+    grids, corner_cells, why = corner_inputs(strips, tol)
+    if grids is None:
+        return None, None, None, why
+    p36, w36, why = corner_grid(grids, CORNER_TOL)
+    if p36 is None:
+        return None, None, None, why
+    return p36, w36, corner_cells, None
+
 
 class CornerBlend:
     """FeaturePython: fills the central region where 4 patches meet."""
 
-    def __init__(self, obj, strip0, strip1, strip2, strip3):
+    def __init__(self, obj, strips):
         obj.addProperty("App::PropertyLinkList", "Strips", "Inputs",
                         "ring blend strips in cyclic order"
-                        ).Strips = [strip0, strip1, strip2, strip3]
+                        ).Strips = list(strips)
         obj.addProperty("App::PropertyFloat", "tolerance", "Inputs",
-                        "corner matching tolerance").tolerance = 0.01
+                        "corner matching tolerance").tolerance = CORNER_DEFAULT_TOL
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs",
                         "corner grid poles (6x6)").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "Outputs",
@@ -109,103 +201,23 @@ class CornerBlend:
                 iu_c = nu - 1 if e[1] == "1" else 0
         return iu_c, iv_c, nu, nv
 
-    def _derive_rows(self, fp, strips):
-        """Corner-end row per strip + corner cell per patch.
-
-        Returns (rows, corner_cells) or (None, None) on any
-        inconsistency. rows are in the given strip order (need not be
-        ring order — _order_loop fixes that).
-        """
-        tol = fp.tolerance
-        rows = []
-        corner_cells = {}
-        for s in strips:
-            pa, pb = s.PatchA, s.PatchB
-            if pa is None or pb is None:
-                FreeCAD.Console.PrintError(
-                    "Silk: corner blend strip %s has no patches.\n" % s.Name)
-                return None, None
-            e_a, ss_a = side_and_end(s, pa, tol)
-            e_b, ss_b = side_and_end(s, pb, tol)
-            if not e_a or not e_b:
-                FreeCAD.Console.PrintError(
-                    "Silk: corner blend strip %s: no shared edge found "
-                    "between %s and %s.\n" % (s.Name, pa.Name, pb.Name))
-                return None, None
-            bca = band_cells(pa, e_a, ss_a)
-            bcb = band_cells(pb, e_b, ss_b)
-            if len(bca) != 1 or len(bcb) != 1:
-                FreeCAD.Console.PrintError(
-                    "Silk: corner blend strip %s: band must cover exactly "
-                    "1 cell per side (got %d/%d).\n"
-                    % (s.Name, len(bca), len(bcb)))
-                return None, None
-            li_map = {}
-            for pth, e, bc in ((pa, e_a, bca), (pb, e_b, bcb)):
-                iu_c, iv_c, nu, nv = self._corner_cell(pth, strips, tol)
-                if iu_c is None or iv_c is None:
-                    FreeCAD.Console.PrintError(
-                        "Silk: patch %s: corner cell at the 4-patch "
-                        "junction not found.\n" % pth.Name)
-                    return None, None
-                iu_b, iv_b = divmod(bc[0], nv)
-                # corner-end blend row: 3 if the corner cell sits above
-                # the band cell along the band axis, else 0
-                if e[0] == "U":
-                    li_map[pth.Name] = 3 if iu_c > iu_b else 0
-                else:
-                    li_map[pth.Name] = 3 if iv_c > iv_b else 0
-                corner_cells[pth.Name] = (pth, iu_c, iv_c, nu, nv)
-            if li_map[pa.Name] != li_map[pb.Name]:
-                FreeCAD.Console.PrintError(
-                    "Silk: corner blend strip %s: inconsistent corner-end "
-                    "row between sides (%s vs %s) — twisted input.\n"
-                    % (s.Name, li_map[pa.Name], li_map[pb.Name]))
-                return None, None
-            li = li_map[pa.Name]
-            poles = s.Poles or []
-            if len(poles) != 24:
-                FreeCAD.Console.PrintError(
-                    "Silk: corner blend strip %s: expected 24 poles, got "
-                    "%d.\n" % (s.Name, len(poles)))
-                return None, None
-            rows.append(list(poles[li * 6: li * 6 + 6]))
-        return rows, corner_cells
-
-    @staticmethod
-    def _order_loop(rows, tol):
-        """Reorder the 4 boundary rows into a closed loop: each next row
-        shares an endpoint with the previous one, and the last shares
-        one with the first. Returns the ordered rows or None."""
-        remaining = list(rows[1:])
-        ordered = [rows[0]]
-        while remaining:
-            last = ordered[-1]
-            for i, r in enumerate(remaining):
-                d = min((last[a] - r[b]).Length
-                        for a in (0, 5) for b in (0, 5))
-                if d <= tol:
-                    ordered.append(remaining.pop(i))
-                    break
-            else:
-                return None
-        d = min((ordered[-1][a] - ordered[0][b]).Length
-                for a in (0, 5) for b in (0, 5))
-        return ordered if d <= tol else None
+    def _refuse(self, fp, why):
+        """Refuse loudly and leave the object EMPTY rather than stale: a
+        corner that can no longer be built shows nothing and says why."""
+        fp.Poles = []
+        fp.Weights = []
+        fp.Legs = []
+        fp.Shape = Part.Shape()
+        FreeCAD.Console.PrintError(
+            "Silk: corner blend %s: %s\n" % (fp.Name, why))
 
     # ---- execution --------------------------------------------------
 
     def _do_execute(self, fp):
-        strips = list(fp.Strips)
-        rows, corner_cells = self._derive_rows(fp, strips)
-        if rows is None:
-            return
-
-        ordered = self._order_loop(rows, fp.tolerance)
-        if ordered is None:
-            FreeCAD.Console.PrintError(
-                "Silk: corner blend %s: strip corner-end rows do not form "
-                "a closed loop.\n" % fp.Name)
+        p36, w36, corner_cells, why = corner_from_strips(
+            list(fp.Strips), fp.tolerance)
+        if p36 is None:
+            self._refuse(fp, why)
             return
 
         # hide the corner cells (the region this blend covers)
@@ -224,48 +236,15 @@ class CornerBlend:
             cur.add(idx)
             pth._HiddenSubgridIdxs = sorted(cur)
 
-        # 6x6 control grid from the 4 boundary rows (ControlGrid66_4
-        # needs pole-carrying objects, so build throwaway carriers)
-        doc = fp.Document
-        carriers = []
-        grid = None
-        try:
-            for i, row in enumerate(ordered):
-                c = doc.addObject("Part::FeaturePython", "_cb_poly_tmp")
-                c.addProperty("App::PropertyVectorList", "Poles", "Internal",
-                              "boundary row poles").Poles
-                c.addProperty("App::PropertyFloatList", "Weights", "Internal",
-                              "boundary row weights").Weights
-                c.Poles = row
-                c.Weights = [1.0] * 6
-                carriers.append(c)
-            grid = doc.addObject("Part::FeaturePython", "_cb_grid_tmp")
-            AN.ControlGrid66_4(grid, *carriers)
-            grid.recompute()
-            poles36 = list(grid.Poles) if hasattr(grid, "Poles") else []
-            weights36 = list(grid.Weights) if hasattr(grid, "Weights") else []
-        finally:
-            # temp carriers must not survive a failed build
-            for name in ([grid.Name] if grid is not None else []) \
-                    + [c.Name for c in carriers]:
-                if doc.getObject(name) is not None:
-                    try:
-                        doc.removeObject(name)
-                    except Exception:
-                        pass
-
-        if len(poles36) != 36 or len(weights36) != 36:
-            FreeCAD.Console.PrintError(
-                "Silk: corner blend %s: ControlGrid66_4 produced %d/%d "
-                "poles/weights (want 36).\n"
-                % (fp.Name, len(poles36), len(weights36)))
-            return
-
-        fp.Poles = poles36
-        fp.Weights = weights36
+        fp.Poles = p36
+        fp.Weights = w36
         fp.Legs = AN.drawGrid(fp.Poles, 6)
 
-        # corner surface via AN.CubicSurface_66 (never buildFromPolesMultsKnots)
+        # corner surface via AN.CubicSurface_66 (never
+        # buildFromPolesMultsKnots) -- it reads Grid.Poles / Grid.Weights,
+        # so the cross-multiplied rational weights are carried into it.
+        doc = fp.Document
+        surf_shape = None
         tmp_surf = None
         try:
             tmp_surf = doc.addObject("Part::FeaturePython", "_cb_surf_tmp")
@@ -317,3 +296,45 @@ class CornerBlendViewProvider:
 
     def __setstate__(self, state):
         return None
+
+
+class CreateCornerBlend:
+    """GUI command — select the 4 blend strips that ring a shared
+    junction -> CornerBlend (ticket #91).
+
+    The whole contract (adjudicating the ring, refusing a non-junction or
+    repeated strip set by name, the idempotent "already has a corner"
+    no-op) lives in SilkWorkflowOps.create_corner_blend. This class only
+    reads the selection, opens the undo transaction the toolbar triad did
+    not (#91), and reports."""
+
+    def GetResources(self):
+        return {'Pixmap': iconPath, 'MenuText': 'Silk Corner Blend',
+                'ToolTip': 'Create the corner blend where four blends ring '
+                           'one shared junction.'}
+
+    def Activated(self):
+        sel = Gui.Selection.getSelection()
+        strips = [o for o in sel
+                  if getattr(o, "object_type", None) in BLEND_TYPES]
+        from SilkWorkflowOps import create_corner_blend
+        doc = FreeCAD.ActiveDocument
+        known = {o.Name for o in doc.Objects}
+        doc.openTransaction("Silk corner blend")
+        try:
+            corner = create_corner_blend(*strips)
+        finally:
+            doc.commitTransaction()
+        if corner is None:
+            return  # the resolver already printed its refusal
+        if corner.Name not in known:
+            FreeCAD.Console.PrintMessage(
+                "Corner blend created: %s\n" % corner.Name)
+        # else: the resolver returned the EXISTING corner (no-op) -- its
+        # own message already reached the user; do not double-report.
+
+    def IsActive(self):
+        return Gui is not None
+
+
+Gui.addCommand("Silk_CreateCornerBlend", CreateCornerBlend())
