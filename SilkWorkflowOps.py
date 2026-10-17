@@ -362,3 +362,201 @@ def create_corner_blend(*strips, name="CornerBlend"):
     obj.ViewObject.Transparency = 30
     doc.recompute()
     return obj
+
+
+# ---- the corner fill (#96) ------------------------------------------------
+#
+# The owner's ask: fill a whole corner with ONE patch and judge it by eye.
+# `Surface::Filling` is a FOREIGN object -- outside Silk's band/split
+# machinery and outside its restore and regression coverage -- so it stays
+# opt-in and is only built when the user asks for it (ADR-0005, "Reversal,
+# and its narrowing").
+#
+# Measured on this build (docs/research/silk-fill-picking.md): the fill takes
+# the ring strips' own `EdgeN` boundary rows DIRECTLY -- no throwaway
+# `Part::Feature` carriers, so it stays live-linked to the strips -- and
+# returns one valid face at order 0/1/2 with `distToShape` boundary residual
+# 0.0 mm. The manual Surface-workbench path is blocked on our side by
+# `DisplayMode = "Shaded"` (the picker can only return `Face1` there), which
+# is why the boundary is taken from the SELECTION here instead of from a pick.
+
+# `Surface::Filling.BoundaryOrder`: 0 = C0, 1 = G1, 2 = G2. >= 3 is refused by
+# FreeCAD ("BRepFill : The continuity is not G0 G1 or G2").
+CORNER_FILL_ORDERS = (0, 1, 2)
+
+# How far the fill's own surface may sit from a boundary edge it claims. A
+# sound fill CONTAINS its boundary (residual 0.0 mm by construction, measured
+# at every order); the over-constrained raw-patch feed measured 0.59-7.3 mm
+# AND an invalid face (docs/research/silk-fill-picking.md). This gate is the
+# second belt behind the validity check.
+FILL_CONTACT_TOL = 1e-3
+
+
+def _row_edge_subname(shape, row, tol=1e-6):
+    """("EdgeN", None) for the one edge of `shape` a Bezier boundary ROW
+    spans, or (None, reason).
+
+    A cubic's end points ARE its end poles, so the junction-end row of a
+    strip's 24-pole grid names that strip's own boundary edge by comparing
+    endpoints -- the row is usually the row-reversed or column-flipped copy
+    `orient_junction_row` / `_orient_ring_columns` produced, so both orders
+    are matched. Nothing is assumed about which of the four it is.
+    """
+    ea, eb = row[0], row[-1]
+    hits = []
+    for i, e in enumerate(shape.Edges):
+        fa = e.valueAt(e.FirstParameter)
+        fb = e.valueAt(e.LastParameter)
+        if (((fa - ea).Length < tol and (fb - eb).Length < tol)
+                or ((fa - eb).Length < tol and (fb - ea).Length < tol)):
+            hits.append("Edge%d" % (i + 1))
+    if len(hits) == 1:
+        return hits[0], None
+    if not hits:
+        return None, "it has no boundary edge on the junction row"
+    return None, "it has %d boundary edges on the junction row" % len(hits)
+
+
+def corner_fill_boundary(strips, tol=None):
+    """((links, faces), None) or (None, reason) -- the hole the RING closes.
+
+    `links` is `[(strip, "EdgeN"), ...]` in ring order and `faces` the
+    matching per-edge support faces ("Face1": the strip's own surface) --
+    exactly the wiring `Surface::Filling` takes. Pure: no object, no
+    document, no console.
+
+    The ring contract is `SilkCorner.corner_inputs`, the SAME one the corner
+    blend is built on, so a selection that is not a ring of 3 or 4 strips
+    around one junction is refused by NAME here, before anything is built.
+    The junction-end rows come from it too: `orient_junction_row` leaves the
+    ring's corner row at V = 3, so it is poles 18..23 of each grid.
+
+    A triangular corner's synthetic 4th member is not a strip and carries no
+    boundary edge, so a grid that matches no strip is skipped: the ring's own
+    three strips bound that hole. A row that matches MORE than one strip, or
+    a ring whose rows cannot all be named, is refused.
+    """
+    from SilkCorner import corner_inputs, CORNER_DEFAULT_TOL
+    tol = CORNER_DEFAULT_TOL if tol is None else tol
+    if len(strips) == 1 and isinstance(strips[0], (list, tuple)):
+        strips = list(strips[0])
+    strips = [s for s in (strips or []) if s is not None]
+    grids, _cells, why = corner_inputs(strips, tol)
+    if grids is None:
+        return None, why
+    links, faces = [], []
+    for grid in grids:
+        poles = grid[0] if isinstance(grid, tuple) else grid
+        row = list(poles)[18:24]
+        matched = []
+        for s in strips:
+            subname, _why = _row_edge_subname(s.Shape, row)
+            if subname is not None:
+                matched.append((s, subname))
+        if not matched:
+            continue        # the 3-valent ring's synthetic member
+        if len(matched) > 1:
+            return None, ("the corner's junction row cannot be attributed to "
+                          "one strip (%s)"
+                          % ", ".join(s.Name for s, _n in matched))
+        links.append(matched[0])
+        faces.append("Face1")
+    if len(links) != len(strips):
+        return None, ("only %d of the ring's %d strips carry a junction "
+                      "boundary edge" % (len(links), len(strips)))
+    return (links, faces), None
+
+
+def corner_fill_problem(fill, links):
+    """None when `fill` is a sound fill of `links`, else the reason.
+
+    A fill must have a face, be a valid shape, and CONTAIN every boundary
+    edge it was given -- the C0 check, and the reason an over-constrained
+    boundary can never be left standing.
+    """
+    shape = fill.Shape
+    if not shape.Faces:
+        return "it produced no face"
+    if not shape.isValid():
+        return "the face is not a valid shape"
+    for obj, subname in links:
+        distance = shape.distToShape(obj.Shape.getElement(subname))[0]
+        if distance > FILL_CONTACT_TOL:
+            return ("it misses %s.%s by %.4g mm"
+                    % (obj.Name, subname, distance))
+    return None
+
+
+def create_corner_fill(*strips, order=1, name="Surface"):
+    """Create ONE `Surface::Filling` over the hole the corner's ring strips
+    close (#96).
+
+    `strips` are the ring Blend strips, in any order (or one list): three
+    where three patches meet, four where four do -- the same selection
+    `create_corner_blend` takes. `order` is the fill's own continuity order
+    (0 = C0, 1 = G1, 2 = G2); the default is 1, the bar this workbench's own
+    blends reach and the strongest of the three measured for this feed
+    (order 2 is NOT G2 here and measures worse: docs/research/
+    silk-corner-g2.md).
+
+    Everything that can be checked is checked BEFORE anything is
+    constructed: a selection that is not a ring around one junction, a ring
+    whose junction rows cannot be named, or an order outside 0/1/2 is
+    refused by name and leaves NO object in the tree. The build is then
+    validated, and a fill that produced no face, is invalid, or misses its
+    own boundary is REMOVED again with a named refusal -- an invalid fill
+    must never be parked in the tree reading `State=Up-to-date` (#80/#83).
+
+    The created object is FreeCAD's own, not a Silk one: it carries no band
+    or split bookkeeping and no Silk view provider. GUI-free -- the command
+    and the task panel wrap it in their own transaction.
+    """
+    doc = FreeCAD.ActiveDocument
+    if len(strips) == 1 and isinstance(strips[0], (list, tuple)):
+        strips = list(strips[0])
+    strips = [s for s in (strips or []) if s is not None]
+    if len(strips) not in (3, 4):
+        FreeCAD.Console.PrintError(
+            "Silk: a corner fill needs the ring's 3 or 4 blend strips around "
+            "one junction (got %d). Nothing was created.\n" % len(strips))
+        return None
+    if order not in CORNER_FILL_ORDERS:
+        FreeCAD.Console.PrintError(
+            "Silk: the corner fill order must be 0 (C0), 1 (G1) or 2 (G2) -- "
+            "got %r. Nothing was created.\n" % (order,))
+        return None
+    boundary, why = corner_fill_boundary(strips)
+    if boundary is None:
+        FreeCAD.Console.PrintError(
+            "Silk: cannot build the corner fill over these %d blends -- %s. "
+            "Nothing was created.\n" % (len(strips), why))
+        return None
+    links, faces = boundary
+    try:
+        obj = doc.addObject("Surface::Filling", name)
+    except Exception as exc:
+        # The Surface module is FreeCAD's, not ours: a build without it can
+        # still run every other Silk path, so this refuses by name like any
+        # other unusable input rather than raising.
+        FreeCAD.Console.PrintError(
+            "Silk: this FreeCAD provides no Surface::Filling object type "
+            "(%s). Nothing was created.\n" % (exc,))
+        return None
+    obj.BoundaryEdges = links
+    obj.BoundaryFaces = faces
+    obj.BoundaryOrder = [order] * len(links)
+    doc.recompute()
+    problem = corner_fill_problem(obj, links)
+    if problem is not None:
+        doc.removeObject(obj.Name)
+        doc.recompute()
+        FreeCAD.Console.PrintError(
+            "Silk: the surface fill over %s did not build -- %s. Nothing was "
+            "left in the tree.\n"
+            % (", ".join(s.Name for s in strips), problem))
+        return None
+    FreeCAD.Console.PrintMessage(
+        "Silk: surface fill %s created over %s (order %d, %d boundary "
+        "edges)\n"
+        % (obj.Name, ", ".join(s.Name for s in strips), order, len(links)))
+    return obj

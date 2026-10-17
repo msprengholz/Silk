@@ -501,6 +501,52 @@ class CornerBlendViewProvider:
         return None
 
 
+class CreateCornerFill:
+    """GUI command — the ring's 3 or 4 blend strips -> ONE FreeCAD
+    `Surface::Filling` over the corner's hole (#96).
+
+    The owner's ask is to JUDGE a one-patch corner by eye. That judgement
+    needs no picker: this command takes the same selection the corner blend
+    takes and lets Silk assemble the fill (measured wiring: the strips' own
+    `EdgeN` boundary rows, order 1 -- see
+    docs/research/silk-fill-picking.md). The whole contract (the ring, the
+    boundary derivation, the named refusals, the post-build validation)
+    lives in SilkWorkflowOps.create_corner_fill; this class only reads the
+    selection, opens the undo transaction, and reports.
+
+    The created object is FreeCAD's own, so it is not part of the
+    workbench's visible command set (#50): the command is registered and
+    reachable -- `Gui.runCommand("Silk_CornerFill")`, a toolbar of one's
+    own -- but where it appears in the workbench's own menu is a separate
+    decision, and the corner stage's stages themselves are unchanged.
+    """
+
+    def GetResources(self):
+        return {'Pixmap': iconPath, 'MenuText': 'Silk Corner Fill',
+                'ToolTip': 'Fill the corner hole with one FreeCAD '
+                           'Surface::Filling over the selected ring blends, '
+                           'so the surface can be judged by eye.'}
+
+    def Activated(self):
+        sel = Gui.Selection.getSelection()
+        strips = [o for o in sel
+                  if getattr(o, "object_type", None) in BLEND_TYPES]
+        from SilkWorkflowOps import create_corner_fill
+        doc = FreeCAD.ActiveDocument
+        if doc is None:
+            return  # nothing to put a transaction on; nothing is created
+        doc.openTransaction("Silk corner fill")
+        try:
+            create_corner_fill(strips)
+        finally:
+            doc.commitTransaction()
+        # create_corner_fill owns every message: its refusals name the
+        # reason and leave nothing behind, its success names the fill.
+
+    def IsActive(self):
+        return Gui is not None
+
+
 class CreateCornerBlend:
     """GUI command — select the 3 or 4 blend strips that ring a shared
     junction -> CornerBlend (ticket #91).
@@ -543,3 +589,4 @@ class CreateCornerBlend:
 
 
 Gui.addCommand("Silk_CreateCornerBlend", CreateCornerBlend())
+Gui.addCommand("Silk_CornerFill", CreateCornerFill())
