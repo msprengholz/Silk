@@ -2420,6 +2420,15 @@ def write_band_split(entry, which, value):
     One transaction -- one undo step per edit -- and it stays OUT of the
     confirm transaction, so a width edit is always undoable on its own.
 
+    #109: the write itself settles the chain. `Patch.onChanged` runs a
+    document recompute for a band-edge change, so patch -> blend -> corner
+    are consistent the moment this returns. There is deliberately no
+    `doc.recompute()` here any more: it was the caller's stand-in for the
+    object's job, and once the object does it that pass is a second full
+    pass over the chain (the strips the blend touches are left Touched, so
+    it is not even a no-op). This IS the owner's path going through the
+    object's mechanism.
+
     #75/#82: a width that is not strictly inside (0, 1) is REFUSED, on
     the console, and nothing is written. The editor's own range cannot
     produce one, so this is the guard for the paths that do not come
@@ -2444,7 +2453,6 @@ def write_band_split(entry, which, value):
         setattr(p, prop, _stored_from_width(float(value), ss))
     finally:
         doc.commitTransaction()
-    doc.recompute()
     return True
 
 
