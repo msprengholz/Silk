@@ -38,6 +38,7 @@ No continuity label is asserted anywhere.
 import FreeCAD
 
 import Tests.corner_model as cm
+from Tests.mcp_harness import check
 from SilkTaskPanel import BAND_A, BAND_B, _side_of, _stored_from_width, \
     write_band_split
 from SilkCorner import corner_from_strips
@@ -247,23 +248,26 @@ def test_neighbouring_patch_writes_keep_the_corner_consistent(doc):
         errors.append("the hidden-cell write left the patch flagged (%r)"
                       % (patch.State,))
 
-    # --- ensure_band_split: run_blend writing a band edge on a patch that
-    #     has none, then rebuilding the strip from it
-    from SilkBlend import run_blend
+    # --- ensure_band_split: drop this end's band edge, and let the
+    #     blend's own run_blend restore it. No recompute from the test:
+    #     the sentinel write's onChanged must run the pass that re-drives
+    #     the blend, ensure_band_split writes the default back, and the
+    #     corner rebuilds in that same pass.
+    from SilkMachinery import band_edge
     entry, prop, ss = _seam_entry(strip)
+    check(write_band_split(entry, BAND_A, 0.25),
+          "setting a non-default band before the ensure_band_split case",
+          errors)
     sentinel = 0.0 if prop.endswith("1") else 1.0
-    setattr(patch, prop, sentinel)          # drop this end's band
-    doc.recompute()
     before = _snapshot(corner)
     with _CaptureConsole() as cap:
-        run_blend(strip)                    # re-writes the split + rebuilds
+        setattr(patch, prop, sentinel)      # drop this end's band
     if cap.errors:
-        errors.append("run_blend/ensure_band_split printed errors: %r"
+        errors.append("the ensure_band_split write printed errors: %r"
                       % cap.errors)
-    from SilkMachinery import band_edge
     if band_edge(getattr(patch, prop)) is None:
         errors.append("ensure_band_split did not restore a band edge on "
-                      "%s.%s" % (patch.Name, prop))
+                      "%s.%s after it was dropped" % (patch.Name, prop))
     numbers = _assert_corner_matches_its_strips(corner, before,
                                                 "ensure_band_split", errors)
     if numbers:
