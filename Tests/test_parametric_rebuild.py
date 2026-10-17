@@ -318,3 +318,141 @@ def test_unblend_then_reblend_leaves_the_corner_honest(doc):
         checks.append("re-blend/re-link: %d poles, matches fresh to %g"
                       % (len(corner.Poles), delta))
     return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_panel_write_edge_cases_leave_the_document_as_it_was(doc):
+    """The holes a caller-side `doc.recompute()` used to paper over.
+
+    Removing the panel's `doc.recompute()` makes `Patch.onChanged` the only
+    trigger for a band write. Four cases where that trigger may not fire,
+    asserted explicitly rather than assumed:
+
+      1. the SAME value written twice -- FreeCAD may not fire `onChanged`
+         when the stored value does not change, so the second write must
+         still leave the corner consistent with its strips;
+      2. a REFUSED width -- nothing is written, so nothing may move, and
+         the undo stack must not grow;
+      3. an EXPRESSION-owned property -- FreeCAD discards the assignment
+         silently; the write is a no-op and the document is UNCHANGED (not
+         stale), which is the recorded #74 hazard and worth stating. This
+         build refuses `setExpression` on an `App::PropertyFloat`, so the
+         case is asserted only where the engine can own the property and
+         otherwise recorded as untestable;
+      4. the transaction boundary -- the document recompute now runs from
+         inside the panel's open transaction; one edit must still be ONE
+         undo step and print no error.
+    """
+    errors, checks = [], []
+    model, strip, corner = _build(doc)
+    entry, prop, ss = _seam_entry(strip)
+    patch = entry["patch_a"]
+
+    def consistent(what):
+        fresh, why = _fresh(corner)
+        if not fresh:
+            errors.append("%s: a fresh corner from the same strips refused "
+                          "(%s)" % (what, why))
+            return None
+        delta = _delta(_snapshot(corner), fresh)
+        if delta > 1e-6:
+            errors.append("%s: the corner disagrees with a fresh build by %g"
+                          % (what, delta))
+        return delta
+
+    # ---- 1. the same value written twice
+    with _CaptureConsole() as cap:
+        first = write_band_split(entry, BAND_A, 0.2)
+        second = write_band_split(entry, BAND_A, 0.2)
+    errors += ["same-value write printed an error: %s" % e for e in cap.errors]
+    if not (first and second):
+        errors.append("a legal width was refused (first=%r second=%r)"
+                      % (first, second))
+    delta = consistent("same-value second write")
+    if delta is not None:
+        checks.append("same value written twice: corner still matches fresh "
+                      "(delta %g), stored %g"
+                      % (delta, float(getattr(patch, prop))))
+
+    # ---- 2. a refused width: nothing written, nothing moves
+    before_poles = _snapshot(corner)
+    before_value = float(getattr(patch, prop))
+    before_undo = doc.UndoCount
+    for bad in (0.0, 1.0, -0.3, 1.7):
+        with _CaptureConsole() as cap:
+            wrote = write_band_split(entry, BAND_A, bad)
+        if wrote:
+            errors.append("a width of %g was not refused" % bad)
+        if not cap.errors:
+            errors.append("the refusal of %g said nothing on the console"
+                          % bad)
+    if float(getattr(patch, prop)) != before_value:
+        errors.append("a refused width moved %s.%s (%g -> %g)"
+                      % (patch.Name, prop, before_value,
+                         float(getattr(patch, prop))))
+    if doc.UndoCount != before_undo:
+        errors.append("refused writes moved the undo stack by %d"
+                      % (doc.UndoCount - before_undo))
+    if _delta(before_poles, _snapshot(corner)) > 1e-9:
+        errors.append("a refused width still moved the corner")
+    checks.append("refused widths 0.0 / 1.0 / -0.3 / 1.7: value, undo stack "
+                  "and corner all unchanged")
+
+    # ---- 3. an EXPRESSION-owned property: FreeCAD discards the write
+    #
+    # The recorded #74 hazard is that an expression-owned property silently
+    # swallows the assignment. With the caller's recompute gone there is no
+    # recompute here either -- but nothing was stored, so the document is
+    # UNCHANGED (not stale). This FreeCAD build refuses setExpression on an
+    # App::PropertyFloat ("Expression can not evaluate to a value"), so the
+    # case is asserted only where the engine can actually own the property.
+    cur = float(getattr(patch, prop))
+    installed = False
+    try:
+        patch.setExpression(prop, repr(cur))
+        installed = any(n == prop for n, _e in patch.ExpressionEngine)
+    except Exception as exc:
+        checks.append("expression-owned property not testable on this "
+                      "FreeCAD build: setExpression(%s) raised %s -- the "
+                      "discarded write leaves the document unchanged"
+                      % (prop, exc))
+    if installed:
+        doc.recompute()
+        before_poles = _snapshot(corner)
+        with _CaptureConsole() as cap:
+            wrote = write_band_split(entry, BAND_A, 0.33)
+        if float(getattr(patch, prop)) != cur:
+            errors.append("an expression-owned property changed value "
+                          "(%g -> %g)" % (cur, float(getattr(patch, prop))))
+        if _delta(before_poles, _snapshot(corner)) > 1e-9:
+            errors.append("the discarded expression write moved the corner")
+        consistent("expression-owned write")
+        checks.append("expression-owned %s: write_band_split returned %r "
+                      "but FreeCAD discarded it -- stored %g unchanged, "
+                      "corner unchanged and consistent (the #74 hazard)"
+                      % (prop, wrote, float(getattr(patch, prop))))
+        patch.setExpression(prop, None)
+        doc.recompute()
+    patch.setExpression(prop, None)
+    doc.recompute()
+
+    # ---- 4. the transaction boundary: one edit is ONE undo step
+    before_undo = doc.UndoCount
+    before_names = list(doc.UndoNames)
+    with _CaptureConsole() as cap:
+        write_band_split(entry, BAND_A, 0.28)
+    errors += ["a normal write printed an error: %s" % e for e in cap.errors]
+    added = [str(n) for n in doc.UndoNames[:len(doc.UndoNames)
+                                           - len(before_names)]]
+    if doc.UndoCount - before_undo != 1:
+        errors.append("one panel edit moved the undo stack by %d steps "
+                      "(expected 1); names added %r"
+                      % (doc.UndoCount - before_undo, added))
+    if added != ["Silk band split"]:
+        errors.append("the edit's undo step is %r, expected ['Silk band "
+                      "split']" % (added,))
+    delta = consistent("one-undo-step edit")
+    if delta is not None:
+        checks.append("one panel edit: undo stack +1 ('Silk band split'), "
+                      "no console error, corner matches fresh (delta %g)"
+                      % delta)
+    return {"pass": not errors, "errors": errors, "checks": checks}
