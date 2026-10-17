@@ -127,7 +127,9 @@ def _orient_ring_columns(grids, ordered):
     the strips that run the other way -- column c -> 5 - c, a
     reparameterization of the across-seam axis, not a geometry change --
     turns any ring into that cycle. On a ring already directed this way it
-    changes nothing."""
+    changes nothing. It is applied only when the ring does not assemble as
+    stored (see `_assemble_square_ring` / `_tri_ring_member`), so the
+    documented rings keep their exact poles."""
     n = len(grids)
     out = []
     for i, (poles, weights) in enumerate(grids):
@@ -159,6 +161,46 @@ def _member_ring(base_grids, ordered, patch, member):
         if j != i and j in touching:
             return base_grids[:i + 1] + [member] + base_grids[i + 1:]
     return base_grids + [member]
+
+
+def _assemble_square_ring(base, ordered):
+    """(grids, None) for a 4-valent corner: `base` when it already
+    assembles, else the ring with the columns normalized (`base` is tried
+    first so a ring that already works keeps its exact poles), else
+    (None, corner_grid's own refusal for the stored orientation)."""
+    p36, _w, why = corner_grid(base, CORNER_TOL)
+    if p36 is not None:
+        return base, None
+    flipped = _orient_ring_columns(base, ordered)
+    p36, _w, _why = corner_grid(flipped, CORNER_TOL)
+    if p36 is not None:
+        return flipped, None
+    return None, why
+
+
+def _tri_ring_member(base_grids, ordered, patches, corner_cells):
+    """The first 4-grid ring `corner_grid` accepts for a 3-valent corner:
+    `base_grids` (the three strips) plus the triangular 4th member built
+    from a patch's ring corner CELL -- never the full 4x4 base net, whose
+    corners are the patch vertices -- across every corner index and
+    reversal. Returns the 4-grid ring or None."""
+    for pth in patches:
+        poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
+        if poles_c is None:
+            continue
+        for corner in range(4):
+            for rev in (False, True):
+                mp, mw = control_grid64_3_1(poles_c, weights_c, corner)
+                if mp is None:
+                    continue
+                if rev:
+                    mp, mw = reverse_grid_rows(mp, mw)
+                member = (list(mp), list(mw))
+                cand = _member_ring(base_grids, ordered, pth, member)
+                p36, _w, _why = corner_grid(cand, CORNER_TOL)
+                if p36 is not None:
+                    return cand
+    return None
 
 
 def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
@@ -229,48 +271,31 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
                                 "poles / %d weights"
                                 % (s.Name, len(poles), len(weights)))
         grids.append(orient_junction_row(poles, weights, li_map[pa.Name]))
-    grids = _orient_ring_columns(grids, ordered)
     if is_tri:
-        base_grids = list(grids)
         patches = []
         for s in ordered:
             for pth in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
                 if pth is not None and pth not in patches:
                     patches.append(pth)
-        member = None
+        # The stored column orientation of a strip is arbitrary (which
+        # patch the user handed create_blend first), so the member search
+        # runs once as stored -- the documented rings assemble there --
+        # and, only if that cannot, once with the ring's columns
+        # normalized.
         ring = None
-        for pth in patches:
-            # the member is the missing fourth band at THIS patch's
-            # corner: fed the patch's ring corner CELL (the region the
-            # band setbacks leave), never the full 4x4 base net -- the
-            # base net's corners are the patch vertices, which is why
-            # the old input could never land the member on the ring's
-            # shared corner.
-            poles_c, weights_c = _corner_cell_net(
-                pth, corner_cells.get(pth.Name))
-            if poles_c is None:
-                continue
-            for corner in range(4):
-                for rev in (False, True):
-                    mp, mw = control_grid64_3_1(poles_c, weights_c, corner)
-                    if mp is None:
-                        continue
-                    if rev:
-                        mp, mw = reverse_grid_rows(mp, mw)
-                    member = (list(mp), list(mw))
-                    cand = _member_ring(base_grids, ordered, pth, member)
-                    p36, _w, _why = corner_grid(cand, CORNER_TOL)
-                    if p36 is not None:
-                        ring = cand
-                        break
-                    member = None
-                if ring is not None:
-                    break
+        for base_grids in (list(grids),
+                           _orient_ring_columns(grids, ordered)):
+            ring = _tri_ring_member(base_grids, ordered, patches,
+                                    corner_cells)
             if ring is not None:
                 break
         if ring is None:
             return None, None, "could not build triangular 4th member"
         grids = ring
+    else:
+        grids, why = _assemble_square_ring(grids, ordered)
+        if grids is None:
+            return None, None, why
     return grids, corner_cells, None
 
 

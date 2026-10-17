@@ -766,6 +766,52 @@ def _oracle_side_and_end(o, p, tol):
     return e, (0 if e[1] == "0" else 1)
 
 
+# The oracle's own copy of the seam-direction map (MIRROR, DO NOT IMPORT --
+# see the module docstring); `_blend_reference_rows` and
+# `_corner_reference_rows` both read it.
+_ORACLE_SEAM_CMAP = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
+                     "V0": {0: 0, 3: 3}, "V1": {1: 0, 2: 3}}
+
+
+def _oracle_seam_identity(o, tol):
+    """True when `o`'s two patches parameterize their shared seam in the
+    SAME direction, False when opposite, None when the matched corner pairs
+    cannot say.
+
+    Mirror of SilkBlend.seam_identity, re-derived HERE for the same reason
+    `_oracle_side_and_end` is (see the module docstring): the corner oracle
+    must know the seam's direction itself, because a patch that
+    parameterizes the seam the other way round names the SAME junction at
+    the MIRRORED row of its seam-parallel axis.
+    """
+    a_c = [o.PatchA.Poles[0], o.PatchA.Poles[3],
+           o.PatchA.Poles[15], o.PatchA.Poles[12]]
+    b_c = [o.PatchB.Poles[0], o.PatchB.Poles[3],
+           o.PatchB.Poles[15], o.PatchB.Poles[12]]
+    edge = getattr(o, "Edge", None)
+    if edge is not None:
+        ep = list(getattr(edge, "Poles", []) or [])
+        seam = (_pinned_seam(a_c, b_c, ep[0], ep[3], tol)
+                if len(ep) >= 4 else None)
+    else:
+        seam = _detect_seam(a_c, b_c, tol)
+    if seam is None:
+        return None
+    ea, eb, pairs = seam
+    identity = None
+    for lc_idx, rc_idx in pairs:
+        la = _ORACLE_SEAM_CMAP[ea].get(lc_idx)
+        rb = _ORACLE_SEAM_CMAP[eb].get(rc_idx)
+        if la is None or rb is None:
+            return None
+        is_id = (la == rb)
+        if identity is None:
+            identity = is_id
+        elif is_id != identity:
+            return None
+    return identity
+
+
 def _blend_reference_rows(pa, pb, tol=0.01, edge=None):
     """Independently re-derive the 4 (l_rev, rc) strip-row pairs that drive
     a blend between two patches.
@@ -815,8 +861,7 @@ def _blend_reference_rows(pa, pb, tol=0.01, edge=None):
     if sga is None or sgb is None:
         return None
 
-    cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
-            "V0": {0: 0, 3: 3}, "V1": {1: 0, 2: 3}}
+    cmap = _ORACLE_SEAM_CMAP
     # Seam alignment (#30): middle rows follow the corner-pair alignment
     # (identity or reversed), not an assumed reversal. `pairs` holds only
     # the seam's two matched corner pairs; the cmap lookups guard both
@@ -981,6 +1026,11 @@ def _corner_reference_rows(strips, tol=0.01):
         e_b, ss_b = _oracle_side_and_end(s, pb, tol)
         if not e_a or not e_b:
             return None, None
+        # The two patches can parameterize the shared seam in the same
+        # direction (identity) or opposite (reversed); a reversed seam names
+        # the SAME junction at the MIRRORED row of the patch's seam-parallel
+        # axis. Compared across that reflection (mirrors SilkCorner).
+        identity = _oracle_seam_identity(s, tol)
         bca = _oracle_band_cells(pa, e_a, ss_a)
         bcb = _oracle_band_cells(pb, e_b, ss_b)
         if len(bca) != 1 or len(bcb) != 1:
@@ -1009,7 +1059,8 @@ def _corner_reference_rows(strips, tol=0.01):
             else:
                 li_map[pth.Name] = 3 if iv_c > iv_b else 0
             corner_cells[pth.Name] = (pth, iu_c, iv_c, nu, nv)
-        if li_map[pa.Name] != li_map[pb.Name]:
+        if li_map[pa.Name] != (3 - li_map[pb.Name] if identity is False
+                               else li_map[pb.Name]):
             return None, None
         poles = s.Poles or []
         if len(poles) != 24:

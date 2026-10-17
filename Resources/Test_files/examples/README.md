@@ -140,8 +140,8 @@ sketches:
 | `E_right_TR` | `Sketch042` + `Sketch045` |
 | `E_right_BkR` | `Sketch032` + `Sketch035` |
 
-Build **5 Patches**. The order below is the **working** order (one entry
-per boundary side, cyclically) — see the caveat after the table:
+Build **5 Patches**. The order below is the documented click order (one
+entry per boundary side, cyclically):
 
 | Patch | edge click order |
 |---|---|
@@ -169,15 +169,19 @@ net up to a named symmetry of the square (Front/Top/Back in the stored
 order, delta ≤ 2.9e-14; Right under `rot90`, Bottom under `rot180`, delta ≤
 4.0e-13). No continuity label is asserted anywhere.
 
-> **Caveat — the patch click order is part of the result.** Building the
-> same five faces in the demo's **own stored grid order** makes all four
-> junctions refuse: `"its two patches disagree about which end is the
-> junction (twisted input)"`. The demo's order reproduces the stored nets
-> pole-for-pole in raw order, but the corners need the order in the table
-> above. Pinned by `test_demo01_demo_order_patches_refuse_at_the_corner`
-> in `Tests/test_demo01_rebuild.py`. If an arbitrary click order should
-> also work, that is a separate ticket about the corner's ring-direction
-> handling, not a fixture problem.
+> **The patch click order and the blend pair order are NOT part of the
+> result (#107).** Before #107 building the same five faces in the demo's
+> own stored grid order made all four junctions refuse: `"its two patches
+> disagree about which end is the junction (twisted input)"`, and blending a
+> seam with the two patches handed to the command in the other order could
+> leave a ring the corner could not assemble. The corner stage now reads a
+> patch that parameterizes a shared seam the other way round, and a blend
+> whose `PatchA`/`PatchB` order differs from the ring's direction, so any
+> click order fills the same four corners. The order in the table above is
+> still the one whose Patch nets are pole-identical to the demo's stored
+> `ControlGrid44_4_*` in the RAW order (no transform); `Tests/
+> test_demo01_rebuild.py` pins both the pole parity and that the demo's own
+> order gives the same corner fill.
 
 ### What a click-through reaches on the demo's own 29 sketches (unchanged)
 

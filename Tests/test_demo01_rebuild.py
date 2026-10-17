@@ -24,13 +24,15 @@ exactly it reproduces the demo's stored legacy objects:
   * every built Patch's 16-pole net IS the demo's stored `ControlGrid44_4_*`
     net, up to a named symmetry of the square: Front/Top/Back in the stored
     order (delta <= 2.9e-14), Right under `rot90` and Bottom under `rot180`
-    (delta <= 4.0e-13) -- those two faces carry a rotated cycle because the
-    corner stage requires it (see `Tests/demo01_fixture_model.py` and the
-    `..._demo_order_patches_refuse_at_the_corner` test below).
+    (delta <= 4.0e-13) (see `Tests/demo01_fixture_model.py`).
 
-The click order is part of the result, and the third test measures that: in
-the demo's own stored order all five faces are pole-identical in the RAW
-order, and all four junctions refuse.
+The click order is NOT part of the result (#107), and the third test
+measures that: in the demo's own stored order all five faces are
+pole-identical in the RAW order and all four junctions fill, with the SAME
+36 poles the documented order produces (delta <= 4e-13). Before #107 the
+demo's own order made every junction refuse; the corner stage read a patch
+that parameterizes a seam the other way round, and a blend whose
+`PatchA`/`PatchB` order differs from the ring's direction, as errors.
 
 No continuity label is asserted anywhere in this module.
 """
@@ -476,17 +478,23 @@ def test_demo01_fixture_rebuild_reaches_the_demo_topology(doc):
 
 
 # ---------------------------------------------------------------------------
-# 3. the click order is part of the result: the demo's own order refuses
+# 3. the click order is NOT part of the result: the demo's own order fills too
 # ---------------------------------------------------------------------------
 
-def test_demo01_demo_order_patches_refuse_at_the_corner(doc):
+def test_demo01_demo_order_patches_fill_their_corners(doc):
     """The demo's own stored grid order (its `Poly0..Poly3` links) is the
-    order in which every face compares pole-for-pole with NO transform --
-    and the order in which no junction can be filled: each corner refuses
-    with "its two patches disagree about which end is the junction (twisted
-    input)".  This is the measurement that fixes the documented click order
-    in `Tests/demo01_fixture_model.py`; it is a parameterization constraint
-    of the corner stage, not a geometry difference (the nets are the same).
+    order in which every face compares pole-for-pole with NO transform, and
+    it now fills every junction too (#107).
+
+    Until #107 this was the order in which no junction could be filled:
+    each corner refused with "its two patches disagree about which end is
+    the junction (twisted input)", because the corner stage treated a patch
+    that parameterizes the shared seam the other way round -- and a blend
+    whose `PatchA`/`PatchB` order differs from the ring's direction -- as
+    errors. The nets are the same under either order; the order was a
+    parameterization constraint of the corner stage, and that constraint is
+    gone: the demo's order yields the SAME 36 poles the documented order
+    does.
     """
     errors, checks, report = [], [], []
     result = MODEL.build_demo_order_patches(doc)
@@ -497,10 +505,6 @@ def test_demo01_demo_order_patches_refuse_at_the_corner(doc):
                       % counts)
     else:
         checks.append("demo-order build: 12 Edges -> 5 Patches -> 8 Blends")
-    if result.get("corners"):
-        errors.append("the demo's own face order now builds a corner (%s) -- "
-                      "the ordering constraint changed; update the #98 "
-                      "report/tests" % sorted(result["corners"]))
 
     # every face pole-identical in the RAW order under this order
     demo, opened = _open_read_only(DEMO01_PATH)
@@ -520,26 +524,63 @@ def test_demo01_demo_order_patches_refuse_at_the_corner(doc):
         if opened:
             FreeCAD.closeDocument(demo.Name)
 
-    expected_refusals = {name: None for name, _ring, _pt in MODEL.CORNERS}
-    if len(result["console"]) != len(expected_refusals):
-        errors.append("expected %d corner attempts, got %d"
-                      % (len(expected_refusals), len(result["console"])))
-    for name in expected_refusals:
-        text = " ".join(result["console"].get(name, []))
-        if "twisted input" not in text:
-            errors.append("corner %s refusal text lacks 'twisted input': %s"
-                          % (name, text))
-        elif "Nothing was created" not in text:
-            errors.append("corner %s refusal does not say nothing was "
-                          "created: %s" % (name, text))
-        else:
-            checks.append("corner %s refused: %s"
-                          % (name, text.strip().split("\n")[0]))
-    if not errors:
-        checks.append("4 corners refused, and with no corner object parked "
-                      "in the document (%d CornerBlends)"
-                      % len([o for o in doc.Objects
-                             if getattr(o, "object_type", "") == "CornerBlend"]))
+    # all four junctions fill, 36 poles / one valid face each
+    corners = result.get("corners", {})
+    want = {name for name, _ring, _pt in MODEL.CORNERS}
+    if set(corners) != want:
+        errors.append("demo-order build filled %s, want all four %s"
+                      % (sorted(corners), sorted(want)))
+    else:
+        checks.append("demo-order build fills all 4 junctions")
+        for name, corner in sorted(corners.items()):
+            problems = []
+            if len(corner.Poles or []) != 36:
+                problems.append("%d poles" % len(corner.Poles or []))
+            if not corner.Shape or corner.Shape.isNull() \
+                    or not corner.Shape.Faces:
+                problems.append("empty Shape")
+            elif not corner.Shape.isValid():
+                problems.append("invalid Shape")
+            if problems:
+                errors.append("demo-order corner %s: %s"
+                              % (name, "; ".join(problems)))
+            else:
+                report.append("demo-order corner %-24s %d poles, %d face(s), "
+                              "valid=%s"
+                              % (name, len(corner.Poles),
+                                 len(corner.Shape.Faces),
+                                 corner.Shape.isValid()))
+    if not any(e.startswith("demo-order corner") for e in errors) \
+            and result.get("corners"):
+        checks.append("all 4 demo-order corners: 36 poles, valid Shape")
+
+    # ...and they are the SAME fill the documented order produced: the
+    # corner no longer depends on the click order (#107).  The reference
+    # runs in its own document -- the same `doc` already holds this build.
+    ref_doc = FreeCAD.newDocument("_demo01_doc_order_ref")
+    try:
+        doc_order = MODEL.build(ref_doc)
+        ref_poles = {n: list(c.Poles)
+                     for n, c in doc_order.get("corners", {}).items()}
+    finally:
+        FreeCAD.closeDocument(ref_doc.Name)
+        FreeCAD.setActiveDocument(doc.Name)
+    for name, _ring, _pt in MODEL.CORNERS:
+        a = result.get("corners", {}).get(name)
+        b = ref_poles.get(name)
+        if a is None or b is None:
+            continue
+        dev = max((x - y).Length for x, y in zip(a.Poles, b))
+        report.append("corner %-24s demo-order vs documented-order dev %.3e"
+                      % (name, dev))
+        if dev > 1e-9:
+            errors.append("corner %s: the demo's own order gives a different "
+                          "fill (max pole dev %.3e)" % (name, dev))
+    if not any("gives a different fill" in e for e in errors) \
+            and result.get("corners"):
+        checks.append("demo-order fill = documented-order fill "
+                      "(max pole dev <= 1e-9): the click order no longer "
+                      "changes the corner")
     _report(report)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
@@ -547,5 +588,5 @@ def test_demo01_demo_order_patches_refuse_at_the_corner(doc):
 ALL_TESTS = [
     test_demo01_whole_sketch_edges_cannot_bound_the_ring_faces,
     test_demo01_fixture_rebuild_reaches_the_demo_topology,
-    test_demo01_demo_order_patches_refuse_at_the_corner,
+    test_demo01_demo_order_patches_fill_their_corners,
 ]

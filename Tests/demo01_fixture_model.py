@@ -19,14 +19,18 @@ THE TWO ORDERING CONTRACTS (both measured, both pinned in the tests):
 
 1. PATCH EDGE ORDER.  `create_patch` normalizes the boundary CYCLE but keeps
    the caller's first edge and direction, so the click order fixes each
-   face's parameterization.  The corner stage requires the four ring faces to
-   agree about which parametric end of a seam the junction is at
-   (`SilkCorner.corner_inputs`' `li_map`); with the demo's own stored grid
-   order they disagree at EVERY junction and each corner refuses with
+   face's parameterization.  Before #107 the corner stage required the four
+   ring faces to agree about which parametric end of a seam the junction is
+   at (`SilkCorner.corner_inputs`' `li_map`), and with the demo's own stored
+   grid order they disagreed at EVERY junction, so each corner refused with
    "its two patches disagree about which end is the junction (twisted
-   input)".  The order below is a measured consistent one: Front/Top/Back
-   keep the demo's stored order (so their nets compare pole-for-pole with no
-   transform at all), Right is rotated one edge and Bottom two.
+   input)".  #107 removed that: a patch that parameterizes the shared seam
+   the other way round is now read across the reflection, so the click order
+   no longer reaches the corner.  The order below is still the pole-parity
+   one -- Front/Top/Back keep the demo's stored order (so their nets compare
+   pole-for-pole with no transform at all), Right is rotated one edge and
+   Bottom two -- but the same four corners fill from the demo's own stored
+   order too (`test_demo01_demo_order_patches_fill_their_corners`).
 2. BLEND DIRECTION.  A strip runs PatchA (U0) -> PatchB (U5), and
    `SilkMachinery.corner_grid` assembles a ring only from strips whose
    PatchB is the next strip's PatchA.  So the three blends around a 3-valent
@@ -35,6 +39,9 @@ THE TWO ORDERING CONTRACTS (both measured, both pinned in the tests):
    order); `create_blend_by_edge`/the panel's seam tick derives it from
    document order, which can never close a 3-cycle.  `BLENDS` below is one of
    the two directed assignments of this ring (its mirror is the other).
+   #107 removed the need for it: `SilkCorner._orient_ring_columns` flips the
+   strips that run the other way before assembly, so the corner fills from
+   any blend direction.
 
 No continuity label is asserted anywhere in this model or its tests.
 """
@@ -370,8 +377,11 @@ def build(doc, source=None, corners=True):
 
 def build_demo_order_patches(doc, source=None):
     """The same 12 Edges and 8 Blends, but with each face built in the demo's
-    OWN stored grid order (`DEMO_ORDER_PATCHES`).  Returns the build result;
-    the corner stage is expected to refuse -- the tests pin that text."""
+    OWN stored grid order (`DEMO_ORDER_PATCHES`).  Returns the build result.
+    Through #107 the corners filled from this order too (the ordering
+    constraint the corner stage used to impose is gone), so `build` and this
+    now reach the same 4 CornerBlends; the demo01_rebuild test measures the
+    pole parity between the two fills."""
     result = {"edges": {}, "patches": {}, "blends": {}, "corners": {},
               "problems": [], "console": {}}
     active = FreeCAD.ActiveDocument
