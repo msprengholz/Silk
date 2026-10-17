@@ -227,6 +227,7 @@ def corner_count_text(n):
         return "%d collected -- ready" % n
     return "%d collected -- need %d or %d" % (n, CORNER_MIN, CORNER_MAX)
 
+
 # The static guidance, kept as the panel's / sections' tooltip and in the
 # adapter's needsFullSpace() explanation. It used to be a permanent
 # top-of-panel block duplicating the section instruction directly below.

@@ -3,7 +3,7 @@ SilkCorner — CornerBlend FeaturePython for the 4-subgrid corner fill (#28, #91
 
 Where 4 Patch objects meet at a central junction, each contributes its
 corner subgrid cell (excluded from the ring blend bands by #33). The
-CornerBlend takes the 4 ring Blend strips (DAG: patch -> strip ->
+CornerBlend takes the ring's 3 or 4 Blend strips (DAG: patch -> strip ->
 corner blend) and builds Silk's real corner: the four consecutive strip
 pairs each make a 3x3 subgrid (`SubGrid33_2Grid64`), the four subgrids
 assemble into a 6x6 (`ControlGrid66_4Sub`), and the surface comes from
@@ -26,8 +26,8 @@ the cube-corner fixture; on the ordinary 4-valent ring it is a
 byte-identical no-op.
 
 Usage:
-  1. Build the 4 ring Blend strips
-  2. Run create_corner_blend(strip0, strip1, strip2, strip3)
+  1. Build the 3 or 4 ring Blend strips
+  2. Run create_corner_blend(*ring_blends)
   3. The corner blend auto-updates when any linked strip recomputes
 """
 
