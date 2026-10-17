@@ -94,28 +94,106 @@ a simple closed quad → a two-patch chain with a blendable seam → a four
 
 ## SketchOnly_Demo01Subset.FCStd — Demo 01 sketch-only subset
 
-- **29 sketches** (`Sketch014`..`Sketch045`) — **exactly** the sketch set
-  of `Resources/Demo_files/Silk_Demo_01.FCStd`, copied geometry-for-
-  geometry (placements preserved; constraints copied best-effort).
-  **Zero** Edge / Patch / Blend objects.
+- **33 sketches**: the demo's own **29** (`Sketch014`..`Sketch045`), copied
+  geometry-for-geometry (placements preserved; constraints copied
+  best-effort), **plus four documented supplements**: `SK_Half_Rib_FB`,
+  `SK_Half_Rib_FT`, `SK_Half_Rib_BkB`, `SK_Half_Rib_TBk`. **Zero** Edge /
+  Patch / Blend objects.
 - The guard (`Tests/test_example_documents.py`) does **not** trust a
-  hand-written list here: it unzips the demo's `Document.xml` and asserts
-  the fixture carries the demo's own 29 sketch names — nothing more,
-  nothing less.
-- **What a click-through reaches**: 16 of the 29 sketches feed **12
-  whole-sketch Edges** (4 outer cross-section edges, 4 rib curves, 4
-  node-pair hoop edges). The demo's five faces are bounded by those
-  curves, but the four ring faces (front/top/bottom/back) use **half
-  ribs** (`u` in [0.5, 1] — the demo stores one symmetric half and
-  mirrors it), and a Silk Edge consumes a whole sketch. Measured result:
-  the **Right** end cap (whose four curves really are whole sketches)
-  rebuilds as one Patch; the other four `create_patch` calls refuse with
-  "do not close a loop" naming the outer edge that shares no corner. No
-  seam can be blended, so no junction can be attempted — the exact
-  refusal texts are pinned in `Tests/test_demo01_rebuild.py`.
+  hand-written list here: it unzips the demo's `Document.xml`, asserts the
+  fixture carries the demo's own 29 sketch names, and asserts that every
+  *other* sketch is one of the four named supplements (`Tests/
+  demo01_fixture_model.HALF_RIB_SUPPLEMENT`) — both directions.
+- **Why the supplements exist.** The demo models **half** the shape: each
+  rib runs (mirrored hoop) → symmetry plane (u = 0.5) → modelled hoop
+  (u = 1), and the four ring faces consume only the **u in [0.5, 1] half**
+  of each rib (a stored `ControlPoly4_segment`). A Silk Edge consumes a
+  whole sketch — it has no trim — so on the demo's own sketches the four
+  rib-bounded faces cannot close a loop. The u in [0.5, 1] sub-curve of a
+  cubic Bezier **is** a cubic Bezier, so the fixture adds those four halves
+  as ordinary 3-line ControlPoly4 sketches. Each built half-rib Edge is
+  pole-identical to the demo's own stored `ControlPoly4_segment` piece
+  (max delta 2.8e-14 mm).
+- The demo's four **full-rib** sketches (`Sketch020/022/024/026`) stay in
+  the file but are **not consumed** by the click-through — they are the
+  demo's original inputs, and clicking them gives the refused build
+  described under *What a click-through reaches* below.
+
+### The click-through (16 sketches → 12 Edges → 5 Patches → 8 Blends → 4 CornerBlends)
+
+Build **12 Edges** — four whole sketches become one Edge each; the two
+hoop edges are one Edge each built from **two** `SK_Edge`-style node
+sketches:
+
+| Edge | from sketches |
+|---|---|
+| `E_front_out` | `Sketch015` |
+| `E_top_out` | `Sketch016` |
+| `E_back_out` | `Sketch017` |
+| `E_bottom_out` | `Sketch018` |
+| `E_half_rib_FB` | `SK_Half_Rib_FB` |
+| `E_half_rib_FT` | `SK_Half_Rib_FT` |
+| `E_half_rib_BkB` | `SK_Half_Rib_BkB` |
+| `E_half_rib_TBk` | `SK_Half_Rib_TBk` |
+| `E_right_FR` | `Sketch036` + `Sketch037` |
+| `E_right_BR` | `Sketch038` + `Sketch039` |
+| `E_right_TR` | `Sketch042` + `Sketch045` |
+| `E_right_BkR` | `Sketch032` + `Sketch035` |
+
+Build **5 Patches**. The order below is the **working** order (one entry
+per boundary side, cyclically) — see the caveat after the table:
+
+| Patch | edge click order |
+|---|---|
+| `P_Front` | `E_half_rib_FB`, `E_right_FR`, `E_half_rib_FT`, `E_front_out` |
+| `P_Top` | `E_half_rib_FT`, `E_right_TR`, `E_half_rib_TBk`, `E_top_out` |
+| `P_Right` | `E_right_BR`, `E_right_BkR`, `E_right_TR`, `E_right_FR` |
+| `P_Bottom` | `E_bottom_out`, `E_half_rib_BkB`, `E_right_BR`, `E_half_rib_FB` |
+| `P_Back` | `E_back_out`, `E_half_rib_TBk`, `E_right_BkR`, `E_half_rib_BkB` |
+
+Blend the **8 seams** (each is the shared edge of the pair named):
+`B_FB` (Bottom/Front), `B_FT` (Top/Front), `B_FR` (Front/Right),
+`B_BR` (Right/Bottom), `B_BkB` (Bottom/Back), `B_TBk` (Top/Back),
+`B_TR` (Right/Top), `B_BkR` (Back/Right).
+
+Build **4 CornerBlends**, each from **three** ring blends (this is the
+3-valent hard-corner path — a Demo 01 junction is where three faces meet):
+`CB_J1_FrontTopRight` = `B_FT`, `B_FR`, `B_TR`; `CB_J2_FrontRightBottom` =
+`B_FB`, `B_FR`, `B_BR`; `CB_J3_TopRightBack` = `B_TR`, `B_TBk`, `B_BkR`;
+`CB_J4_RightBottomBack` = `B_BR`, `B_BkB`, `B_BkR`.
+
+**Result:** 12 Edges, 5 Patches, 8 Blends, 4 CornerBlends (36 poles each,
+valid shapes, each covering its junction point), every object oracle-green.
+Every built Patch's 16-pole net **is** the demo's stored `ControlGrid44_4_*`
+net up to a named symmetry of the square (Front/Top/Back in the stored
+order, delta ≤ 2.9e-14; Right under `rot90`, Bottom under `rot180`, delta ≤
+4.0e-13). No continuity label is asserted anywhere.
+
+> **Caveat — the patch click order is part of the result.** Building the
+> same five faces in the demo's **own stored grid order** makes all four
+> junctions refuse: `"its two patches disagree about which end is the
+> junction (twisted input)"`. The demo's order reproduces the stored nets
+> pole-for-pole in raw order, but the corners need the order in the table
+> above. Pinned by `test_demo01_demo_order_patches_refuse_at_the_corner`
+> in `Tests/test_demo01_rebuild.py`. If an arbitrary click order should
+> also work, that is a separate ticket about the corner's ring-direction
+> handling, not a fixture problem.
+
+### What a click-through reaches on the demo's own 29 sketches (unchanged)
+
+16 of the 29 sketches feed **12 whole-sketch Edges** (4 outer cross-section
+edges, 4 **full** rib curves, 4 node-pair hoop edges). The **Right** end cap
+(whose four curves really are whole sketches) rebuilds as one Patch; the
+other four `create_patch` calls refuse with "do not close a loop" naming the
+outer edge that shares no corner, because the faces are bounded by rib
+*halves*. No seam can be blended and no junction attempted. The exact
+refusal texts are pinned in `Tests/test_demo01_rebuild.py`.
+
 - The full mapping (which sketch feeds which stored curve, per-edge
   tables, raw counts) is `docs/research/silk-demo-01-inventory.md`; the
   junction table is `docs/research/silk-demo-01-junction-table.md`.
+- The generator for this file is `Tests/make_demo01_fixture.py`; the
+  mapping the tests assert against is `Tests/demo01_fixture_model.py`.
 
 
 ---
