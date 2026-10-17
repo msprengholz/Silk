@@ -54,7 +54,14 @@ continuation (`k_gap` 6.0e-17), where the shipped two-row average stops at
 4.1e-4; on the demo's legacy neighbours the attainable `k_gap` is 7.1e-3 /mm,
 set by the neighbours' mutual incompatibility (#102). FreeCAD's
 `Surface::Filling` at `BoundaryOrder = 2` is **not** G2 here and measures worse
-than `= 1` (`k_gap` 1.7e-1 vs 8.2e-2).
+than `= 1` (`k_gap` 1.7e-1 vs 8.2e-2). #106 then measured the strips' interior
+as the lever (`docs/research/silk-g2-feasibility.md`): freeing each seam strip's
+second-order row (plus the corner's 4 central poles) takes the four demo
+junctions from (7.117e-3, 4.999e-3, 3.375e-3, 2.303e-4) to (2.764e-4, 4.689e-5,
+7.636e-5, 1.026e-5 /mm) at <= 0.52-cell motion, no fold -- but one 6-pole row
+cannot match the seam pointwise, so station-zero needs 5-90 cells and folds.
+Pinned in `Tests/test_g2_feasibility.py` (+ port `Tests/g2_feasibility_model.py`).
+**G2 is parked in #104; corners stay G1, fold-free** (#97/#100/#102/#106).
 
 ## Core Object Architecture
 
