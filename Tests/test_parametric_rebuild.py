@@ -274,3 +274,47 @@ def test_neighbouring_patch_writes_keep_the_corner_consistent(doc):
         checks.append("ensure_band_split: corner moved %g and matches fresh "
                       "to %g" % numbers)
     return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_unblend_then_reblend_leaves_the_corner_honest(doc):
+    """#71: unblend/re-blend a ring strip with a corner present.
+
+    Unblending a ring strip breaks the ring, so the corner must REFUSE
+    cleanly (empty poles, never the pre-edit ones). Re-blending the seam
+    and re-linking the ring must rebuild the corner from the new strip,
+    with no stale object left behind."""
+    errors, checks = [], []
+    model, strip, corner = _build(doc)
+    from SilkWorkflowOps import create_blend
+
+    doc.removeObject(strip.Name)          # unblend one ring member
+    doc.recompute()
+    if corner.Poles:
+        # a broken ring is not a corner; if it kept anything it must at
+        # least be a consistent build of what it still has (it is not)
+        fresh, why = _fresh(corner)
+        if not fresh or _delta(_snapshot(corner), fresh) > 1e-6:
+            errors.append("unblend left the corner holding stale poles (%s)"
+                          % why)
+    checks.append("unblend: ring broken, corner poles=%d State=%s"
+                  % (len(corner.Poles or []), list(corner.State)))
+
+    again = create_blend(model["patches"]["Patch44"],
+                         model["patches"]["Patch001"], name="B12again")
+    doc.recompute()
+    rest = [doc.getObject(n) for n in ("B24", "B43", "B31")]
+    corner.Strips = [again] + rest        # re-link the ring: corner onChanged
+    fresh, why = _fresh(corner)
+    if not fresh:
+        errors.append("re-blend/re-link refused to build the corner: %s"
+                      % why)
+    else:
+        delta = _delta(_snapshot(corner), fresh)
+        if not (len(corner.Poles) == 36 and delta < 1e-6
+                and corner.isValid() is True):
+            errors.append("re-blend/re-link left the corner stale or invalid "
+                          "(%d poles, delta %g, isValid=%r)"
+                          % (len(corner.Poles), delta, corner.isValid()))
+        checks.append("re-blend/re-link: %d poles, matches fresh to %g"
+                      % (len(corner.Poles), delta))
+    return {"pass": not errors, "errors": errors, "checks": checks}
