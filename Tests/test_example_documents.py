@@ -22,6 +22,14 @@ names (zipfile + regex, the census technique, no FreeCAD needed). A
 fixture carrying other demos' or stale sketches cannot ship green again:
 the guard compares against the demo's own set, both directions.
 
+#98 (second half): the fixture also carries a DOCUMENTED SUPPLEMENT --
+four half-rib sketches (`Tests/demo01_fixture_model.HALF_RIB_SUPPLEMENT`)
+that the demo does not have and the click-through needs, because the
+demo stores one symmetric half of the shape and a Silk Edge consumes
+whole sketches only. So the Demo 01 guard asserts BOTH directions
+against `demo sketches | supplement`: every demo sketch present, every
+sketch in the fixture either a demo sketch or a named supplement.
+
 A test takes one document argument (the harness's fresh scratch doc);
 the example files are opened, inspected and closed inside it.
 """
@@ -30,6 +38,9 @@ import FreeCAD
 import os
 import re
 import zipfile
+
+from Tests.demo01_fixture_model import HALF_RIB_SUPPLEMENT, close_fresh, \
+    open_fresh
 
 # Thread-safety is irrelevant: RPC runs on the GUI thread. The examples
 # directory is on the well-known path shared by every launcher.
@@ -96,19 +107,29 @@ EXPECTED = {
         # green while the fixture carries the wrong sketch set.
         "sketches": None,
         "expected_from_demo": "Silk_Demo_01.FCStd",
+        "supplement": HALF_RIB_SUPPLEMENT,
         "target": "Demo 01 sketch-only subset (the demo's own 29 "
-                  "sketches, Sketch014..Sketch045)",
+                  "sketches, Sketch014..Sketch045, plus the 4 documented "
+                  "half-rib supplements) -> 12 Edges, 5 Patches, 8 Blends, "
+                  "4 CornerBlends",
     },
 
 }
 
 def _inspect(fname):
     """Open an example and return (sketch_names, silk_object_names, others)
-    without leaving the document open."""
+    without leaving the document open.
+
+    The file is opened from a PRIVATE COPY (`Tests.demo01_fixture_model.
+    open_fresh`): `FreeCAD.openDocument` hands back an already-open document
+    whose path matches (measured: opening a file that had been rewritten on
+    disk returned the stale in-memory document), so a fixture regenerated
+    while an older copy is open would be validated in its stale form.
+    """
     path = os.path.join(EXAMPLES_DIR, fname)
     if not os.path.exists(path):
         return None
-    doc = FreeCAD.openDocument(path)
+    doc, tmpdir = open_fresh(path)
     try:
         sketches = [o.Name for o in doc.Objects
                     if o.TypeId == "Sketcher::SketchObject"]
@@ -119,14 +140,16 @@ def _inspect(fname):
                   and getattr(o, "object_type", None) not in SILK_OBJECT_TYPES]
         return sketches, silk, others
     finally:
-        FreeCAD.closeDocument(doc.Name)
+        close_fresh(doc, tmpdir)
 
 
 def _expected_sketches(fname, errors, checks):
-    """The documented sketch set for `fname`; for the Demo 01 subset this
-    is DERIVED from the demo file (see `demo01_sketch_names`), never from
-    what the fixture happens to contain."""
+    """(documented sketches, documented supplement) for `fname`; for the
+    Demo 01 subset the sketch set is DERIVED from the demo file (see
+    `demo01_sketch_names`), never from what the fixture happens to contain,
+    and the supplement is the named `HALF_RIB_SUPPLEMENT`."""
     entry = EXPECTED[fname]
+    supplement = tuple(entry.get("supplement", ()))
     if entry.get("expected_from_demo"):
         try:
             names = demo01_sketch_names()
@@ -134,11 +157,13 @@ def _expected_sketches(fname, errors, checks):
             errors.append("%s: cannot derive the expected sketch set from "
                           "the demo (%s): %r"
                           % (fname, entry["expected_from_demo"], exc))
-            return None
-        checks.append("%s: expectation derived from %s (%d sketches)"
-                      % (fname, entry["expected_from_demo"], len(names)))
-        return names
-    return entry["sketches"]
+            return None, supplement
+        checks.append("%s: expectation derived from %s (%d sketches) + "
+                      "%d documented supplement sketch(es)"
+                      % (fname, entry["expected_from_demo"], len(names),
+                         len(supplement)))
+        return names, supplement
+    return entry["sketches"], supplement
 
 
 def _assert_example_sketch_only(errors, checks, fname):
@@ -149,7 +174,7 @@ def _assert_example_sketch_only(errors, checks, fname):
     sketches, silk, others = info
     checks.append("%s: %d sketches, %d silk objects"
                   % (fname, len(sketches), len(silk)))
-    expected = _expected_sketches(fname, errors, checks)
+    expected, supplement = _expected_sketches(fname, errors, checks)
     if silk:
         errors.append("%s must open with ZERO Silk objects, found %s"
                       % (fname, silk))
@@ -158,17 +183,22 @@ def _assert_example_sketch_only(errors, checks, fname):
                       % (fname, others))
     if expected is None:
         return
-    missing = [name for name in expected if name not in sketches]
-    extra = [name for name in sketches if name not in expected]
+    documented = list(expected) + [s for s in supplement
+                                   if s not in expected]
+    missing = [name for name in documented if name not in sketches]
+    extra = [name for name in sketches if name not in documented]
     if missing:
         errors.append("%s missing documented sketch(es) %s (have %s)"
                       % (fname, missing, sketches))
     if extra:
-        errors.append("%s carries sketches that are not in the documented "
-                      "set: %s" % (fname, extra))
-    if len(sketches) != len(expected):
-        errors.append("%s expected %d sketches, found %d"
-                      % (fname, len(expected), len(sketches)))
+        errors.append("%s carries sketches that are neither in the demo's "
+                      "set nor in the documented supplement %s: %s"
+                      % (fname, list(supplement), extra))
+    if len(sketches) != len(documented):
+        errors.append("%s expected %d sketches (%d demo + %d supplement), "
+                      "found %d" % (fname, len(documented), len(expected),
+                                    len(documented) - len(expected),
+                                    len(sketches)))
 
 
 def test_examples_dir_has_readme_and_docs(doc):

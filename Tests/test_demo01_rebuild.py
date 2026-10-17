@@ -1,49 +1,36 @@
-"""Demo 01 rebuild attempt (ticket #98): the mapping, measured.
+"""Demo 01 rebuild (ticket #98): the mapping, measured -- and the fixture
+that makes it reachable.
 
-This module drives `Resources/Demo_files/Silk_Demo_01.FCStd`'s stored
-inputs through the shop-floor ops layer (`SilkWorkflowOps`: Edge ->
-Patch -> Blend -> CornerBlend) and records, honestly, how far the
-pipeline reaches. It asserts the steps that succeed and pins the exact
-refusals of the steps that do not -- a future capability that makes a
-refused step build will turn this module red on purpose.
+The demo's own sketches (`Resources/Demo_files/Silk_Demo_01.FCStd`, opened
+read-only and never saved) are HALF the shape: the rib curves run (mirrored
+hoop) -> symmetry plane (u = 0.5) -> modelled hoop (u = 1), and the five ring
+faces consume only the u in [0.5, 1] half of each rib (a stored
+`ControlPoly4_segment` piece).  A Silk `Edge` consumes a WHOLE sketch -- it
+has no trim property -- so on the demo's own sketches the twelve whole-sketch
+Edges build but the four rib-bounded faces cannot close a loop: that is
+pinned here, unchanged, with the exact refusal text.
 
-The mapping (derived from the demo's `Document.xml` link graph; the full
-tables are `docs/research/silk-demo-01-inventory.md`): 16 of the demo's
-29 sketches feed 12 whole-sketch Edges --
+`Resources/Test_files/examples/SketchOnly_Demo01Subset.FCStd` adds the four
+missing half-ribs as ordinary 3-line ControlPoly4 sketches (the u in [0.5, 1]
+sub-curve of a cubic Bezier is exactly a cubic Bezier).  The fixture rebuild
+then reaches the demo's own topology -- 12 Edges -> 5 Patches -> 8 Blends ->
+4 CornerBlends, all oracle-green -- and the measurements below say how
+exactly it reproduces the demo's stored legacy objects:
 
-  * 4 outer cross-section edges  (Sketch015/016/017/018)
-  * 4 rib curves                 (Sketch020/022/024/026)
-  * 4 node-pair (2N) hoop edges  (036+037, 038+039, 042+045, 032+035)
+  * every built Edge is pole-identical to the demo's stored `ControlPoly4`
+    it stands for (the four half-ribs against the stored
+    `ControlPoly4_segment` pieces: max delta 2.8e-14 mm, float association,
+    not geometry);
+  * every built Patch's 16-pole net IS the demo's stored `ControlGrid44_4_*`
+    net, up to a named symmetry of the square: Front/Top/Back in the stored
+    order (delta <= 2.9e-14), Right under `rot90` and Bottom under `rot180`
+    (delta <= 4.0e-13) -- those two faces carry a rotated cycle because the
+    corner stage requires it (see `Tests/demo01_fixture_model.py` and the
+    `..._demo_order_patches_refuse_at_the_corner` test below).
 
--- and the demo's five ring faces are bounded by those curves. But the
-faces use **HALF-ribs**: the demo stores `ControlPoly4_segment` pieces
-of u in [0.5, 1] for every rib (e.g. `ControlPoly4_segment001` =
-Sketch020 at u in (0.5, 1.0)), and the other half belongs to the model's
-mirrored side (the file stores half the shape; `Base_Surface_Mirrors`
-mirrors it). A Silk Edge consumes a whole sketch -- it has no trim --
-so a rebuilt front/top/bottom/back boundary loop made of full ribs does
-not close: each rib's u=0.5 point sits on the symmetry plane (measured:
-Sketch020 -> (0,0,0), Sketch022 -> (0,0,50), Sketch024 -> (170,0,0),
-Sketch026 -> (185,0,70)), while the outer loop's corners are at the
-hoop edges' ends.
-
-The measured outcome, asserted below:
-
-  * all 12 Edges build, match the measured mapping, and are
-    **pole-identical to the demo's stored `ControlPoly4` objects**
-    (measured max delta 0.0) -- `check_edge` is green except the
-    Bottom_Right hoop edge, whose E2 pole-spacing deviation is
-    **inherited from the demo's own `ControlPoly4_2N003`** (the same
-    inequality holds on the legacy poles; verified in the test);
-  * the **Right** face (the end cap -- its four boundary curves ARE the
-    whole 2N sketches) rebuilds as one Patch and passes `check_patch`;
-  * the other four faces are REFUSED by `create_patch` with the exact
-    "do not close a loop" text naming the outer edge that shares no
-    corner;
-  * no seam can be blended (each hoop edge then has exactly one patch)
-    and no junction can be attempted -- `create_corner_blend` refuses
-    the empty ring; the front/top/right junction's other two strips
-    need the refused patches.
+The click order is part of the result, and the third test measures that: in
+the demo's own stored order all five faces are pole-identical in the RAW
+order, and all four junctions refuse.
 
 No continuity label is asserted anywhere in this module.
 """
@@ -54,16 +41,17 @@ import FreeCAD
 
 import SilkChecks
 import SilkWorkflowOps as OPS
+import Tests.demo01_fixture_model as MODEL
 
 _SILK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEMO01_PATH = os.path.join(_SILK_DIR, "Resources", "Demo_files",
-                           "Silk_Demo_01.FCStd")
-FIXTURE_PATH = os.path.join(_SILK_DIR, "Resources", "Test_files", "examples",
-                            "SketchOnly_Demo01Subset.FCStd")
+DEMO01_PATH = MODEL.DEMO01_PATH
+FIXTURE_PATH = MODEL.FIXTURE_PATH
 
-# (edge name, sketches it consumes, measured u=0 end, measured u=1 end,
-#  measured u=0.5 point for ribs -- the symmetry-plane corner the HALF
-#  segment ends at -- or None)
+# The demo's 29 sketches are the WHOLE-rib inputs: 16 of them feed 12
+# whole-sketch Edges, and the four rib-bounded faces cannot close on them.
+# (edge name, sketches, measured u=0 end, measured u=1 end, measured u=0.5
+#  point for ribs -- the symmetry-plane corner the face would have to start
+#  from -- or None)
 EDGE_MAP = [
     ("E_front_out", ("Sketch015",), (0.0, 0.0, 0.0), (0.0, 0.0, 50.0), None),
     ("E_top_out", ("Sketch016",), (0.0, 0.0, 50.0), (185.0, 0.0, 70.0), None),
@@ -87,7 +75,7 @@ EDGE_MAP = [
      (150.0, -45.0, 0.0), None),
 ]
 
-# (patch name, edge cycle, verdict, the edge named by the refusal)
+# (patch name, whole-sketch edge cycle, verdict, the edge named by a refusal)
 PATCH_MAP = [
     ("P_Front", ("E_front_out", "E_right_FR", "E_rib_FT", "E_rib_FB"),
      "refused", "E_front_out"),
@@ -104,9 +92,8 @@ PATCH_MAP = [
 _ENDPOINT_TOL = 1e-6
 _POLE_TOL = 1e-9
 
-# The demo's stored legacy ControlPoly4 objects the 12 Edges rebuild from.
-# Pole parity against these (delta <= _POLE_TOL) is the strong oracle; it
-# was measured at exactly 0.0 on every edge.
+# The demo's stored legacy ControlPoly4 objects the 12 whole-sketch Edges
+# rebuild from (pole parity measured at exactly 0.0 on every edge).
 LEGACY_POLYS = {
     "E_front_out": "ControlPoly4_3L",
     "E_top_out": "ControlPoly4_3L003",
@@ -122,13 +109,11 @@ LEGACY_POLYS = {
     "E_right_BkR": "ControlPoly4_2N",
 }
 
-# check_edge's E2 heuristic (step <= 1.05 * skip) is violated by the
-# demo's OWN stored Bottom_Right hoop poly (ControlPoly4_2N003):
-# p2->p3 = 70.711 > 1.05 * p2->p0 = 63.246. The rebuilt edge is
-# pole-identical to that legacy object, so the deviation is inherited from
-# the demo's input geometry, not introduced by the rebuild. Accepted for
-# exactly this edge and name; verified against the legacy poles below.
-KNOWN_E2_EDGE = "E_right_BR"
+# check_edge's E2 heuristic (step <= 1.05 * skip) is violated by the demo's
+# OWN stored Bottom_Right hoop poly (ControlPoly4_2N003): p2->p3 = 70.711 >
+# 1.05 * p2->p0 = 63.246.  The rebuilt edge is pole-identical to that legacy
+# object, so the deviation is inherited from the demo's input geometry.
+KNOWN_E2_EDGE = MODEL.KNOWN_E2_EDGE
 
 
 class _CaptureConsole:
@@ -169,8 +154,7 @@ def _open_read_only(path):
 
 def _copy_sketch(target_doc, source_doc, name):
     """Copy one sketch's geometry + placement into `target_doc` under the
-    same name. Constraints are not needed to build an Edge (the ops layer
-    and the classifier read Geometry/Placement)."""
+    same name. Constraints are not needed to build an Edge."""
     src = source_doc.getObject(name)
     dst = target_doc.addObject("Sketcher::SketchObject", name)
     dst.Placement = src.Placement
@@ -179,10 +163,21 @@ def _copy_sketch(target_doc, source_doc, name):
     return dst
 
 
-def _attempt_rebuild(source_doc, doc, legacy=None):
-    """Run the whole rebuild attempt from `source_doc`'s sketches into the
-    harness scratch `doc`. `legacy` (optional) maps edge name -> the demo's
-    stored ControlPoly4 object name for pole parity. Returns
+def _report(lines):
+    """Emit the raw numbers this ticket has to report, so they reach the
+    suite tail (the harness prints errors, not `checks`)."""
+    for line in lines:
+        print("[demo01] %s" % line)
+
+
+# ---------------------------------------------------------------------------
+# 1. the demo's own whole-rib sketches: what still refuses, pinned
+# ---------------------------------------------------------------------------
+
+def _whole_sketch_attempt(source_doc, doc, legacy=None):
+    """Run the whole-sketch rebuild attempt from `source_doc`'s sketches into
+    the harness scratch `doc`. `legacy` (optional) maps edge name -> the
+    demo's stored ControlPoly4 name for pole parity. Returns
     {pass, errors, checks}."""
     errors, checks = [], []
     FreeCAD.setActiveDocument(doc.Name)
@@ -191,8 +186,8 @@ def _attempt_rebuild(source_doc, doc, legacy=None):
             _copy_sketch(doc, source_doc, sk)
     doc.recompute()
 
-    # ---- Edges: all 12 must build, match the measured geometry, and
-    # pass check_edge (with the one inherited E2 deviation documented).
+    # ---- Edges: all 12 build, match the measured geometry, and pass
+    # check_edge (with the one inherited E2 deviation documented).
     edges = {}
     edge_errors = []
     for name, sketches, p0, p1, mid in EDGE_MAP:
@@ -225,11 +220,10 @@ def _attempt_rebuild(source_doc, doc, legacy=None):
                 edge_errors.append("check_edge %s: %s" % (name, bad))
     errors.extend(edge_errors)
     if not edge_errors:
-        checks.append("%d/%d edges build, geometry matches the measured "
-                      "demo mapping" % (len(edges), len(EDGE_MAP)))
+        checks.append("%d/%d whole-sketch edges build, geometry matches the "
+                      "measured demo mapping" % (len(edges), len(EDGE_MAP)))
 
-    # ---- Pole parity against the demo's stored ControlPoly4 objects
-    # (only when the caller supplies the mapping).
+    # ---- Pole parity against the demo's stored ControlPoly4 objects.
     if legacy is not None:
         parity_errors = []
         for name, lname in legacy.items():
@@ -263,8 +257,8 @@ def _attempt_rebuild(source_doc, doc, legacy=None):
                           "ControlPoly4 objects (max delta 0)"
                           % (len(legacy), len(legacy)))
 
-    # ---- Patches: only the Right end cap closes. The four refused loops
-    # must name their outer cross-section edge as meeting 0 others.
+    # ---- Patches: only the Right end cap closes; the four rib-bounded
+    # faces must be refused, naming their outer cross-section edge.
     patches = {}
     skipped_patch = False
     with _CaptureConsole() as cap:
@@ -336,34 +330,222 @@ def _attempt_rebuild(source_doc, doc, legacy=None):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_demo01_rebuild_attempt_from_demo_sketches(doc):
-    """The whole attempt, driven from the demo's own sketches (the demo is
-    opened read-only and never saved). The rebuilt Edges are additionally
-    checked pole-for-pole against the demo's stored `ControlPoly4` objects
-    -- measured at exactly zero delta on all 12."""
+def test_demo01_whole_sketch_edges_cannot_bound_the_ring_faces(doc):
+    """The demo's OWN sketches (opened read-only, never saved): 12 Edges
+    build and are pole-identical to the stored `ControlPoly4` objects, the
+    Right end cap builds as one Patch, and the four rib-bounded faces are
+    REFUSED with the exact "do not close a loop" text naming the outer
+    cross-section edge that shares no corner.  No seam, no blend, no
+    junction is reachable from whole sketches -- the limitation the fixture's
+    half-rib supplement exists to remove."""
     demo, opened = _open_read_only(DEMO01_PATH)
     try:
-        return _attempt_rebuild(demo, doc, legacy=LEGACY_POLYS)
+        outcome = _whole_sketch_attempt(demo, doc, legacy=LEGACY_POLYS)
+        _report(["demo's own 29 sketches: 12 whole-sketch Edges, 1 of 5 "
+                 "faces reachable, 0 seams"])
+        return outcome
     finally:
         if opened:
             FreeCAD.closeDocument(demo.Name)
 
 
-def test_demo01_fixture_reproduces_demo_edge_geometry(doc):
-    """The durable fixture's sketches must reproduce the demo's measured
-    edge geometry, not just its names -- the click-through and rebuild
-    rounds rely on it. Runs the same attempt as the demo test; the pole
-    parity against the stored legacy objects is asserted there (this test
-    never opens the demo file)."""
-    fixture, opened = _open_read_only(FIXTURE_PATH)
+# ---------------------------------------------------------------------------
+# 2. the fixture rebuild: the achieved outcome, pole-for-pole
+# ---------------------------------------------------------------------------
+
+def test_demo01_fixture_rebuild_reaches_the_demo_topology(doc):
+    """The fixture's click-through, driven by the ops layer: 12 Edges ->
+    5 Patches -> 8 Blends -> 4 CornerBlends, every object oracle-green (the
+    one inherited E2 deviation aside), every Edge pole-identical to the
+    demo's stored curve and every Patch's net the demo's stored
+    `ControlGrid44_4_*` net up to a named square symmetry."""
+    errors, checks, report = [], [], []
+    result = MODEL.build(doc)
+    errors.extend(result["problems"])
+
+    counts = (len(result["edges"]), len(result["patches"]),
+              len(result["blends"]), len(result["corners"]))
+    if counts != (12, 5, 8, 4):
+        errors.append("fixture rebuild reached %d edges / %d patches / "
+                      "%d blends / %d corners, want 12/5/8/4" % counts)
+    else:
+        checks.append("click-through: 12 Edges -> 5 Patches -> 8 Blends -> "
+                      "4 CornerBlends")
+    report.append("counts: %d edges, %d patches, %d blends, %d corners"
+                  % counts)
+
+    # ---- oracle green, per object
+    for name, bad in sorted(result["edge_checks"].items()):
+        if not bad:
+            continue
+        if (name == KNOWN_E2_EDGE and len(bad) == 1
+                and bad[0][0] == "E2_pole_order"):
+            checks.append("check_edge %s: E2 pole-order deviation %s "
+                          "inherited from the demo's own 2N poly"
+                          % (name, bad[0][1]))
+        else:
+            errors.append("check_edge %s: %s" % (name, bad))
+    green_edges = sorted(n for n, bad in result["edge_checks"].items()
+                         if not bad)
+    checks.append("check_edge GREEN on %d/%d edges (%s)"
+                  % (len(green_edges), len(result["edges"]),
+                     ", ".join(green_edges)))
+    report.append("check_edge GREEN on %d/12; %s carries the inherited E2 "
+                  "%s" % (len(green_edges), KNOWN_E2_EDGE,
+                          result["edge_checks"].get(KNOWN_E2_EDGE)))
+
+    for name, bad in sorted(result["patch_checks"].items()):
+        if bad:
+            errors.append("check_patch %s: %s" % (name, bad))
+    for name, bad in sorted(result["blend_checks"].items()):
+        if bad:
+            errors.append("check_blend %s: %s" % (name, bad))
+    if not any("check_patch" in e for e in errors):
+        checks.append("check_patch GREEN on all %d patches (own Edges cycle)"
+                      % len(result["patches"]))
+    if not any("check_blend" in e for e in errors):
+        checks.append("check_blend GREEN on all %d blends" % len(result["blends"]))
+
+    for name, corner in sorted(result["corners"].items()):
+        problems = []
+        if len(corner.Poles or []) != 36:
+            problems.append("%d poles" % len(corner.Poles or []))
+        if not corner.Shape or corner.Shape.isNull() or not corner.Shape.Faces:
+            problems.append("empty Shape")
+        elif not corner.Shape.isValid():
+            problems.append("invalid Shape")
+        if problems:
+            errors.append("corner %s: %s" % (name, problems))
+    if not any(e.startswith("corner ") for e in errors):
+        checks.append("all %d corners: 36 poles, valid non-empty Shape"
+                      % len(result["corners"]))
+        for name, corner in sorted(result["corners"].items()):
+            report.append("corner %-24s %d poles, %d face(s), valid=%s"
+                          % (name, len(corner.Poles),
+                             len(corner.Shape.Faces),
+                             corner.Shape.isValid()))
+
+    # ---- seam inventory: 8 seams, all blended
+    blended = [n for n, status in result["seam_inventory"]
+               if status == "blended"]
+    if len(result["seam_inventory"]) != 8 or len(blended) != 8:
+        errors.append("seam inventory is %s, want 8 seams all 'blended'"
+                      % (result["seam_inventory"],))
+    else:
+        checks.append("seam inventory: 8 seams, all 'blended'")
+
+    # ---- pole parity against the demo's stored legacy objects
+    demo, opened = _open_read_only(DEMO01_PATH)
     try:
-        return _attempt_rebuild(fixture, doc)
+        for name, sketches, legacy_name in MODEL.EDGES:
+            edge = result["edges"].get(name)
+            if edge is None:
+                continue
+            reference = demo.getObject(legacy_name).Poles
+            delta = MODEL.straight_pole_delta(list(edge.Poles), reference)
+            report.append("edge %-16s vs %-24s delta %.3e"
+                          % (name, legacy_name, delta))
+            if delta > _POLE_TOL:
+                errors.append("edge %s vs %s: max pole delta %.3e"
+                              % (name, legacy_name, delta))
+        for name, order, grid in MODEL.PATCHES:
+            patch = result["patches"].get(name)
+            if patch is None:
+                continue
+            reference = demo.getObject(grid).Poles
+            raw = MODEL.straight_pole_delta(list(patch.Poles), reference)
+            transform, delta = MODEL.pole_parity(list(patch.Poles), reference)
+            report.append("patch %-9s vs %-22s %-16s delta %.3e "
+                          "(raw-order delta %.3e)"
+                          % (name, grid, transform, delta, raw))
+            if delta > _POLE_TOL:
+                errors.append("patch %s vs %s: best dihedral image %s still "
+                              "differs by %.3e" % (name, grid, transform,
+                                                   delta))
+        checks.append("every Edge is pole-identical to the demo's stored "
+                      "ControlPoly4 (max delta <= %.0e)" % _POLE_TOL)
+        checks.append("every Patch net IS the demo's stored "
+                      "ControlGrid44_4_* net up to a named square symmetry "
+                      "(max delta <= %.0e)" % _POLE_TOL)
     finally:
         if opened:
-            FreeCAD.closeDocument(fixture.Name)
+            FreeCAD.closeDocument(demo.Name)
+
+    _report(report)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+# ---------------------------------------------------------------------------
+# 3. the click order is part of the result: the demo's own order refuses
+# ---------------------------------------------------------------------------
+
+def test_demo01_demo_order_patches_refuse_at_the_corner(doc):
+    """The demo's own stored grid order (its `Poly0..Poly3` links) is the
+    order in which every face compares pole-for-pole with NO transform --
+    and the order in which no junction can be filled: each corner refuses
+    with "its two patches disagree about which end is the junction (twisted
+    input)".  This is the measurement that fixes the documented click order
+    in `Tests/demo01_fixture_model.py`; it is a parameterization constraint
+    of the corner stage, not a geometry difference (the nets are the same).
+    """
+    errors, checks, report = [], [], []
+    result = MODEL.build_demo_order_patches(doc)
+    counts = (len(result.get("edges", {})), len(result.get("patches", {})),
+              len(result.get("blends", {})))
+    if counts != (12, 5, 8):
+        errors.append("demo-order build reached %d/%d/%d, want 12/5/8"
+                      % counts)
+    else:
+        checks.append("demo-order build: 12 Edges -> 5 Patches -> 8 Blends")
+    if result.get("corners"):
+        errors.append("the demo's own face order now builds a corner (%s) -- "
+                      "the ordering constraint changed; update the #98 "
+                      "report/tests" % sorted(result["corners"]))
+
+    # every face pole-identical in the RAW order under this order
+    demo, opened = _open_read_only(DEMO01_PATH)
+    try:
+        for name, order, grid in MODEL.PATCHES:
+            patch = result["patches"].get(name)
+            if patch is None:
+                continue
+            reference = demo.getObject(grid).Poles
+            raw = MODEL.straight_pole_delta(list(patch.Poles), reference)
+            report.append("demo-order patch %-9s vs %-22s raw delta %.3e"
+                          % (name, grid, raw))
+            if raw > _POLE_TOL:
+                errors.append("demo-order patch %s vs %s: raw pole delta "
+                              "%.3e" % (name, grid, raw))
+    finally:
+        if opened:
+            FreeCAD.closeDocument(demo.Name)
+
+    expected_refusals = {name: None for name, _ring, _pt in MODEL.CORNERS}
+    if len(result["console"]) != len(expected_refusals):
+        errors.append("expected %d corner attempts, got %d"
+                      % (len(expected_refusals), len(result["console"])))
+    for name in expected_refusals:
+        text = " ".join(result["console"].get(name, []))
+        if "twisted input" not in text:
+            errors.append("corner %s refusal text lacks 'twisted input': %s"
+                          % (name, text))
+        elif "Nothing was created" not in text:
+            errors.append("corner %s refusal does not say nothing was "
+                          "created: %s" % (name, text))
+        else:
+            checks.append("corner %s refused: %s"
+                          % (name, text.strip().split("\n")[0]))
+    if not errors:
+        checks.append("4 corners refused, and with no corner object parked "
+                      "in the document (%d CornerBlends)"
+                      % len([o for o in doc.Objects
+                             if getattr(o, "object_type", "") == "CornerBlend"]))
+    _report(report)
+    return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 ALL_TESTS = [
-    test_demo01_rebuild_attempt_from_demo_sketches,
-    test_demo01_fixture_reproduces_demo_edge_geometry,
+    test_demo01_whole_sketch_edges_cannot_bound_the_ring_faces,
+    test_demo01_fixture_rebuild_reaches_the_demo_topology,
+    test_demo01_demo_order_patches_refuse_at_the_corner,
 ]
