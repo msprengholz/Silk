@@ -1868,42 +1868,55 @@ def test_band_cell_mirror_agrees_with_the_real_band_cells(doc):
     # also made the NEXT test 73s (measured) and fed the retention the
     # RSS report was flagging. Same coverage: 147 (layout, layout, band)
     # combinations, compared against the same `band_cells`.
+    #
+    # The loop was still answering some questions three times: the inner
+    # `along_b, band_b` walk set BOTH patches and then compared BOTH, but
+    # `band_cell_problem(entry, which, None)` reads only `which`'s own patch
+    # (`_pair_of` / `split_pair` of that patch), so the OTHER patch's layout
+    # cannot change the answer -- 147 recomputes for 100 distinct
+    # (patch, layout) questions, ~0.25 s each (measured 36.4 s). One
+    # recompute per distinct question now. The other patch is still held at a
+    # DIFFERENT layout from the one under test (#69: a mirror that only agrees
+    # on symmetric pairs is exactly the mirror that would let a second editor
+    # validate against its partner's geometry).
     a = _square_patch(doc, "MirrorA")
     b = _patch_sharing(doc, a.Edges[0], "MirrorB")
-    for along_a in layouts:
-        for band_a in layouts:
-            for along_b, band_b in ((along_a, band_a), ((0.0, 1.0),
-                                                          (0.2, 1.0)),
-                                    ((0.5, 1.0), (0.0, 1.0))):
-                for patch_, along, band in ((a, along_a, band_a),
-                                            (b, along_b, band_b)):
-                    setattr(patch_, "USplit1", along[0])
-                    setattr(patch_, "USplit2", along[1])
-                    setattr(patch_, "VSplit1", band[0])
-                    setattr(patch_, "VSplit2", band[1])
-                doc.recompute()
-                entry = {"edge": a.Edges[0], "patch_a": a, "patch_b": b,
-                         "status": "blendable", "blend": None}
-                for which, patch, other, along, band in (
-                        (BAND_A, a, b, along_a, band_a),
-                        (BAND_B, b, a, along_b, band_b)):
-                    ea, ss = patch_side(patch, other)
-                    if ea is None:
-                        continue
-                    real = len(band_cells(patch, ea, ss))
-                    problem = band_cell_problem(entry, which, None)
-                    mirrored = 1 if problem is None else int(
-                        problem.rsplit("covers ", 1)[1].split(" ")[0])
-                    compared += 1
-                    if mirrored != real:
-                        errors.append(
-                            "%s layout along=%r band=%r: mirror says %d "
-                            "cells, SilkMachinery.band_cells says %d"
-                            % (which, along, band, mirrored, real))
-                    if (real == 1) != (problem is None):
-                        errors.append("%s layout along=%r band=%r: "
-                                      "problem=%r but real count is %d"
-                                      % (which, along, band, problem, real))
+    all_pairs = [(x, y) for x in layouts for y in layouts]
+    asymmetric = (((0.0, 1.0), (0.2, 1.0)), ((0.5, 1.0), (0.0, 1.0)))
+    cases = [(BAND_A, a, b, lp, asymmetric[i % 2])
+             for i, lp in enumerate(all_pairs)]
+    cases += [(BAND_B, b, a, lp, asymmetric[i % 2])
+              for i, lp in enumerate(all_pairs)]
+    cases += [(BAND_B, b, a, op, all_pairs[0]) for op in asymmetric]
+    for which, patch_, other, (along, band), (o_along, o_band) in cases:
+        setattr(patch_, "USplit1", along[0])
+        setattr(patch_, "USplit2", along[1])
+        setattr(patch_, "VSplit1", band[0])
+        setattr(patch_, "VSplit2", band[1])
+        setattr(other, "USplit1", o_along[0])
+        setattr(other, "USplit2", o_along[1])
+        setattr(other, "VSplit1", o_band[0])
+        setattr(other, "VSplit2", o_band[1])
+        doc.recompute()
+        entry = {"edge": a.Edges[0], "patch_a": a, "patch_b": b,
+                 "status": "blendable", "blend": None}
+        ea, ss = patch_side(patch_, other)
+        if ea is None:
+            continue
+        real = len(band_cells(patch_, ea, ss))
+        problem = band_cell_problem(entry, which, None)
+        mirrored = 1 if problem is None else int(
+            problem.rsplit("covers ", 1)[1].split(" ")[0])
+        compared += 1
+        if mirrored != real:
+            errors.append(
+                "%s layout along=%r band=%r: mirror says %d "
+                "cells, SilkMachinery.band_cells says %d"
+                % (which, along, band, mirrored, real))
+        if (real == 1) != (problem is None):
+            errors.append("%s layout along=%r band=%r: "
+                          "problem=%r but real count is %d"
+                          % (which, along, band, problem, real))
     checks.append("candidate-layout mirror matches band_cells on %d "
                   "(patch, layout) pairs, including ASYMMETRIC pairs"
                   % compared)
