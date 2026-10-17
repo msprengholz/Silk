@@ -187,9 +187,41 @@ def _build_fixture(doc, source, rotate=(), swap=()):
     return patches, blends
 
 
-def _assert_all_four_build(doc, patches, blends):
+# Which patches a ring's seams belong to, from the documented tables (no
+# second list to keep in step).
+def _ring_patches(ring):
+    patches = set()
+    for name, pa, pb, _edge in MODEL.BLENDS:
+        if name in ring:
+            patches.update((pa, pb))
+    return patches
+
+
+_RING_PATCHES = {name: _ring_patches(ring)
+                 for name, ring, _point in MODEL.CORNERS}
+
+
+def _corners_touched(rotate=(), swap=()):
+    """The junctions a mutation can reach.
+
+    A face's cycle rotation only reparameterizes that face, and a blend's
+    swapped pair order only reverses that strip, so a junction whose ring
+    touches NEITHER is built from byte-identical inputs and cannot change
+    -- filling it again would re-assert the unmutated baseline, not the
+    mutation.  Each case fills exactly the junctions it moves (#96/#107
+    measurement: the full four per case was 32 of 32 identical rebuilds
+    for 12 distinct ones).
+    """
+    out = []
+    for name, ring, point in MODEL.CORNERS:
+        if (_RING_PATCHES[name] & set(rotate)) or (set(ring) & set(swap)):
+            out.append((name, ring, point))
+    return out
+
+
+def _assert_junctions_build(doc, blends, corners):
     errors, checks = [], []
-    for name, ring, _point in MODEL.CORNERS:
+    for name, ring, _point in corners:
         strips = [blends[b] for b in ring]
         corner, problems, line = _fill_and_check(doc, strips, name)
         if problems:
@@ -203,8 +235,9 @@ def test_rotated_patch_cycle_still_fills_every_junction(doc):
     """Rotating ONE face's stored edge cycle by one edge flips the direction
     of the two seams on that face -- the parameterization the owner's hand
     build produced.  Before #107 that made the two affected junctions refuse
-    with "twisted input" (`li_map` compared raw); now all four fill, and the
-    fill is the same one the documented order gives."""
+    with "twisted input" (`li_map` compared raw); now every junction the
+    rotated face touches fills, and the fill is the same one the documented
+    order gives."""
     errors, checks, report = [], [], []
     source, opened_dir = MODEL.open_fresh(MODEL.FIXTURE_PATH)
     try:
@@ -214,13 +247,16 @@ def test_rotated_patch_cycle_still_fills_every_junction(doc):
             try:
                 patches, blends = _build_fixture(sub, source,
                                                  rotate=(rotated,))
-                errs, _chks = _assert_all_four_build(sub, patches, blends)
+                touched = _corners_touched(rotate=(rotated,))
+                errs, _chks = _assert_junctions_build(sub, blends, touched)
                 errors.extend("%s rotated: %s" % (rotated, e) for e in errs)
                 if not errs:
-                    checks.append("cycle of %s rotated one edge: all 4 "
-                                  "corners fill (36 poles, valid, "
-                                  "oracle-green)" % rotated)
-                    report.append("rotated %s -> 4/4 corners" % rotated)
+                    checks.append("cycle of %s rotated one edge: all %d "
+                                  "junctions it touches fill (36 poles, "
+                                  "valid, oracle-green)"
+                                  % (rotated, len(touched)))
+                    report.append("rotated %s -> %d/%d corners"
+                                  % (rotated, len(touched), len(touched)))
             finally:
                 FreeCAD.closeDocument(sub.Name)
                 FreeCAD.setActiveDocument(doc.Name)
@@ -234,8 +270,8 @@ def test_swapped_blend_direction_still_fills_every_junction(doc):
     """Handing `create_blend` the two patches in the other order reverses the
     strip's column orientation (PatchA's outer sits at column 0).  Before
     #107 a ring whose blends did not run as a directed cycle could not
-    assemble ("could not build triangular 4th member"); now every ring fills
-    from any blend direction."""
+    assemble ("could not build triangular 4th member"); now every junction
+    the reversed strip belongs to fills."""
     errors, checks, report = [], [], []
     source, opened_dir = MODEL.open_fresh(MODEL.FIXTURE_PATH)
     try:
@@ -244,13 +280,15 @@ def test_swapped_blend_direction_still_fills_every_junction(doc):
             try:
                 patches, blends = _build_fixture(sub, source,
                                                  swap=(swapped,))
-                errs, _chks = _assert_all_four_build(sub, patches, blends)
+                touched = _corners_touched(swap=(swapped,))
+                errs, _chks = _assert_junctions_build(sub, blends, touched)
                 errors.extend("%s swapped: %s" % (swapped, e) for e in errs)
                 if not errs:
-                    checks.append("blend %s reversed: all 4 corners fill "
-                                  "(36 poles, valid, oracle-green)"
-                                  % swapped)
-                    report.append("swapped %s -> 4/4 corners" % swapped)
+                    checks.append("blend %s reversed: all %d junctions it "
+                                  "belongs to fill (36 poles, valid, "
+                                  "oracle-green)" % (swapped, len(touched)))
+                    report.append("swapped %s -> %d corners"
+                                  % (swapped, len(touched)))
             finally:
                 FreeCAD.closeDocument(sub.Name)
                 FreeCAD.setActiveDocument(doc.Name)
