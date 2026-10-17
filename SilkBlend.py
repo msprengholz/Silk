@@ -166,6 +166,51 @@ def side_and_end(o, p, tol=None):
     return e, (0 if e[1] == "0" else 1)
 
 
+# Which corner of a boundary side is which parametric end of the seam-
+# parallel axis. A side's own 0/1 end is the corner it shares with the
+# previous/next side; the map names where that corner falls on the axis
+# the strip spans (U for a U-seam, V for a V-seam) after orientation.
+SEAM_CMAP = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
+             "V0": {0: 0, 3: 3}, "V1": {1: 0, 2: 3}}
+
+
+def seam_identity(ea, eb, pairs):
+    """True when the two patches parameterize the shared seam in the SAME
+    direction, False when opposite, None when the matched corner pairs
+    cannot say (a degenerate or inconsistent seam).
+
+    `pairs` are the seam's two matched corner pairs (from `_resolve_seam`);
+    `ea` / `eb` the two patches' boundary sides. This is the single
+    statement of a seam's direction: `run_blend` reads it to align the
+    strip's middle rows, and the corner's junction-end map reads it to
+    compare a row index on one patch against the other's -- a patch that
+    parameterizes the seam the other way round names the SAME junction at
+    the mirrored row."""
+    identity = None
+    for lc_idx, rc_idx in pairs:
+        la = SEAM_CMAP[ea].get(lc_idx)
+        rb = SEAM_CMAP[eb].get(rc_idx)
+        if la is None or rb is None:
+            return None
+        is_id = (la == rb)
+        if identity is None:
+            identity = is_id
+        elif is_id != identity:
+            return None
+    return identity
+
+
+def seam_direction(o, tol=None):
+    """`seam_identity` for blend `o`, resolving its seam through the SAME
+    `_resolve_seam` run_blend writes its middle rows through; None when it
+    cannot say."""
+    tol = getattr(o, "tolerance", 0.01) if tol is None else tol
+    seam = _resolve_seam(o, o.PatchA, o.PatchB, tol)
+    if seam is None:
+        return None
+    return seam_identity(seam[0], seam[1], seam[2])
+
+
 def _side_on(o, p):
     """The boundary side blend `o` takes on patch `p`, or None when `o`
     cannot say -- re-resolved through the SAME `_resolve_seam` run_blend
@@ -467,28 +512,17 @@ def run_blend(fp):
         p_i._HiddenSubgridIdxs = sorted(idxs)
 
     # Step 6: corner-to-parameter mapping
-    cmap = {"U0": {0: 0, 1: 3}, "U1": {2: 3, 3: 0},
-            "V0": {0: 0, 3: 3}, "V1": {1: 0, 2: 3}}
+    cmap = SEAM_CMAP
 
     # Seam alignment (#30): the matched corners fix the two seam ends;
     # the middle rows must follow the same alignment. Both patches can
     # parametrize the shared edge in the same physical direction
     # (identity) or opposite (reversed) — it depends on the geometry,
     # not on the edge type. Inconsistent corner pairs = twisted input.
-    # `pairs` holds only the seam's two matched corner pairs; the cmap
-    # lookups guard both sides (degenerate pointed corners must never
-    # KeyError).
-    identity = None
-    for lc_idx, rc_idx in pairs:
-        la = cmap[ea].get(lc_idx)
-        rb = cmap[eb].get(rc_idx)
-        if la is None or rb is None:
-            return
-        is_id = (la == rb)
-        if identity is None:
-            identity = is_id
-        elif is_id != identity:
-            return
+    # `pairs` holds only the seam's two matched corner pairs; `seam_identity`
+    # guards both sides (degenerate pointed corners must never KeyError)
+    # and returns None for the inconsistent case, which refuses here.
+    identity = seam_identity(ea, eb, pairs)
     if identity is None:
         return
 

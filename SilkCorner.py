@@ -36,7 +36,7 @@ from FreeCAD import Gui
 import Part
 import ArachNURBS as AN
 
-from SilkBlend import band_cells, side_and_end, BLEND_TYPES
+from SilkBlend import band_cells, side_and_end, seam_direction, BLEND_TYPES
 from SilkMachinery import (build_intervals, split_pair, corner_ring,
     corner_grid, orient_junction_row, corner_ring_3,
     control_grid64_3_1, reverse_grid_rows)
@@ -102,6 +102,45 @@ def _corner_cell_net(p, cell):
     return poles, weights
 
 
+def _shared_patch(a, b):
+    """The one patch two ring strips both touch, or None when they touch
+    none or two (an ambiguous pair -- the corner cannot name a side then)."""
+    common = []
+    for x in (getattr(a, "PatchA", None), getattr(a, "PatchB", None)):
+        if x is not None and x in (getattr(b, "PatchA", None),
+                                   getattr(b, "PatchB", None)):
+            common.append(x)
+    return common[0] if len(common) == 1 else None
+
+
+def _orient_ring_columns(grids, ordered):
+    """Flip each strip's 6 columns so the ring's shared patch lies on the
+    SAME side of every strip.
+
+    A strip's 6-pole axis runs PatchA's outer -> shared seam -> PatchB's
+    outer, so which of the two patches lands at column 0 is whichever the
+    user handed `create_blend` FIRST -- arbitrary, and a blend is the same
+    surface either way round. The corner chain instead reads the shared
+    corner from a fixed column (grid_i's col 5 against grid_(i+1)'s col 0),
+    so a ring whose blends do not run as a directed cycle (PatchB of one
+    strip IS PatchA of the next) cannot assemble. Flipping the columns of
+    the strips that run the other way -- column c -> 5 - c, a
+    reparameterization of the across-seam axis, not a geometry change --
+    turns any ring into that cycle. On a ring already directed this way it
+    changes nothing."""
+    n = len(grids)
+    out = []
+    for i, (poles, weights) in enumerate(grids):
+        nxt = _shared_patch(ordered[i], ordered[(i + 1) % n])
+        if nxt is not None and getattr(ordered[i], "PatchA", None) is nxt:
+            poles = [poles[r * 6 + (5 - c)]
+                     for r in range(4) for c in range(6)]
+            weights = [weights[r * 6 + (5 - c)]
+                       for r in range(4) for c in range(6)]
+        out.append((poles, weights))
+    return out
+
+
 def _member_ring(base_grids, ordered, patch, member):
     """The 4-grid ring with `member` at `patch`'s corner.
 
@@ -149,6 +188,15 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
         if not e_a or not e_b:
             return None, None, ("blend %s: no shared edge between %s and %s"
                                 % (s.Name, pa.Name, pb.Name))
+        # The two patches can parameterize their shared seam in the same
+        # direction (identity) or opposite (reversed) -- it depends on
+        # the geometry and on each patch's stored cycle, not on the edge
+        # type. A reversed seam names the SAME junction at the mirrored
+        # row of the patch's seam-parallel axis, so the two patches'
+        # junction-end rows are compared ACROSS that reflection.
+        # Comparing the raw indices is what reports a legitimately
+        # reversed seam as a twisted input.
+        identity = seam_direction(s, tol)
         bca = band_cells(pa, e_a, ss_a)
         bcb = band_cells(pb, e_b, ss_b)
         if len(bca) != 1 or len(bcb) != 1:
@@ -169,7 +217,8 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
             else:
                 li_map[pth.Name] = 3 if iv_c > iv_b else 0
             corner_cells[pth.Name] = (pth, iu_c, iv_c, nu, nv)
-        if li_map[pa.Name] != li_map[pb.Name]:
+        if li_map[pa.Name] != (3 - li_map[pb.Name] if identity is False
+                               else li_map[pb.Name]):
             return None, None, ("blend %s: its two patches disagree about "
                                 "which end is the junction (twisted input)"
                                 % s.Name)
@@ -180,6 +229,7 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
                                 "poles / %d weights"
                                 % (s.Name, len(poles), len(weights)))
         grids.append(orient_junction_row(poles, weights, li_map[pa.Name]))
+    grids = _orient_ring_columns(grids, ordered)
     if is_tri:
         base_grids = list(grids)
         patches = []
