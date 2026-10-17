@@ -4078,7 +4078,8 @@ def test_corner_section_accepts_three_blends_for_a_three_valent_junction(doc):
             failed = [(n, d) for n, ok, d in res if not ok]
             check(not failed, "the panel's 3-strip corner is not oracle-green: "
                   "%s" % failed, errors)
-            checks.append("3-strip ring -> %s: CB1-CB4 green, undo %d -> %d"
+            checks.append("3-strip ring -> %s: oracle green (CB2 reads "
+                          "not-applicable for a 3-valent ring), undo %d -> %d"
                           % (corners[0].Name, before, after))
             for n, ok, d in res:
                 checks.append("  %s %s: %s" % (n, "PASS" if ok else "FAIL", d))

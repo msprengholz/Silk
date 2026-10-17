@@ -1042,10 +1042,18 @@ def _check_corner_blend(cb, strips, reference_poles):
     rows, _ = _corner_reference_rows(
         strips, tol=getattr(cb, "tolerance", 0.01))
     if rows is None:
+        # Ask the ring resolver WHY, so the refusal NAMES the strip (or
+        # patch) that broke the ring instead of reporting a bare miss.
+        try:
+            from SilkCorner import corner_inputs, CORNER_DEFAULT_TOL
+            _g, _c, why = corner_inputs(
+                list(strips), getattr(cb, "tolerance", CORNER_DEFAULT_TOL))
+        except Exception as exc:            # never raise out of the oracle
+            why = "the ring resolver raised %r" % (exc,)
+        why = why or "could not derive corner-end rows from the strips"
         results.append(("CB1_c0_boundary", False,
-                        "could not derive corner-end rows from the strips"))
-        results.append(("CB2_interior_fill", False,
-                        "could not derive corner-end rows from the strips"))
+                        "could not derive corner-end rows: %s" % why))
+        results.append(("CB2_interior_fill", False, why))
         return results
 
     # CB1: C0 boundary -- each reference row appears among the 4
@@ -1100,8 +1108,10 @@ def _check_corner_blend(cb, strips, reference_poles):
             # is reported, not asserted either way -- the same convention as
             # CB4's "no reference given (skipped)".
             results.append(("CB2_interior_fill", True,
-                            "not applicable to a 3-valent ring (no legacy "
-                            "reference can assemble its collapsed member)"))
+                            "not applicable to a 3-valent ring: the legacy "
+                            "subgrid chain cannot assemble its collapsed "
+                            "member (multiple coincident corners), and the "
+                            "shipped cap re-solves those rows on purpose"))
         elif grids is None:
             results.append(("CB2_interior_fill", False,
                             "could not derive corner grids: %s" % why))
@@ -1198,14 +1208,24 @@ def check_corner_blend(cb, strip0=None, strip1=None, strip2=None,
 
     Three strips is a 3-valent hard corner -- `corner_inputs` derives the
     triangular 4th member, so CB2's reference chain still runs over four
-    grids; CB1 then matches the three ring strips' junction rows, which are
-    three of the corner's four boundary sides (the fourth is the member's).
+    grids for the 4-valent case; a 3-valent ring has no legacy reference
+    at all and CB2 says so rather than going green or red (see CB2). CB1
+    then matches the ring strips' junction rows, which are three of the
+    corner's four boundary sides (the fourth is the member's).
+
+    A ring of anything other than 3 or 4 strips is refused as INPUT, by
+    count: with an empty strip list no row needs matching, so CB1 used to
+    compute a 0.0 deviation -- a GREEN for having checked nothing.
     """
     if isinstance(cb, (list, tuple)):
         strips = list(cb)
     else:
         strips = [s for s in (strip0, strip1, strip2, strip3)
                   if s is not None]
+    if len(strips) not in (3, 4):
+        return [("ring_input", False,
+                 "a corner ring is 3 or 4 blend strips (got %d)"
+                 % len(strips))]
     return _check_corner_blend(cb, strips, reference_poles)
 
 

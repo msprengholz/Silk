@@ -26,6 +26,11 @@ from SilkCorner import corner_inputs, CORNER_TOL
 
 STRIP_NAMES = ("B12", "B24", "B43", "B31")
 
+# The 3-valent ring (Tests/cube_corner_model.py): three patches meeting at
+# one cube corner, three strips in a directed cycle. Its corner stores the
+# THREE strips it was built from -- the triangular 4th member is derived.
+STRIP3_NAMES = ("B_AB", "B_BC", "B_CA")
+
 # corner cell index per patch (2x2 grid, cell index = iu*nv + iv)
 # Patch44 corner (1,1) -> 3, Patch001 corner (0,1) -> 1,
 # Patch002 corner (1,1) -> 3, Patch003 corner (0,1) -> 1
@@ -350,6 +355,145 @@ def test_corner_blend_negative_interior_pole(doc):
     }
 
 
+def test_three_strip_ring_is_checkable(doc):
+    """The oracle reads a 3-valent hard corner instead of raising on its
+    4-argument signature (a 3-strip corner is a shipped object).
+
+    Structural + CB1 + CB3 are asserted as for the 4-valent corner; CB2 is
+    reported as NOT APPLICABLE with its measured reason -- the legacy
+    subgrid chain cannot assemble the triangular member's collapsed row,
+    and the shipped cap re-solves those rows on purpose, so a legacy
+    pole-for-pole match there is the wrong assertion, not a missing one.
+    """
+    import Tests.cube_corner_model as ccm
+
+    model = ccm.build_cube_corner_model(doc)
+    strips = [model["strips"][n] for n in STRIP3_NAMES]
+    cb = create_corner_blend(*strips)
+    if cb is None:
+        return {"pass": False, "errors": ["3-valent corner refused"],
+                "checks": []}
+
+    try:
+        results = SilkChecks.check_corner_blend(cb, *strips)
+    except Exception as exc:
+        return {"pass": False, "checks": [],
+                "errors": ["check_corner_blend raised on a 3-strip ring: %r"
+                           % (exc,)]}
+    by_name = {n: (ok, d) for (n, ok, d) in results}
+    errors, checks = [], []
+    for want in ("structural", "CB1_c0_boundary", "CB3_surface_valid"):
+        ok, detail = by_name.get(want, (None, "MISSING"))
+        if ok is not True:
+            errors.append("%s is %r: %s" % (want, ok, detail))
+        else:
+            checks.append("%s: %s" % (want, detail))
+    cb2_ok, cb2_detail = by_name.get("CB2_interior_fill", (None, "MISSING"))
+    if cb2_ok is not True or "not applicable" not in cb2_detail:
+        errors.append("CB2 on a 3-valent ring should be reported as not "
+                      "applicable: %r %s" % (cb2_ok, cb2_detail))
+    else:
+        checks.append("CB2_interior_fill: %s" % cb2_detail)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_three_strip_ring_negative_boundary_pole(doc):
+    """A corrupted boundary pole of a 3-VALENT corner must fail CB1.
+
+    The 4-valent counterpart is `test_corner_blend_negative_boundary_pole`;
+    this is the negative control for the 3-strip reading: CB1 must not go
+    green because it only matched three of the corner's four sides.
+    """
+    import Tests.cube_corner_model as ccm
+
+    model = ccm.build_cube_corner_model(doc)
+    strips = [model["strips"][n] for n in STRIP3_NAMES]
+    cb = create_corner_blend(*strips)
+    if cb is None:
+        return {"pass": False, "errors": ["3-valent corner refused"],
+                "checks": []}
+    poles = list(cb.Poles)
+    poles[0] = FreeCAD.Vector(poles[0].x + 5.0, poles[0].y, poles[0].z)
+    cb.Poles = poles
+    results = SilkChecks.check_corner_blend(cb, *strips)
+    by_name = {n: ok for (n, ok, d) in results}
+    ok = by_name.get("CB1_c0_boundary") is False
+    return {
+        "pass": ok,
+        "errors": [] if ok else ["corrupted 3-valent boundary pole not "
+                                  "flagged: %s" % by_name],
+        "checks": ["CB1 flags a corrupted 3-valent boundary pole: %s"
+                   % ("OK" if ok else "FAIL")],
+    }
+
+
+def test_check_corner_blend_refuses_wrong_input_shapes_by_name(doc):
+    """The oracle NEVER raises on a bad input: 0 / 1 / 2 strips are refused
+    as input by count, a non-ring triple is refused with the ring
+    resolver's own reason (which names the strip), and a 5-strip list is
+    refused by count -- every one a named result, not an exception.
+
+    This is the guard against the worst oracle failure: an empty ring used
+    to match no row at all and CB1 returned a 0.0 deviation -- a GREEN for
+    having checked nothing.
+    """
+    cm.build_corner_model(doc)
+    ring = [doc.getObject(n) for n in STRIP_NAMES]
+    cb = create_corner_blend(*ring)
+    errors, checks = [], []
+    if cb is None:
+        return {"pass": False, "errors": ["the 2x2 corner did not build"],
+                "checks": []}
+
+    non_ring = [ring[0], ring[1], ring[3]]        # no 3-cycle: 1-1-2 shares
+    cases = (("no strip at all", ()),
+             ("one strip", (ring[0],)),
+             ("two strips", (ring[0], ring[1])),
+             ("a non-ring triple", tuple(non_ring)))
+    for label, args in cases:
+        try:
+            results = SilkChecks.check_corner_blend(cb, *args)
+        except Exception as exc:
+            errors.append("%s raised %r instead of refusing" % (label, exc))
+            continue
+        named = all(isinstance(r, tuple) and len(r) == 3 and r[2]
+                    for r in results)
+        refused = bool(results) and any(not ok for (_n, ok, _d) in results)
+        if not (named and refused):
+            errors.append("%s: results %r" % (label, results))
+            continue
+        bad = [(n, d) for (n, ok, d) in results if not ok]
+        if len(args) in (0, 1, 2):
+            name, detail = bad[0][0], bad[0][1]
+            if name != "ring_input" or str(len(args)) not in detail:
+                errors.append("%s was refused as %r/%s, want a ring_input "
+                              "refusal naming the count"
+                              % (label, name, detail))
+                continue
+        else:
+            detail = " | ".join(d for (_n, d) in bad)
+            if not any(s.Name in detail for s in non_ring):
+                errors.append("the non-ring triple was refused without "
+                              "naming a strip: %s" % detail)
+                continue
+        checks.append("%s -> %s"
+                      % (label, " | ".join("%s: %s" % (n, d[:60])
+                                           for (n, _ok, d) in results)))
+
+    # a 5-strip ring (the list form is the only shape that can express it)
+    try:
+        results = SilkChecks.check_corner_blend(list(ring) + [ring[0]])
+    except Exception as exc:
+        errors.append("a 5-strip ring raised %r instead of refusing" % exc)
+    else:
+        if results and results[0][0] == "ring_input" \
+                and results[0][1] is False:
+            checks.append("5 strips -> %s" % results[0][2])
+        else:
+            errors.append("a 5-strip ring gave %r" % (results,))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_corner_blend_builds_green,
     test_corner_blend_pole_parity_with_legacy_chain,
@@ -361,4 +505,8 @@ ALL_TESTS = [
     test_corner_blend_hides_corner_cells,
     test_corner_blend_negative_boundary_pole,
     test_corner_blend_negative_interior_pole,
+    # #103: the 3-valent reading of the same oracle
+    test_three_strip_ring_is_checkable,
+    test_three_strip_ring_negative_boundary_pole,
+    test_check_corner_blend_refuses_wrong_input_shapes_by_name,
 ]
