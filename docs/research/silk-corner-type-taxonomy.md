@@ -81,7 +81,7 @@ Decision recorded:
 - The **star family is deferred** to a later subproject with Demos 02/03 (which also carries the
   missing-class finding from the census: Demo 02's stored `ArachNURBS.ControlGrid3Star66_3Sub`
   does not exist in today's `ArachNURBS.py`).
-- FreeCAD `Surface::Filling` is **not adopted** (reversed 2026-10-17; #96/#99 closed, see
+- FreeCAD `Surface::Filling` is **deferred, not rejected** (2026-10-17; #96 reopened, #99 closed; see
   `docs/adr/0005-corner-blending.md` "Reversal"). The fork ships Silk's own maths only: the
   four-ring path fills every corner it can fill, and a user who wants a fill uses FreeCAD's
   Surface workbench by hand, outside the wizard. Consequence: the triangular member, which

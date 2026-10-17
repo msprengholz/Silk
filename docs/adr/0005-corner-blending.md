@@ -57,9 +57,9 @@ Therefore **no continuity is claimed for the corner stage** — in code, docs or
 UI — until it is measured, and the soundness of the measurement is itself a
 deliverable (#97). The N-star stays parked (#92): it measured C0 on the
 raw-patch junction and is upstream's lower-quality N-sided path. FreeCAD's
-`Surface::Filling` is **not adopted**: the per-hole opt-in of Q7=c is
-**reversed** (owner, 2026-10-17) — no FreeCAD surface-tool integration, no
-component, no selection UX (#96/#99 closed). See "Reversal" below.
+`Surface::Filling` is **deferred, not rejected** — see "Reversal, and its
+narrowing" below. The per-hole *opt-in* decision (Q7=c) stands withdrawn as a
+feature, but the fill path stays in the tree and #96 is reopened.
 
 ## Gate
 
@@ -123,38 +123,45 @@ same model can be measured (#97), automated, and clicked through in the wizard.
 
 Resolved in corner-blending design (map #1): feed = the ring strips (Q1);
 stage = fourth and last wizard step, no continuity language in the UI (Q3);
-mechanism = the subgrid chain, with FreeCAD `Surface::Filling` **reversed and
-dropped** (Q7=c → no opt-in, #96/#99 closed); continuity = measured (#97), not
-asserted; N-star parked (#92); chain gate folded into the build (#29).
+mechanism = the subgrid chain, with FreeCAD `Surface::Filling` **deferred** as an
+interactive aid and a possible automated fill later (#96 reopened, #99 closed);
+continuity = measured (#97), not asserted; N-star parked (#92); chain gate
+folded into the build (#29).
 
-## Reversal (2026-10-17): no FreeCAD surface-tool integration
+## Reversal, and its narrowing (2026-10-17)
 
-Q7=c kept `Surface::Filling` as a per-hole opt-in and opened #96 (build a
-reusable fill component) and #99 (grill the hole-selection UX). **The owner has
-reversed that**: *"i want to remove the freecad surface tool integration from
-the tool."* Both tickets are closed and neither is planned.
+Q7=c kept `Surface::Filling` as a per-hole opt-in and opened #96 (a reusable
+fill component) and #99 (the hole-selection UX). The owner first said *"i want
+to remove the freecad surface tool integration from the tool"* — and an hour
+later narrowed it: *"i want the surface fill setup to still work, but doing so
+manually for now to judge the performance of that (lets say i want to fill then
+entire corner with one patch). … using the surface tool in an automated way for
+the 3 + 4 sided patch corner fill may still be needed, later, so dont purge
+everything related to the surface tool in the silk workflow wizard yet."*
 
-Nothing is deleted in code, because **nothing was ever wired in**: the only
-artefacts were this ADR's decision, the two tickets, and a probe script
-(`Tests/g2_corner_fill_probe.py`). Upstream's own tooltips that *mention* a
-"standard Filling Surface" belong to retired commands, are the author's own
-words, and are left untouched.
+**So: deferred, not rejected.**
 
-**Why the reversal is defensible on the measurements already in the tree.**
-A fill puts a foreign `Surface::Filling` object in the document — outside
-Silk's band/split machinery and outside its restore and regression coverage —
-and the only continuity we could verify for it was the normal gap, not
-curvature: order 2 is **not** G2 and measures *worse* than order 1
-(`k_gap` 1.665e-1 vs 8.249e-2 /mm, #100). The author's own position is
-unequivocal — *"FreeCAD Surface/Filling is known to flip out on G2. I never
-recommend trying to achieve G2 with this. I personally use G1 as a final
-surface"* (2026) — i.e. it is an external convenience for holes Silk cannot
-close, not part of Silk.
+* **#96** is **reopened** and reframed — its first job is now *interactive
+  usability*, not automation: make the corner's boundary fillable **now** so the
+  owner can judge a one-patch corner by eye. If FreeCAD's Surface-workbench
+  picking cannot be made to work on our objects, Silk assembles the
+  `Surface::Filling` for a selection the user makes in Silk instead. The owner
+  still judges the surface; they just do not fight the picker.
+* **#99** stays closed: there is no *hole-selection UX* to design until the fill
+  is usable at all.
+* The probe (`Tests/g2_corner_fill_probe.py`) stays. Nothing is purged.
 
-**Consequence, stated rather than implied.** With the fill path dropped, the
-fork has no second route for a hole it cannot close, and the corner's
-degenerate triangular member — which upstream's own tooltip calls *"not
-intended to produce a final surface … a stepping stone"* — becomes our final
-surface. That is the accepted trade: the workflow ships Silk's own maths only,
-and a user who wants a fill uses FreeCAD's Surface workbench by hand, outside
-the wizard.
+**Why it is still not a default.** A fill puts a foreign `Surface::Filling`
+object in the document — outside Silk's band/split machinery and outside its
+restore and regression coverage — and its order-2 build is **not** G2 and
+measures *worse* than order 1 (`k_gap` 1.665e-1 vs 8.249e-2 /mm, #100). The
+author's own position agrees: *"FreeCAD Surface/Filling is known to flip out on
+G2. I never recommend trying to achieve G2 with this. I personally use G1 as a
+final surface"* (2026).
+
+**Consequence to keep in view.** Silk's own corner ships the degenerate
+triangular member that upstream calls *"not intended to produce a final
+surface … a stepping stone"*. With the fill path merely deferred rather than
+adopted, that member remains **our final surface** unless the owner judges a
+fill better on a real model — which is exactly the judgement #96 now exists to
+enable.
