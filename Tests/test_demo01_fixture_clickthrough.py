@@ -43,7 +43,17 @@ def _report(lines):
 
 
 def test_demo01_clickthrough_builds_the_documented_model(doc):
-    """The documented click order, end to end, through the ops layer."""
+    """The documented click order, end to end, through the ops layer: the
+    built model AND the corners it reaches.
+
+    One build carries both halves.  `MODEL.build` is this module's entire cost
+    (measured ~19 s: 12 Edges -> 5 Patches -> 8 Blends -> 4 CornerBlends, a
+    full-document recompute per created object), and the two halves assert
+    complementary contracts on exactly that one build, so building it twice
+    bought nothing but wall clock.  Every assertion the former
+    `test_demo01_clickthrough_corners_fill_their_junctions` carried is below,
+    unchanged.
+    """
     errors, checks, report = [], [], []
     result = MODEL.build(doc)
     errors.extend(result["problems"])
@@ -131,10 +141,16 @@ def test_demo01_clickthrough_builds_the_documented_model(doc):
     report.append("seams: %s" % result["seam_inventory"])
 
     _report(report)
+
+    # ---- the second half: the four 3-valent corners of the SAME build
+    corner_errors, corner_checks, corner_report = _assert_corners(result, doc)
+    errors.extend(corner_errors)
+    checks.extend(corner_checks)
+    _report(corner_report)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_demo01_clickthrough_corners_fill_their_junctions(doc):
+def _assert_corners(result, doc):
     """Each of the four 3-valent corners, from its three ring blends.
 
     Contract: 36 poles, exactly one face, a valid Shape, the junction point
@@ -143,12 +159,9 @@ def test_demo01_clickthrough_corners_fill_their_junctions(doc):
     Edge link of their own; `Strips` is the ring the ops layer ordered.
     """
     errors, checks, report = [], [], []
-    result = MODEL.build(doc)
-    errors.extend(result["problems"])
     if len(result["corners"]) != 4:
         errors.append("expected 4 corners, built %d" % len(result["corners"]))
-        return {"pass": False, "errors": errors, "checks": checks}
-
+        return errors, checks, report
     for name, ring, point in MODEL.CORNERS:
         corner = result["corners"].get(name)
         if corner is None:
@@ -218,11 +231,9 @@ def test_demo01_clickthrough_corners_fill_their_junctions(doc):
     else:
         checks.append("exactly 4 CornerBlends in the document after the "
                       "second asks")
-    _report(report)
-    return {"pass": not errors, "errors": errors, "checks": checks}
+    return errors, checks, report
 
 
 ALL_TESTS = [
     test_demo01_clickthrough_builds_the_documented_model,
-    test_demo01_clickthrough_corners_fill_their_junctions,
 ]
