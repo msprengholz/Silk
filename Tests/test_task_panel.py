@@ -1876,7 +1876,7 @@ def test_band_cell_mirror_agrees_with_the_real_band_cells(doc):
     # cannot change the answer -- 147 recomputes for 100 distinct
     # (patch, layout) questions, ~0.25 s each (measured 36.4 s). One
     # recompute per distinct question now. The other patch is still held at a
-    # DIFFERENT layout from the one under test (#69: a mirror that only agrees
+    # DIFFERENT layout from the one under test (#115: a mirror that only agrees
     # on symmetric pairs is exactly the mirror that would let a second editor
     # validate against its partner's geometry).
     a = _square_patch(doc, "MirrorA")
