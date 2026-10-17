@@ -208,9 +208,9 @@ def _corners_touched(rotate=(), swap=()):
     swapped pair order only reverses that strip, so a junction whose ring
     touches NEITHER is built from byte-identical inputs and cannot change
     -- filling it again would re-assert the unmutated baseline, not the
-    mutation.  Each case fills exactly the junctions it moves (#96/#107
-    measurement: the full four per case was 32 of 32 identical rebuilds
-    for 12 distinct ones).
+    mutation.  Each case fills exactly the junctions it moves: 24 builds
+    instead of the 52 the two sweeps used to run (~21 s per case, mostly
+    the full-fixture build plus a full-document recompute per corner).
     """
     out = []
     for name, ring, point in MODEL.CORNERS:
