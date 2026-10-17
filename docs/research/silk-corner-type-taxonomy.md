@@ -81,9 +81,11 @@ Decision recorded:
 - The **star family is deferred** to a later subproject with Demos 02/03 (which also carries the
   missing-class finding from the census: Demo 02's stored `ArachNURBS.ControlGrid3Star66_3Sub`
   does not exist in today's `ArachNURBS.py`).
-- FreeCAD `Surface::Filling` remains a per-hole fallback option (owner: other corner types have
-  no stable Silk solution), but is no longer the primary component for any corner the four-ring path
-  can fill.
+- FreeCAD `Surface::Filling` is **not adopted** (reversed 2026-10-17; #96/#99 closed, see
+  `docs/adr/0005-corner-blending.md` "Reversal"). The fork ships Silk's own maths only: the
+  four-ring path fills every corner it can fill, and a user who wants a fill uses FreeCAD's
+  Surface workbench by hand, outside the wizard. Consequence: the triangular member, which
+  upstream calls a *"stepping stone"* rather than a final surface, is **our final surface**.
 - Register + drift-guard added so every ArachNURBS corner type is classified before the suite goes green.
 
 ## 3-valent state (built on the cube-corner fixture)
