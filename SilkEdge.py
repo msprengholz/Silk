@@ -461,6 +461,44 @@ class EdgeViewProvider:
     def updateData(self, obj, prop):
         return True
 
+    def onChanged(self, vobj, prop):
+        """Cascade the Edge's tree visibility onto its sketches (#108).
+
+        The Edge GROUPS its sketches in the tree (claimChildren, #52), but
+        FreeCAD does not link their visibility: hiding the Edge used to
+        leave its construction lines on screen, so the edge "disappeared"
+        while its input stayed. Mirroring the Edge's own Visibility is what
+        makes the group read as one object.
+
+        RULE: a plain mirror, in both directions. If the user has hidden
+        one sketch on its own, showing the Edge shows that sketch again --
+        the Edge's visibility IS the group's, and per-sketch memory would
+        be state no property carries and the tree does not show. The
+        alternative (remember which sketches the user hid, and restore only
+        the others on show) was rejected for exactly that reason: it would
+        not survive save/reload, and it would make "hide the Edge" not mean
+        "hide what it groups".
+
+        Headless is safe: a sketch with no ViewObject is skipped, never an
+        error.
+        """
+        if prop == "Visibility":
+            self._mirror_sketch_visibility(vobj)
+
+    def _mirror_sketch_visibility(self, vobj):
+        try:
+            visible = bool(vobj.Visibility)
+        except Exception:
+            return
+        for sketch in list(getattr(self.Object, "Sketches", None) or []):
+            sk_vobj = getattr(sketch, "ViewObject", None)
+            if sk_vobj is None:
+                continue          # headless / not shown: nothing to mirror
+            try:
+                sk_vobj.Visibility = visible
+            except Exception:
+                pass
+
     def __getstate__(self):
         return None
 

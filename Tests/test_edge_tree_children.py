@@ -15,6 +15,10 @@ Only Edge claims sketches -- an Edge owns 1-2 of them. Patch does NOT
 claim: an edge can serve two patches, so there is no unique owning
 sketch at the patch level. A sketch not yet used by any Edge stays at
 top level (claimed by no Edge).
+
+#108: the Edge's own ViewObject.Visibility CASCADES onto those sketches
+(a plain mirror, both directions), so hiding the Edge takes its
+construction lines with it instead of leaving them on screen.
 """
 
 import FreeCAD
@@ -130,9 +134,94 @@ def test_patch_does_not_claim_edge_sketches(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_hiding_an_edge_hides_its_sketches(doc):
+    """#108: the Edge groups its sketches in the tree (#52), and its own
+    visibility CASCADES to them -- hide the Edge and the construction lines
+    go with it, show it and they come back."""
+    errors, checks = [], []
+    from SilkWorkflowOps import create_edge
+
+    sk = _line_sketch(doc, "Sketch", _rect_pts())
+    edge = create_edge(sk, name="Edge")
+    if edge is None:
+        errors.append("create_edge returned None")
+        return {"pass": False, "errors": errors, "checks": checks}
+    if not sk.ViewObject.Visibility:
+        errors.append("fixture is wrong: the sketch starts hidden")
+
+    edge.ViewObject.Visibility = False
+    if sk.ViewObject.Visibility:
+        errors.append("hiding the Edge left its sketch visible")
+    else:
+        checks.append("Edge hidden -> sketch hidden")
+
+    edge.ViewObject.Visibility = True
+    if not sk.ViewObject.Visibility:
+        errors.append("showing the Edge left its sketch hidden")
+    else:
+        checks.append("Edge shown -> sketch shown")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_showing_the_edge_shows_a_sketch_hidden_on_its_own(doc):
+    """The chosen rule is a plain MIRROR, both directions: a sketch the user
+    hid on its own comes back when the Edge is shown again. (The rejected
+    alternative -- remember which sketches the user hid and restore only the
+    others -- is state no property carries and no reload preserves.)"""
+    errors, checks = [], []
+    from SilkWorkflowOps import create_edge
+
+    sk = _line_sketch(doc, "Sketch", _rect_pts())
+    edge = create_edge(sk, name="Edge")
+    if edge is None:
+        errors.append("create_edge returned None")
+        return {"pass": False, "errors": errors, "checks": checks}
+
+    sk.ViewObject.Visibility = False      # the user hides the sketch alone
+    edge.ViewObject.Visibility = False    # ... then hides the Edge
+    if sk.ViewObject.Visibility:
+        errors.append("hiding the Edge showed a sketch the user had hidden")
+    edge.ViewObject.Visibility = True     # show the Edge -> plain mirror
+    if not sk.ViewObject.Visibility:
+        errors.append("showing the Edge left the user-hidden sketch hidden; "
+                      "the rule is a plain mirror")
+    else:
+        checks.append("show -> show, even for a sketch hidden on its own "
+                      "(plain mirror, as documented)")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_edge_visibility_cascade_skips_a_viewobjectless_sketch(doc):
+    """Headless guard: a sketch with no ViewObject is SKIPPED, never an
+    error. Exercised on the cascade directly, because a real GUI document
+    always has a ViewObject."""
+    from types import SimpleNamespace
+    from SilkEdge import EdgeViewProvider
+
+    errors, checks = [], []
+
+    class _NoViewSketch:
+        Name = "Headless"
+        ViewObject = None
+
+    vp = EdgeViewProvider.__new__(EdgeViewProvider)
+    vp.Object = SimpleNamespace(Sketches=[_NoViewSketch()])
+    try:
+        vp.onChanged(SimpleNamespace(Visibility=False), "Visibility")
+    except Exception as e:
+        errors.append("the visibility cascade raised on a sketch with no "
+                      "ViewObject: %r" % (e,))
+    else:
+        checks.append("sketch with no ViewObject skipped, no error")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_edge_groups_its_sketches,
     test_unused_sketch_stays_top_level,
     test_multiple_edges_claim_their_own_sketches,
     test_patch_does_not_claim_edge_sketches,
+    test_hiding_an_edge_hides_its_sketches,
+    test_showing_the_edge_shows_a_sketch_hidden_on_its_own,
+    test_edge_visibility_cascade_skips_a_viewobjectless_sketch,
 ]
