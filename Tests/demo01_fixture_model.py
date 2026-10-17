@@ -274,8 +274,13 @@ def _failed(results):
     return [(n, d) for (n, ok, d) in results if not ok]
 
 
-def build(doc, source=None):
+def build(doc, source=None, corners=True):
     """Drive the documented click-through in `doc`.
+
+    `corners=False` stops after the blends, leaving the four 3-valent
+    junctions unfilled -- the input a panel test needs to drive the corner
+    section itself (a junction that already has a corner is an idempotent
+    no-op, so a pre-built corner could never be confirmed anew).
 
     Copies the 16 sketches it needs from `source` (an open fixture; opened
     fresh when omitted) and creates 12 Edges, 5 Patches, 8 Blends and 4
@@ -342,7 +347,7 @@ def build(doc, source=None):
         result["seam_inventory"] = [
             (e["edge"].Name, e["status"]) for e in OPS.seam_inventory(doc)]
 
-        for name, ring, _point in CORNERS:
+        for name, ring, _point in (CORNERS if corners else ()):
             if any(b not in result["blends"] for b in ring):
                 result["problems"].append("corner %s: a blend did not build"
                                           % name)

@@ -3943,6 +3943,154 @@ def test_corner_section_collects_four_blends_and_builds_the_corner(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def _demo01_ring_blends(doc, ring=("B_FT", "B_FR", "B_TR")):
+    """Build the documented Demo 01 subset UP TO the blends and return the
+    ring's three blend strips.
+
+    The corner stage is left to the caller: a junction that already has a
+    CornerBlend is an idempotent no-op, so a pre-built one could never show
+    the panel creating another. The four junctions of the documented model
+    are 3-valent -- three faces meet there -- so one of its rings is the
+    section's whole input (Tests/demo01_fixture_model.py::CORNERS).
+    """
+    import Tests.demo01_fixture_model as MODEL
+
+    result = MODEL.build(doc, corners=False)
+    if result["problems"]:
+        return None, list(result["problems"])
+    missing = [b for b in ring if b not in result["blends"]]
+    if missing:
+        return None, ["the documented ring did not build: %s" % missing]
+    return [result["blends"][b] for b in ring], []
+
+
+def test_corner_section_accepts_three_blends_for_a_three_valent_junction(doc):
+    """The section's bound is 3 OR 4: a junction where three patches meet
+    takes a 3-strip ring, OK is live at 3, and ONE confirm builds ONE
+    CornerBlend through the triangular path -- oracle-green (CB1-CB4), in
+    ONE undo step.
+
+    The count label reads the range (it no longer says "incomplete" at a
+    valid 3), and the collection is capped at CORNER_MAX = 4 exactly as the
+    Edge and Patch sections cap theirs: a click that would push it past the
+    cap is ignored silently, and a 4th, unrelated strip is the ops layer's
+    refusal to name (nothing created, collection intact).
+    """
+    errors, checks = [], []
+    import SilkChecks
+    from SilkTaskPanel import SECTION_CORNER, corner_count_text
+    from Tests.test_seam_resolver import _Capture
+
+    strips, problems = _demo01_ring_blends(doc)
+    errors.extend(problems)
+    if strips is None:
+        return {"pass": False, "errors": errors, "checks": checks}
+    ring = {s.Name for s in strips}
+
+    panel = _open_panel(doc)
+    if not check(panel is not None, "Activated left no panel open", errors):
+        return {"pass": False, "errors": errors, "checks": checks}
+    try:
+        panel.sections.open(SECTION_CORNER)
+        check(panel.open_section() == SECTION_CORNER,
+              "the panel did not open the Corner Blend section", errors)
+        # -- the label at 0, and OK off
+        check(panel.corner_count_lbl.text() == corner_count_text(0),
+              "the empty count label reads %r, expected %r"
+              % (panel.corner_count_lbl.text(), corner_count_text(0)), errors)
+        check(panel.ok_enabled() is False,
+              "OK is live with an empty corner collection", errors)
+
+        # -- 2 collected: still short of a 3-strip ring
+        for s in strips[:2]:
+            _click(s)
+        check(len(panel.collected(SECTION_CORNER)) == 2,
+              "two clicks collected %d blends"
+              % len(panel.collected(SECTION_CORNER)), errors)
+        check(not panel.can_confirm(),
+              "2 collected blends can be confirmed (a 3-strip ring needs 3)",
+              errors)
+        check(panel.ok_enabled() is False,
+              "OK is live with 2 of a 3-strip ring", errors)
+        check(panel.corner_count_lbl.text() == corner_count_text(2),
+              "the count label at 2 reads %r, expected %r"
+              % (panel.corner_count_lbl.text(), corner_count_text(2)), errors)
+
+        # -- 3 collected: the gate the owner hit. OK is live.
+        _click(strips[2])
+        check(len(panel.collected(SECTION_CORNER)) == 3,
+              "the third click collected %d blends in total"
+              % len(panel.collected(SECTION_CORNER)), errors)
+        check(panel.can_confirm(),
+              "3 collected blends cannot be confirmed", errors)
+        check(panel.ok_enabled() is True,
+              "OK is disabled at a valid 3-strip ring", errors)
+        check(panel.corner_count_lbl.text() == corner_count_text(3),
+              "the count label at 3 reads %r, expected %r"
+              % (panel.corner_count_lbl.text(), corner_count_text(3)), errors)
+
+        # -- the cap: a 4th, unrelated strip is collected (the bound is 4,
+        #    and the ops layer names a non-ring), the 5th click is not.
+        stray = doc.getObject("B_BkR")
+        _click(stray)
+        check(len(panel.collected(SECTION_CORNER)) == 4,
+              "a 4th click collected %d blends, expected the cap of 4"
+              % len(panel.collected(SECTION_CORNER)), errors)
+        check(panel.corner_count_lbl.text() == corner_count_text(4),
+              "the count label at 4 reads %r, expected %r"
+              % (panel.corner_count_lbl.text(), corner_count_text(4)), errors)
+        with _Capture() as cap:
+            _click(doc.getObject("B_TBk"))
+        check(len(panel.collected(SECTION_CORNER)) == 4,
+              "a 5th click grew the corner collection to %d, past the cap"
+              % len(panel.collected(SECTION_CORNER)), errors)
+        check(not cap.errors,
+              "the ignored 5th click was not silent: %r" % cap.errors, errors)
+        # ...and the Remove button drops it again, leaving the true ring
+        panel.corner_list.setCurrentRow(3)
+        panel.corner_remove_btn.click()
+        check({s.Name for s in panel.collected(SECTION_CORNER)} == ring,
+              "after removing the stray strip the collection is %s, "
+              "expected the ring %s"
+              % (sorted(s.Name for s in panel.collected(SECTION_CORNER)),
+                 sorted(ring)), errors)
+        check(panel.ok_enabled() is True,
+              "OK went off at the 3-strip ring after a remove", errors)
+
+        before = _undo_count(doc)
+        with _Capture() as cap:
+            applied = panel.panel_confirm()
+        doc.recompute()
+        after = _undo_count(doc)
+        corners = _objects(doc, "CornerBlend")
+        check(applied and len(corners) == 1,
+              "confirm produced %d CornerBlend(s), applied=%s, errors=%r"
+              % (len(corners), applied, cap.errors), errors)
+        check(after - before == 1,
+              "one corner confirm moved the undo stack by %d steps "
+              "(expected 1)" % (after - before), errors)
+        if len(corners) == 1:
+            got = sorted(s.Name for s in corners[0].Strips)
+            check(got == sorted(ring),
+                  "the corner rings %s, the collected ring is %s"
+                  % (got, sorted(ring)), errors)
+            res = SilkChecks.check_corner_blend(corners[0], *strips)
+            failed = [(n, d) for n, ok, d in res if not ok]
+            check(not failed, "the panel's 3-strip corner is not oracle-green: "
+                  "%s" % failed, errors)
+            checks.append("3-strip ring -> %s: CB1-CB4 green, undo %d -> %d"
+                          % (corners[0].Name, before, after))
+            for n, ok, d in res:
+                checks.append("  %s %s: %s" % (n, "PASS" if ok else "FAIL", d))
+        check("created from 3 blends" in panel.status_text(),
+              "the status line reads %r, expected it to name 3 blends"
+              % panel.status_text(), errors)
+    finally:
+        _close_panel(panel)
+        Gui.Selection.clearSelection()
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_panel_lands_in_the_native_task_panel,
     test_section_stack_has_four_ordered_sections_and_takes_no_focus,
@@ -3995,5 +4143,7 @@ ALL_TESTS = [
     test_in_progress_band_edit_is_committed_not_dropped_by_a_refresh,
     # #91: the fourth section builds the corner in one confirm
     test_corner_section_collects_four_blends_and_builds_the_corner,
+    # #103: the section takes a 3-strip ring too (a 3-valent junction)
+    test_corner_section_accepts_three_blends_for_a_three_valent_junction,
     test_no_production_module_knows_the_panel,
 ]

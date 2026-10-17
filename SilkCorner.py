@@ -411,7 +411,7 @@ class CornerBlendViewProvider:
 
 
 class CreateCornerBlend:
-    """GUI command — select the 4 blend strips that ring a shared
+    """GUI command — select the 3 or 4 blend strips that ring a shared
     junction -> CornerBlend (ticket #91).
 
     The whole contract (adjudicating the ring, refusing a non-junction or
@@ -422,8 +422,8 @@ class CreateCornerBlend:
 
     def GetResources(self):
         return {'Pixmap': iconPath, 'MenuText': 'Silk Corner Blend',
-                'ToolTip': 'Create the corner blend where four blends ring '
-                           'one shared junction.'}
+                'ToolTip': 'Create the corner blend where three or four '
+                           'blends ring one shared junction.'}
 
     def Activated(self):
         sel = Gui.Selection.getSelection()

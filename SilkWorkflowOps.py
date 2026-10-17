@@ -292,7 +292,7 @@ def seam_inventory(doc=None):
 def _existing_corner_blend(doc, strips):
     """The CornerBlend already filling exactly this strip SET, or None
     (#28/#91 idempotency). Identity-only: a junction is identified by its
-    four blend strips, whatever order they were handed over in."""
+    three or four blend strips, whatever order they were handed over in."""
     want = {id(s) for s in strips}
     for o in doc.Objects:
         if getattr(o, "object_type", None) != "CornerBlend":
@@ -304,13 +304,15 @@ def _existing_corner_blend(doc, strips):
 
 
 def create_corner_blend(*strips, name="CornerBlend"):
-    """Create the CornerBlend filling the junction where 4 blend strips
-    meet (#28; rebuilt on the subgrid chain in #91).
+    """Create the CornerBlend filling the junction where 3 or 4 blend
+    strips meet (#28; rebuilt on the subgrid chain in #91).
 
-    `strips` are the 4 ring Blend strips, in any order (or one list).
+    `strips` are the ring Blend strips, in any order (or one list): three
+    where three patches meet (the triangular 4th member is built
+    invisibly), four where four do.
     The ring resolver orders them; the corner geometry is computed
-    BEFORE anything is constructed, so a selection that is not a 4-strip
-    ring around one shared junction is refused by name and leaves NO
+    BEFORE anything is constructed, so a selection that is not a ring
+    around one shared junction is refused by name and leaves NO
     object in the tree (the #80/#83 "invalid + Up-to-date" lesson: never
     park a dead object in the document). A junction that already has a
     corner returns that existing CornerBlend -- an idempotent no-op.

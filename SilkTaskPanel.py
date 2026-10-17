@@ -122,11 +122,12 @@ SECTION_NONE = -1
 
 # Per-stage collection bounds. Edge: 1 or 2 sketches (1 -> 3L, 2 -> 2N).
 # Patch: 3 or 4 edges (3 -> pointed, 4 -> quad). Blend: 1..N seams.
-# Corner Blend: exactly 4 blend strips, the ring around one junction.
+# Corner Blend: 3 or 4 blend strips, the ring around one junction -- three
+# where three patches meet, four where four do.
 EDGE_MIN, EDGE_MAX = 1, 2
 PATCH_MIN, PATCH_MAX = 3, 4
 BLEND_MIN = 1
-CORNER_MIN = CORNER_MAX = 4
+CORNER_MIN, CORNER_MAX = 3, 4
 
 # The default band width SilkBlend.ensure_band_split writes when the
 # patch's end of that axis carries no band edge at all (ss 0 -> 0.1,
@@ -208,8 +209,23 @@ BAND_A, BAND_B = "A", "B"
 PLACEHOLDERS = {
     SECTION_EDGE: "nothing collected -- click a sketch in the 3D view",
     SECTION_PATCH: "nothing collected -- click edges in the 3D view",
-    SECTION_CORNER: "nothing collected -- click 4 blend strips in the 3D view",
+    SECTION_CORNER: ("nothing collected -- click the 3 or 4 blend strips "
+                     "that ring one junction"),
 }
+
+
+def corner_count_text(n):
+    """The corner section's count line, honest about a bound of 3 OR 4.
+
+    The section's bound is a RANGE: a junction where three patches meet
+    needs three strips, one where four meet needs four. The old `n/4` form
+    read as "incomplete" at a perfectly confirmable 3, which is how the
+    owner got stuck. The state, not the fraction, is what the user needs:
+    how many are in, and whether that is enough to confirm.
+    """
+    if CORNER_MIN <= n <= CORNER_MAX:
+        return "%d collected -- ready" % n
+    return "%d collected -- need %d or %d" % (n, CORNER_MIN, CORNER_MAX)
 
 # The static guidance, kept as the panel's / sections' tooltip and in the
 # adapter's needsFullSpace() explanation. It used to be a permanent
@@ -222,8 +238,8 @@ HINT_TOOLTIP = (
     "one band edge on EACH of its two patches, so a blended row has an "
     "editor per patch (Band A / Band B) -- they start equal, and setting "
     "them apart is deliberate.\n"
-    "Corner Blend: click the 4 blends that ring one shared junction; Enter "
-    "or OK fills the corner where they meet.")
+    "Corner Blend: click the 3 or 4 blends that ring one shared junction; "
+    "Enter or OK fills the corner where they meet.")
 
 
 # ---- the section container (header / content pairs, #71) ------------------
@@ -931,14 +947,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         page = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(page)
         lay.addWidget(self._instruction(
-            "Click the 4 blends that ring one shared junction. Enter or OK "
-            "fills the corner where they meet."))
+            "Click the 3 or 4 blends that ring one shared junction. Enter "
+            "or OK fills the corner where they meet."))
         self.corner_list = self._collection_list(page)
         self.corner_list.itemSelectionChanged.connect(
             self._on_collected_changed)
         lay.addWidget(self.corner_list)
         row = QtWidgets.QHBoxLayout()
-        self.corner_count_lbl = QtWidgets.QLabel("0/4")
+        self.corner_count_lbl = QtWidgets.QLabel(corner_count_text(0))
         row.addWidget(self.corner_count_lbl)
         row.addStretch(1)
         self.corner_remove_btn = QtWidgets.QPushButton("Remove")
@@ -1124,8 +1140,9 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         if section == SECTION_PATCH:
             return self.object_type(obj) == "Edge"
         if section == SECTION_CORNER:
-            # Corner Blend collects the 4 ring blends themselves (identity,
-            # not geometry): a Blend strip object. A wrong type is ignored.
+            # Corner Blend collects the 3 or 4 ring blends themselves
+            # (identity, not geometry): a Blend strip object. A wrong type
+            # is ignored.
             return self.object_type(obj) in BLEND_TYPES
         # Blend: an Edge object that is a seam right now. An edge with
         # fewer than two patches is not a seam, and a non-manifold one is
@@ -1283,7 +1300,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             self.patch_fill_lbl.setText("")
 
         cbs = self._collected[SECTION_CORNER]
-        self.corner_count_lbl.setText("%d/%d" % (len(cbs), CORNER_MAX))
+        self.corner_count_lbl.setText(corner_count_text(len(cbs)))
 
     @staticmethod
     def _item_text(item):
@@ -1744,7 +1761,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         if section == SECTION_PATCH:
             return PATCH_MIN <= n <= PATCH_MAX
         if section == SECTION_CORNER:
-            return n == CORNER_MAX
+            return CORNER_MIN <= n <= CORNER_MAX
         return n >= BLEND_MIN
 
     def ok_enabled(self):
@@ -1993,14 +2010,15 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         return bool(made)
 
     def confirm_corner(self):
-        """The 4 collected blends in ONE transaction -> one CornerBlend
+        """The 3 or 4 collected blends in ONE transaction -> one CornerBlend
         (#91), so one Enter is one undo step.
 
-        A selection that is not the ring of 4 blends around one shared
-        junction is refused LOUDLY by name (SilkWorkflowOps), with the
-        collection left intact and nothing created. A junction that
-        already has a corner is an idempotent no-op that names the
-        existing object.
+        A selection that is not the ring of 3 blends (a junction where three
+        patches meet, the triangular 4th member built invisibly) or of 4
+        blends around one shared junction is refused LOUDLY by name
+        (SilkWorkflowOps), with the collection left intact and nothing
+        created. A junction that already has a corner is an idempotent no-op
+        that names the existing object.
         """
         strips = self.collected(SECTION_CORNER)
         stale = self.stale_items()

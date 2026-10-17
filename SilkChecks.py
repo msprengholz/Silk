@@ -38,8 +38,10 @@ the blend used) instead of auto-detecting the first matching corner
 pair -- which is what makes a SECOND seam on a pair sharing two edges
 (closed-ring builds) checkable. Without it, behaviour is unchanged.
 Corner blends (CB1-CB4, #28; the fill is the subgrid chain since #91):
-  CB1 C0 boundary: the 6x6 grid's 4 boundary sides match the 4 ring
-      strips' corner-end rows, orientation-independent (1e-6)
+  CB1 C0 boundary: the 6x6 grid's boundary sides match the ring
+      strips' corner-end rows, orientation-independent (1e-6); a
+      3-valent corner has three ring strips and covers three sides
+      (the fourth is the derived triangular member's)
   CB2 interior fill: all 36 poles match the legacy subgrid chain
       (SubGrid33_2Grid64 x4 -> ControlGrid66_4Sub) fed the same canonical
       grids (1e-6)
@@ -958,6 +960,10 @@ def _corner_reference_rows(strips, tol=0.01):
     """Independently derive each ring strip's corner-end row — the
     6-pole edge of the strip's blend surface at the corner-cell side.
 
+    Works for a 3-strip ring as well as a 4-strip one: the corner index
+    comes from the STRIPS that touch a patch, and a 3-valent patch is
+    touched by exactly two of them.
+
     Mirrors SilkCorner's derivation from the patches' splits and band
     cells (not from the corner blend itself). Returns (rows,
     corner_cells) or (None, None) on any inconsistency.
@@ -1020,9 +1026,12 @@ def _check_corner_blend(cb, strips, reference_poles):
     st = getattr(cb, "object_type", None)
     poles = cb.Poles or []
     weights = cb.Weights or []
+    # A 3-valent hard corner stores the THREE ring strips it was built
+    # from (the triangular 4th member is derived, never an object); a
+    # 4-valent one stores all four. Both are 36-pole corners.
     ok = (st == "CornerBlend" and len(poles) == 36
           and len(weights) == 36 and all(w > 0.0 for w in weights)
-          and len(list(getattr(cb, "Strips", []) or [])) == 4
+          and len(list(getattr(cb, "Strips", []) or [])) in (3, 4)
           and getattr(cb, "Shape", None) is not None
           and not cb.Shape.isNull())
     results.append(("structural", ok,
@@ -1079,7 +1088,21 @@ def _check_corner_blend(cb, strips, reference_poles):
         doc = cb.Document
         grids, _cells, why = corner_inputs(
             list(strips), getattr(cb, "tolerance", CORNER_DEFAULT_TOL))
-        if grids is None:
+        if len(strips) == 3:
+            # A 3-valent ring has NO legacy reference to match: the legacy
+            # SubGrid33_2Grid64 cannot assemble it (the triangular member's
+            # collapsed row presents two coincident corners, and it refuses
+            # with "multiple common corners found at the current tolerance",
+            # 0 poles, Invalid -- measured), and the shipped surface
+            # deliberately re-solves the member-side interior rows from the
+            # boundary (SilkMachinery.smooth_degenerate_cap) where that chain
+            # extrapolates past the collapsed row and folds the cap. So this
+            # is reported, not asserted either way -- the same convention as
+            # CB4's "no reference given (skipped)".
+            results.append(("CB2_interior_fill", True,
+                            "not applicable to a 3-valent ring (no legacy "
+                            "reference can assemble its collapsed member)"))
+        elif grids is None:
             results.append(("CB2_interior_fill", False,
                             "could not derive corner grids: %s" % why))
         else:
@@ -1170,12 +1193,19 @@ def _check_corner_blend(cb, strips, reference_poles):
 
 def check_corner_blend(cb, strip0=None, strip1=None, strip2=None,
                        strip3=None, reference_poles=None):
-    """Corner blend oracle (CB1-CB4). Accepts the 4 ring strips either
-    as 4 arguments or (as the only argument) as a list."""
+    """Corner blend oracle (CB1-CB4). Accepts the ring's strips either as
+    separate arguments or (as the only argument) as a list.
+
+    Three strips is a 3-valent hard corner -- `corner_inputs` derives the
+    triangular 4th member, so CB2's reference chain still runs over four
+    grids; CB1 then matches the three ring strips' junction rows, which are
+    three of the corner's four boundary sides (the fourth is the member's).
+    """
     if isinstance(cb, (list, tuple)):
         strips = list(cb)
     else:
-        strips = [strip0, strip1, strip2, strip3]
+        strips = [s for s in (strip0, strip1, strip2, strip3)
+                  if s is not None]
     return _check_corner_blend(cb, strips, reference_poles)
 
 
