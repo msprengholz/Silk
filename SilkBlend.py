@@ -35,7 +35,7 @@ from popup import tipsDialog
 from SilkMachinery import patch_side as _patch_side, band_cells, \
     band_diagnosis, ensure_hidden_idxs_property, shared_seam, \
     seam_from_edge, split_pair, axis_splits, band_edge, \
-    NO_BAND_1, NO_BAND_2, _EDGE_OF, _cyclic_adjacent
+    NO_BAND_1, NO_BAND_2, _EDGE_OF, _cyclic_adjacent, set_grid_display
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -590,23 +590,15 @@ def run_blend(fp):
                 pass
 
     if not surf_shape or not hasattr(surf_shape, "Faces") or not surf_shape.Faces:
-        # Fallback: just show grid
-        shapes = []
-        fp.Shape = Part.Compound(shapes) if shapes else Part.Shape()
+        # no surface to show; the grid (a view node) still is
+        fp.Shape = Part.Shape()
         return
 
-    shapes = [surf_shape]
-    for leg in fp.Legs:
-        if hasattr(leg, "toShape"):
-            try:
-                shapes.append(leg.toShape())
-            except Exception:
-                pass
-    if shapes:
-        try:
-            fp.Shape = Part.Compound(shapes)
-        except Exception:
-            fp.Shape = surf_shape
+    # Shape is GEOMETRY ONLY (#108): the blend surface. The control grid
+    # is a DISPLAY concern -- the view provider draws it as a Coin node
+    # (SilkMachinery.set_grid_display reads fp.Legs), so it is not part of
+    # Shape, not exported, and not selectable.
+    fp.Shape = surf_shape
 
     # Auto-update chain (#28): touch corner blends fed by this strip.
     # Next doc.recompute() runs them against the updated strip poles.
@@ -1057,9 +1049,32 @@ class BlendStripViewProvider:
 
     def attach(self, vobj):
         self.ViewObject = vobj
+        self.Object = vobj.Object
+        self._refresh_grid(self.Object, vobj)
+
+    def _refresh_grid(self, obj, vobj):
+        """Draw the blend's control grid as a Coin node (#108).
+
+        The grid is no longer part of Shape (run_blend keeps only the
+        surface); the view provider draws it from the stored `Legs`, in the
+        blend's own LineColor / LineWidth. A Blend has no grid toggle, so
+        the grid stays drawn -- exactly the visibility it had inside Shape.
+        Headless (no ViewObject) is a silent no-op."""
+        if obj is None or vobj is None:
+            return
+        set_grid_display(self, vobj, list(getattr(obj, "Legs", None) or []),
+                         bool(getattr(obj, "ShowGrid", True)),
+                         getattr(vobj, "LineColor", None),
+                         getattr(vobj, "LineWidth", None))
 
     def updateData(self, obj, prop):
+        if prop in ("Legs", "Shape"):
+            self._refresh_grid(obj, getattr(self, "ViewObject", None))
         return True
+
+    def onChanged(self, vobj, prop):
+        if prop in ("LineColor", "LineWidth"):
+            self._refresh_grid(getattr(vobj, "Object", None), vobj)
 
     def __getstate__(self):
         return None

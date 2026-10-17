@@ -1287,12 +1287,23 @@ def ensure_hidden_idxs_property(p):
 
 def build_display(fobj, base_shape, sub_shapes, base_legs, sub_legs,
                   has_subgrids):
-    """Compose the patch display Shape from the surface/grid toggles.
+    """Compose the patch's display Shape -- the SURFACE only (#108).
 
-    Writes fobj.Shape with the compound of the visible surface (the base
-    surface, or the non-hidden subgrid surfaces when ShowSubgrids) plus
-    the chosen grid lines. Honors fobj.ShowSurface / ShowSubgrids /
-    ShowGrid / AutoHideBlend the way Patch44 always has.
+    Writes fobj.Shape with the visible surface: the base surface, or the
+    non-hidden subgrid surfaces when ShowSubgrids. Honors fobj.ShowSurface
+    / ShowSubgrids / AutoHideBlend.
+
+    `Shape` is GEOMETRY ONLY. The control grid used to be appended here as
+    loose edges, which is why a Part::Compound built from Silk objects came
+    out polluted with grid wires. The grid is a DISPLAY concern: the view
+    provider draws it as a Coin node (SilkMachinery.set_grid_display) and
+    honours ShowGrid itself. The legs the grid toggle selects are stashed
+    on fobj.Proxy._display_legs so the view provider and this rule cannot
+    disagree, and they are stashed whether or not ShowGrid is on, so the
+    toggle only has to show/hide an already-built node.
+
+    Consequence: the grid is no longer part of Shape -- not exported, not
+    selectable, and `Shape` no longer changes on a display toggle.
     """
     hide_idxs = set(list(getattr(fobj, "_HiddenSubgridIdxs", []) or []))
     if not getattr(fobj, "AutoHideBlend", True):
@@ -1313,10 +1324,10 @@ def build_display(fobj, base_shape, sub_shapes, base_legs, sub_legs,
 
     draw_legs = sub_legs if has_subgrids and getattr(fobj, "ShowSubgrids", False) \
         else base_legs
-    if getattr(fobj, "ShowGrid", True) and draw_legs:
-        for leg in draw_legs:
-            if hasattr(leg, "toShape"):
-                shapes.append(leg.toShape())
+    try:
+        fobj.Proxy._display_legs = list(draw_legs or [])
+    except Exception:
+        pass
 
     if shapes:
         try:
@@ -1328,6 +1339,109 @@ def build_display(fobj, base_shape, sub_shapes, base_legs, sub_legs,
                 fobj.Shape = Part.Shape(shapes)
     else:
         fobj.Shape = Part.Shape()
+
+
+# ---- control-grid display node (#108) ------------------------------------
+#
+# `Shape` is geometry only; the control grid is drawn by a Coin node under
+# the view provider's own RootNode.
+#
+# Why RootNode and NOT addDisplayMode: ArchAxis's pattern pairs
+# addDisplayMode with a getDisplayModes override, and that REPLACES the
+# standard Part modes. Measured on this build (1.1.3): after a proxy calls
+# addDisplayMode, `obj.ViewObject.DisplayMode = "Shaded"` raises
+# ValueError("'Shaded' is not part of the enumeration"). The ops layer
+# writes exactly that from create_blend / create_corner_blend, so the grid
+# node is appended as an extra child of RootNode instead: every standard
+# mode (and the DisplayMode writes) is untouched.
+#
+# RootNode's leading SoTransform is the object Placement, and Coin applies
+# it to every following sibling, so the node is drawn in LOCAL coordinates
+# -- the same coordinates Poles / Legs carry.
+
+def grid_coin_node(legs):
+    """A coin.SoSeparator drawing `legs` as line segments, or None when
+    there is nothing to draw or pivy is unavailable (the caller then draws
+    nothing rather than failing)."""
+    if not legs:
+        return None
+    try:
+        from pivy import coin
+    except Exception:
+        return None
+    points, index = [], []
+    n = 0
+    for leg in legs:
+        try:
+            edge = leg.toShape()
+        except Exception:
+            continue
+        for v in edge.Vertexes:
+            p = v.Point
+            points.append((p.x, p.y, p.z))
+            index.append(n)
+            n += 1
+        index.append(-1)
+    if not points:
+        return None
+    sep = coin.SoSeparator()
+    coords = coin.SoCoordinate3()
+    coords.point.setValues(0, len(points), points)
+    lineset = coin.SoType.fromName("SoBrepEdgeSet").createInstance()
+    lineset.coordIndex.setValues(0, len(index), index)
+    lineset.coordIndex.setNum(len(index))
+    sep.addChild(coords)
+    sep.addChild(lineset)
+    return sep
+
+
+def set_grid_display(proxy, vobj, legs, visible, color, width):
+    """(Re)build the control-grid Coin node on `vobj` and show/hide it.
+
+    `proxy` keeps the node (a coin.SoSwitch) in `proxy._silk_grid_node`
+    between calls; `visible=False` hides it (`whichChild = -1`) without
+    changing anything else. No ViewObject (headless) or no pivy is a
+    silent no-op -- no node, no error. The switch is re-appended to
+    RootNode on every call so exactly one grid node ever exists.
+    """
+    if vobj is None:
+        return None
+    try:
+        from pivy import coin
+    except Exception:
+        return None
+    root = getattr(vobj, "RootNode", None)
+    if root is None:
+        return None
+    switch = getattr(proxy, "_silk_grid_node", None)
+    if switch is None:
+        switch = coin.SoSwitch()
+        proxy._silk_grid_node = switch
+    try:
+        root.removeChild(switch)
+    except Exception:
+        pass
+    display = coin.SoSeparator()
+    if color is not None:
+        mat = coin.SoMaterial()
+        mat.diffuseColor.setValue(float(color[0]), float(color[1]),
+                                  float(color[2]))
+        display.addChild(mat)
+    if width is not None:
+        style = coin.SoDrawStyle()
+        style.lineWidth = float(width)
+        display.addChild(style)
+    node = grid_coin_node(legs)
+    if node is not None:
+        display.addChild(node)
+    try:
+        switch.removeAllChildren()
+    except Exception:
+        pass
+    switch.addChild(display)
+    switch.whichChild = 0 if visible else -1
+    root.addChild(switch)
+    return switch
 
 
 # ---- triangular 4th member (#3-valent hard corner) -----------------------

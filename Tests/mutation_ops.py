@@ -166,11 +166,28 @@ def reverse_edge(model, *, edge=None):
     return checks, errors
 
 
+def _shape_signature(shape):
+    """Topology + measure of a Shape, for "this toggle left Shape alone"."""
+    if shape is None or shape.isNull():
+        return None
+    return (len(shape.Faces), len(shape.Edges), len(shape.Vertexes),
+            round(shape.Area, 9), round(shape.Length, 9))
+
+
 def toggle_display(model, *, obj=None):
-    """Flip the display toggles (ShowSubgrids/ShowGrid/AutoHideBlend on a
-    patch; ShowCurve/ShowPolygon on an edge). The Shape never becomes
-    invalid and never ends up wrongly empty: at least one display layer is
-    always kept on, and each config revalidates with the object's oracle."""
+    """Flip the display toggles and check the #108 split: some toggles are
+    GEOMETRY toggles (they rebuild `Shape`) and some are VIEW-ONLY (they
+    only change the Coin control-grid node the view provider draws).
+
+    - patch: ShowSubgrids / AutoHideBlend rebuild Shape; ShowGrid does not
+      (the grid is a view node, not geometry);
+    - edge: ShowCurve rebuilds Shape -- the curve IS the edge's geometry --
+      and is kept on so the Shape never ends up legitimately empty;
+      ShowPolygon does not rebuild Shape.
+
+    Invariants: Shape never becomes invalid or wrongly empty on a geometry
+    toggle, and a view-only toggle leaves it byte-identical. Each config
+    revalidates with the object's oracle."""
     doc = _doc(model)
     if obj is None:
         obj = model.get("patch")
@@ -182,7 +199,8 @@ def toggle_display(model, *, obj=None):
         obj = _resolve(model, obj, collection="patches")
     checks, errors = [], []
     if hasattr(obj, "ShowSubgrids"):
-        flags = ["ShowSubgrids", "ShowGrid", "AutoHideBlend"]
+        geometry_flags = ["ShowSubgrids", "AutoHideBlend"]
+        view_flags = ["ShowGrid"]
         if not obj.USplit1 and obj.USplit2 == 1.0:
             # so ShowSubgrids exercises real sub-shapes. A band edge at
             # the 0 end (#82) is the neutral choice: it cuts the axis in
@@ -190,23 +208,46 @@ def toggle_display(model, *, obj=None):
             obj.USplit1 = 0.5
             doc.recompute()
     else:
-        flags = ["ShowCurve", "ShowPolygon"]
-    for f in flags:
-        setattr(obj, f, not bool(getattr(obj, f)))
-        if hasattr(obj, "ShowCurve") and not (obj.ShowCurve or obj.ShowPolygon):
-            obj.ShowCurve = True   # never leave the display shape empty
-        doc.recompute()
-        if obj.Shape.isNull() or not obj.Shape.isValid():
-            errors.append("toggle_display %s: shape invalid/empty" % f)
-            continue
+        geometry_flags = ["ShowCurve"]
+        view_flags = ["ShowPolygon"]
+
+    def _green(prefix):
         res = _oracle_obj(obj)
         bad = [(n, d) for n, ok, d in res if not ok]
         if bad:
-            errors.append("toggle_display %s -> %s: oracle not green: %s"
-                          % (f, bool(getattr(obj, f)), bad))
+            errors.append("%s: oracle not green: %s" % (prefix, bad))
+            return False
+        return True
+
+    for f in geometry_flags:
+        setattr(obj, f, not bool(getattr(obj, f)))
+        if hasattr(obj, "ShowCurve") and not obj.ShowCurve:
+            obj.ShowCurve = True   # the curve IS the edge's geometry
+        doc.recompute()
+        shown = "toggle_display %s -> %s" % (f, bool(getattr(obj, f)))
+        if obj.Shape.isNull() or not obj.Shape.isValid():
+            errors.append("%s: shape invalid/empty" % shown)
             continue
-        checks.append("toggled %s -> %s; shape valid, oracle green"
-                      % (f, bool(getattr(obj, f))))
+        if _green(shown):
+            checks.append("%s; shape valid, oracle green" % shown)
+
+    # view-only toggles: Shape must NOT change (the grid is not geometry)
+    before = _shape_signature(obj.Shape)
+    for f in view_flags:
+        setattr(obj, f, not bool(getattr(obj, f)))
+        doc.recompute()
+        shown = "toggle_display %s -> %s" % (f, bool(getattr(obj, f)))
+        if obj.Shape.isNull() or not obj.Shape.isValid():
+            errors.append("%s: shape invalid/empty" % shown)
+            continue
+        after = _shape_signature(obj.Shape)
+        if after != before:
+            errors.append("%s: Shape changed on a view-only toggle: "
+                          "%r -> %r" % (shown, before, after))
+            continue
+        if _green(shown):
+            checks.append("%s; Shape unchanged (view-only), oracle green"
+                          % shown)
     return checks, errors
 
 

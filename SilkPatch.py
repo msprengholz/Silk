@@ -63,7 +63,7 @@ from popup import tipsDialog
 
 from SilkMachinery import build_subgrids, build_display, \
     normalize_edge_pair, split_pair, axis_splits, NO_BAND_1, NO_BAND_2, \
-    loop_order
+    loop_order, set_grid_display
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -835,9 +835,35 @@ class PatchViewProvider:
 
     def attach(self, vobj):
         self.ViewObject = vobj
+        self.Object = vobj.Object
+        self._refresh_grid(self.Object, vobj)
+
+    def _refresh_grid(self, obj, vobj):
+        """Draw the patch's control grid as a Coin node (#108).
+
+        The grid is no longer part of Shape (build_display keeps only the
+        surface), so the view provider draws it: the legs build_display
+        stashed (`obj.Proxy._display_legs`, already the base or the
+        sub-grid set the toggles pick) and ShowGrid shows/hides the node.
+        Headless (no ViewObject) is a silent no-op."""
+        if obj is None or vobj is None:
+            return
+        proxy = getattr(obj, "Proxy", None)
+        legs = list(getattr(proxy, "_display_legs", None) or [])
+        set_grid_display(self, vobj, legs,
+                         bool(getattr(obj, "ShowGrid", True)),
+                         getattr(vobj, "LineColor", None),
+                         getattr(vobj, "LineWidth", None))
 
     def updateData(self, obj, prop):
+        if prop in ("Legs", "Shape", "ShowGrid", "ShowSubgrids",
+                    "ShowSurface", "AutoHideBlend"):
+            self._refresh_grid(obj, getattr(self, "ViewObject", None))
         return True
+
+    def onChanged(self, vobj, prop):
+        if prop in ("LineColor", "LineWidth"):
+            self._refresh_grid(getattr(vobj, "Object", None), vobj)
 
     def __getstate__(self):
         return None

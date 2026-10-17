@@ -10,6 +10,7 @@ import FreeCAD
 import Part
 from FreeCAD import Gui
 import ArachNURBS as AN
+from SilkMachinery import set_grid_display
 from popup import tipsDialog
 import Silk_tooltips
 
@@ -349,25 +350,24 @@ def _compose_plan_elevation(doc, plan, elevation):
 
 
 def _apply_edge_geometry(fp, poles, weights, legs):
-    """Store the geometry and rebuild the display Shape from the display
-    toggles. Empty poles/legs is the honest "nothing built" state."""
+    """Store the geometry and rebuild the display Shape -- geometry only.
+    Empty poles/legs is the honest "nothing built" state.
+
+    `Shape` is GEOMETRY ONLY (#108): the cubic curve, shown per ShowCurve.
+    The control polygon used to be appended here as loose edges -- which
+    is what put grid wires into every compound built from Silk objects. It
+    is a DISPLAY concern now: the view provider draws it as a Coin node
+    (SilkMachinery.set_grid_display reads fp.Legs / ShowPolygon), so it is
+    not part of Shape, not exported, not selectable, and toggling
+    ShowPolygon no longer changes Shape.
+    """
     fp.Poles = list(poles)
     fp.Weights = list(weights)
     fp.Legs = list(legs)
-    shapes = []
     if fp.ShowCurve and len(poles) == 4:
         curve = Part.BSplineCurve()
         curve.buildFromPoles(list(poles))
-        shapes.append(curve.toShape())
-    if fp.ShowPolygon and legs:
-        for leg in legs:
-            if hasattr(leg, "toShape"):
-                shapes.append(leg.toShape())
-    if shapes:
-        try:
-            fp.Shape = Part.Compound(shapes)
-        except Exception:
-            fp.Shape = shapes[0] if len(shapes) == 1 else Part.Shape()
+        fp.Shape = curve.toShape()
     else:
         fp.Shape = Part.Shape()
 
@@ -446,6 +446,7 @@ class EdgeViewProvider:
     def attach(self, vobj):
         self.ViewObject = vobj
         self.Object = vobj.Object
+        self._refresh_grid(self.Object, vobj)
 
     def claimChildren(self):
         """Ticket #52: group this Edge's sketches under it in the tree.
@@ -458,8 +459,19 @@ class EdgeViewProvider:
         patches, so a Patch must never claim a sketch here."""
         return list(self.Object.Sketches or [])
 
-    def updateData(self, obj, prop):
-        return True
+    def _refresh_grid(self, obj, vobj):
+        """Draw the control polygon as a Coin node (#108).
+
+        The polygon is no longer part of Shape (see _apply_edge_geometry);
+        it is rebuilt here from the stored `Legs` and shown per ShowPolygon,
+        in the Edge's own LineColor / LineWidth. Headless (no ViewObject)
+        is a silent no-op."""
+        if obj is None or vobj is None:
+            return
+        set_grid_display(self, vobj, list(getattr(obj, "Legs", None) or []),
+                         bool(getattr(obj, "ShowPolygon", True)),
+                         getattr(vobj, "LineColor", None),
+                         getattr(vobj, "LineWidth", None))
 
     def onChanged(self, vobj, prop):
         """Cascade the Edge's tree visibility onto its sketches (#108).
@@ -484,6 +496,8 @@ class EdgeViewProvider:
         """
         if prop == "Visibility":
             self._mirror_sketch_visibility(vobj)
+        elif prop in ("LineColor", "LineWidth"):
+            self._refresh_grid(getattr(vobj, "Object", None), vobj)
 
     def _mirror_sketch_visibility(self, vobj):
         try:
@@ -498,6 +512,11 @@ class EdgeViewProvider:
                 sk_vobj.Visibility = visible
             except Exception:
                 pass
+
+    def updateData(self, obj, prop):
+        if prop in ("Legs", "Shape", "ShowPolygon"):
+            self._refresh_grid(obj, getattr(self, "ViewObject", None))
+        return True
 
     def __getstate__(self):
         return None

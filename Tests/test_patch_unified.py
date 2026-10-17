@@ -170,23 +170,33 @@ def _check_errors(context, results, errors, checks):
     checks.append("%s: %d checks, %d failed" % (context, len(results), len(bad)))
 
 
+def _grid_node_which_child(obj):
+    """The view provider's control-grid Coin switch position, or None
+    headless / not built. #108: the grid is a view-only node, not part of
+    Shape, so `whichChild` (0 = shown, -1 = hidden) is where a grid toggle
+    is observable."""
+    vobj = getattr(obj, "ViewObject", None)
+    proxy = getattr(vobj, "Proxy", None) if vobj is not None else None
+    node = getattr(proxy, "_silk_grid_node", None)
+    if node is None:
+        return None
+    return node.whichChild.getValue()
+
+
 # Concrete display-contract counts for a unified pointed patch with
 # USplit1=0.3 / VSplit2=0.7 (4 subgrid cells). Face counts are pure
-# topology (4 cell faces vs 1 base face). The ShowGrid=False edge counts
-# are exactly the face-boundary edges (4 per face) because every grid-leg
-# edge disappears with the toggle. The grid-ON totals (106 edges with
-# subgrids shown, 24 with the base grid = face boundaries + the 20
-# non-degenerate control-grid leg segments) depend on drawGrid's segment
-# layout and are therefore only asserted as strictly larger than their
-# grid-OFF counterparts.
+# topology (4 cell faces vs 1 base face). `Shape` is GEOMETRY ONLY (#108):
+# every edge in it is a face-boundary edge (4 per face), so ShowGrid is
+# observable on the view provider's Coin grid node (whichChild 0 / -1),
+# never on Shape. Hiding the surface empties Shape (structural fails).
 def _assert_pointed_display_contract(doc, patch, edges, errors, checks,
                                      context):
-    """Assert the full display toggle contract on a unified pointed
-    patch (sets USplit1=0.3 / VSplit2=0.7 itself). check_patch must
-    be green in every surface-visible state; the ShowSurface=False
-    states are asserted to fail EXACTLY the display-driven checks (P4
-    needs a face to mesh; the empty-all-off shape also fails
-    structural) -- the surface is hidden, not missing."""
+    """Assert the full display contract on a unified pointed patch (sets
+    USplit1=0.3 / VSplit2=0.7 itself). #108: Shape carries the surface
+    only, so hiding the surface empties it -- check_patch then fails exactly
+    structural (nothing to draw) and the display-driven P4 (no face to
+    mesh), which the grid used to mask; the object's DATA is untouched.
+    ShowGrid is a view-only node toggle and never touches Shape."""
     from SilkChecks import check_patch
 
     def recompute():
@@ -213,6 +223,12 @@ def _assert_pointed_display_contract(doc, patch, edges, errors, checks,
     expect(len(patch.Shape.Faces) == 1,
            "ShowSubgrids=False: expected 1 base face, got %d"
            % len(patch.Shape.Faces))
+    expect(len(patch.Shape.Edges) == 4,
+           "grid on + base: expected 4 face-boundary edges only (the grid "
+           "is not geometry), got %d" % len(patch.Shape.Edges))
+    expect(_grid_node_which_child(patch) == 0,
+           "ShowGrid=True: expected the grid node shown, got whichChild %r"
+           % (_grid_node_which_child(patch),))
     expect(not oracle_bad(), "oracle not green on base surface")
 
     # 2. ShowSubgrids=True -> one face per cell
@@ -221,47 +237,60 @@ def _assert_pointed_display_contract(doc, patch, edges, errors, checks,
     expect(len(patch.Shape.Faces) == 4 == len(subgrids),
            "ShowSubgrids=True: expected 4 cell faces, got %d"
            % len(patch.Shape.Faces))
+    expect(len(patch.Shape.Edges) == 16,
+           "grid on + subgrids: expected 16 face-boundary edges, got %d"
+           % len(patch.Shape.Edges))
     expect(not oracle_bad(), "oracle not green with ShowSubgrids")
-    edges_grid_on_subgrids = len(patch.Shape.Edges)
 
-    # 3. ShowSurface=False -> zero faces in EITHER subgrids mode; the
-    #    oracle's only failure is the display-driven P4.
+    # 3. ShowSurface=False -> zero faces in EITHER subgrids mode. With no
+    #    geometry in Shape the oracle fails exactly structural (empty
+    #    Shape -- the grid no longer keeps it non-null) and the display-
+    #    driven P4.
     patch.ShowSurface = False
     recompute()
     expect(len(patch.Shape.Faces) == 0,
            "surface off + subgrids on: expected 0 faces, got %d"
            % len(patch.Shape.Faces))
-    expect(oracle_bad() == ["P4_surface_valid"],
-           "surface off + subgrids on: expected only the P4 failure, "
+    expect(sorted(oracle_bad()) == ["P4_surface_valid", "structural"],
+           "surface off + subgrids on: expected structural+P4, "
            "got %r" % oracle_bad())
     patch.ShowSubgrids = False
     recompute()
     expect(len(patch.Shape.Faces) == 0,
            "surface off + subgrids off: expected 0 faces, got %d"
            % len(patch.Shape.Faces))
-    expect(oracle_bad() == ["P4_surface_valid"],
-           "surface off + subgrids off: expected only the P4 failure, "
+    expect(sorted(oracle_bad()) == ["P4_surface_valid", "structural"],
+           "surface off + subgrids off: expected structural+P4, "
            "got %r" % oracle_bad())
 
-    # 4. ShowGrid=False -> only face-boundary edges remain (no leg edges)
+    # 4. ShowGrid is VIEW-ONLY (#108): it hides the view provider's Coin
+    #    grid node and leaves Shape byte-identical. Shape keeps exactly the
+    #    face-boundary edges (4 per face) in BOTH grid states.
     patch.ShowSurface = True
-    patch.ShowGrid = False
     patch.ShowSubgrids = False
+    patch.ShowGrid = False
     recompute()
-    edges_base_grid_off = len(patch.Shape.Edges)
-    expect(edges_base_grid_off == 4,
-           "grid off + base: expected 4 face-boundary edges, got %d"
-           % edges_base_grid_off)
+    base_off = (len(patch.Shape.Faces), len(patch.Shape.Edges))
+    expect(base_off == (1, 4),
+           "grid off + base: expected (1 face, 4 edges), got %r" % (base_off,))
+    expect(_grid_node_which_child(patch) == -1,
+           "ShowGrid=False: expected the grid node hidden, got whichChild "
+           "%r" % (_grid_node_which_child(patch),))
     expect(not oracle_bad(), "oracle not green (grid off, base)")
+    patch.ShowGrid = True
+    recompute()
+    expect((len(patch.Shape.Faces), len(patch.Shape.Edges)) == base_off,
+           "ShowGrid must not change Shape: (faces, edges) went %r -> %r"
+           % (base_off, (len(patch.Shape.Faces), len(patch.Shape.Edges))))
+    expect(_grid_node_which_child(patch) == 0,
+           "ShowGrid=True: expected the grid node shown, got whichChild %r"
+           % (_grid_node_which_child(patch),))
     patch.ShowSubgrids = True
     recompute()
-    expect(len(patch.Shape.Edges) == 4 * len(patch.Shape.Faces) == 16,
-           "grid off + subgrids: expected 16 face-boundary edges "
-           "(4 faces x 4), got %d" % len(patch.Shape.Edges))
-    expect(not oracle_bad(), "oracle not green (grid off, subgrids)")
-    expect(edges_grid_on_subgrids > len(patch.Shape.Edges),
-           "grid on (%d edges) should exceed grid off (%d edges)"
-           % (edges_grid_on_subgrids, len(patch.Shape.Edges)))
+    expect((len(patch.Shape.Faces), len(patch.Shape.Edges)) == (4, 16),
+           "grid on + subgrids: expected (4, 16), got %r"
+           % ((len(patch.Shape.Faces), len(patch.Shape.Edges)),))
+    expect(not oracle_bad(), "oracle not green (grid on, subgrids)")
 
     # 5. everything off -> empty shape; oracle fails exactly
     #    structural + P4
@@ -286,12 +315,12 @@ def _assert_pointed_display_contract(doc, patch, edges, errors, checks,
     expect(len(patch.Shape.Faces) == 1,
            "cleared splits: expected 1 base face, got %d"
            % len(patch.Shape.Faces))
-    expect(len(patch.Shape.Edges) == 24,
-           "cleared splits: expected 24 base edges (1 face + 20 grid-leg "
-           "segments), got %d" % len(patch.Shape.Edges))
+    expect(len(patch.Shape.Edges) == 4,
+           "cleared splits: expected 4 base face-boundary edges (the grid "
+           "is a view node), got %d" % len(patch.Shape.Edges))
     expect(not oracle_bad(), "oracle not green after clearing splits")
-    checks.append("%s display contract: 4/1/0 faces, 16/4 grid-off "
-                  "edges, base 24 edges" % context)
+    checks.append("%s display contract: 4/1/0 faces, 16/4 boundary "
+                  "edges, ShowGrid view-only" % context)
 
 
 def test_unified_patch_4_edges(doc):

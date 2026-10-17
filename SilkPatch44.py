@@ -18,7 +18,7 @@ import Part
 import ArachNURBS as AN
 
 from SilkMachinery import build_subgrids, build_display, \
-    split_pair, axis_splits, NO_BAND_1, NO_BAND_2
+    split_pair, axis_splits, NO_BAND_1, NO_BAND_2, set_grid_display
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -237,9 +237,31 @@ class Patch44ViewProvider:
 
     def attach(self, vobj):
         self.ViewObject = vobj
+        self.Object = vobj.Object
+        self._refresh_grid(self.Object, vobj)
+
+    def _refresh_grid(self, obj, vobj):
+        """Draw the restored Patch44's control grid as a Coin node (#108),
+        exactly as the unified Patch does: `Shape` is geometry only and the
+        legs build_display stashed drive the node, shown per ShowGrid."""
+        if obj is None or vobj is None:
+            return
+        proxy = getattr(obj, "Proxy", None)
+        legs = list(getattr(proxy, "_display_legs", None) or [])
+        set_grid_display(self, vobj, legs,
+                         bool(getattr(obj, "ShowGrid", True)),
+                         getattr(vobj, "LineColor", None),
+                         getattr(vobj, "LineWidth", None))
 
     def updateData(self, obj, prop):
+        if prop in ("Legs", "Shape", "ShowGrid", "ShowSubgrids",
+                    "ShowSurface", "AutoHideBlend"):
+            self._refresh_grid(obj, getattr(self, "ViewObject", None))
         return True
+
+    def onChanged(self, vobj, prop):
+        if prop in ("LineColor", "LineWidth"):
+            self._refresh_grid(getattr(vobj, "Object", None), vobj)
 
     def __getstate__(self):
         return None

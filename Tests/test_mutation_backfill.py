@@ -144,8 +144,9 @@ def test_mutation_pipeline_reverse_edge(doc):
 
 
 def test_mutation_pipeline_toggle_display(doc):
-    """Flip ShowSubgrids/ShowGrid/AutoHideBlend; the patch Shape never
-    becomes invalid or wrongly empty (op 4)."""
+    """Flip ShowSubgrids/AutoHideBlend (geometry: Shape rebuilds, never
+    invalid or wrongly empty) and ShowGrid (view-only: Shape must not
+    change -- the grid is a Coin node now, #108) (op 4)."""
     errors, checks = mo.run_mutations(
         doc, lambda: _build_corner_pair_model(doc), _oracle_corner_pair,
         [functools.partial(mo.toggle_display,

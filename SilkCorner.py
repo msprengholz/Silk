@@ -39,7 +39,7 @@ import ArachNURBS as AN
 from SilkBlend import band_cells, side_and_end, seam_direction, BLEND_TYPES
 from SilkMachinery import (build_intervals, split_pair, corner_ring,
     corner_grid, orient_junction_row, corner_ring_3,
-    control_grid64_3_1, reverse_grid_rows)
+    control_grid64_3_1, reverse_grid_rows, set_grid_display)
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -448,21 +448,14 @@ class CornerBlend:
 
         if not surf_shape or not hasattr(surf_shape, "Faces") \
                 or not surf_shape.Faces:
-            fp.Shape = Part.Shape()  # fallback: just show the grid
+            fp.Shape = Part.Shape()  # no surface to show; the grid is a view node
             return
 
-        shapes = [surf_shape]
-        for leg in fp.Legs:
-            if hasattr(leg, "toShape"):
-                try:
-                    shapes.append(leg.toShape())
-                except Exception:
-                    pass
-        if shapes:
-            try:
-                fp.Shape = Part.Compound(shapes)
-            except Exception:
-                fp.Shape = surf_shape
+        # Shape is GEOMETRY ONLY (#108): the corner surface. The control
+        # grid is a DISPLAY concern -- the view provider draws it as a Coin
+        # node (SilkMachinery.set_grid_display reads fp.Legs), so it is not
+        # part of Shape, not exported, and not selectable.
+        fp.Shape = surf_shape
 
 
 class CornerBlendViewProvider:
@@ -474,9 +467,32 @@ class CornerBlendViewProvider:
 
     def attach(self, vobj):
         self.ViewObject = vobj
+        self.Object = vobj.Object
+        self._refresh_grid(self.Object, vobj)
+
+    def _refresh_grid(self, obj, vobj):
+        """Draw the corner's control grid as a Coin node (#108).
+
+        The grid is no longer part of Shape (execute keeps only the
+        surface); the view provider draws it from the stored `Legs`, in the
+        corner's own LineColor / LineWidth. A CornerBlend has no grid
+        toggle, so the grid stays drawn -- exactly the visibility it had
+        inside Shape. Headless (no ViewObject) is a silent no-op."""
+        if obj is None or vobj is None:
+            return
+        set_grid_display(self, vobj, list(getattr(obj, "Legs", None) or []),
+                         bool(getattr(obj, "ShowGrid", True)),
+                         getattr(vobj, "LineColor", None),
+                         getattr(vobj, "LineWidth", None))
 
     def updateData(self, obj, prop):
+        if prop in ("Legs", "Shape"):
+            self._refresh_grid(obj, getattr(self, "ViewObject", None))
         return True
+
+    def onChanged(self, vobj, prop):
+        if prop in ("LineColor", "LineWidth"):
+            self._refresh_grid(getattr(vobj, "Object", None), vobj)
 
     def __getstate__(self):
         return None
