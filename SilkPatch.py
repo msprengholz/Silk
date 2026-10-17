@@ -248,9 +248,33 @@ class Patch:
         # Guard: only recompute if object is fully initialized (has inputs)
         if prop in ("USplit1", "USplit2", "VSplit1", "VSplit2",
                     "ShowSurface", "ShowGrid", "ShowSubgrids", "reverse"):
+            if getattr(self, "_normalizing_splits", False):
+                # This onChanged IS the corrective write _normalize_splits_on_set
+                # just made (a clamp or a swap); the user's outer write is
+                # still in flight above and will settle the axis once. Doing
+                # it here too would run the whole chain twice per edit.
+                return
             if 'Restore' not in fp.State and hasattr(fp, "Edges") and fp.Edges:
                 fp.touch()
-                fp.recompute()
+                # #109: a band-edge write is the one property that feeds the
+                # whole downstream chain (patch -> blend -> corner), and every
+                # link of that chain only TOUCHES its dependent -- a touch is
+                # not a recompute. A single-object fp.recompute() therefore
+                # rebuilt the patch and left the blend (and, through it, the
+                # corner) reading the pre-edit subgrids until some caller ran
+                # a document pass, which a bare property write (data tab,
+                # expression, script, ops) never does. Band edges settle the
+                # DAG with a DOCUMENT recompute; the display toggles only
+                # change what this patch draws, so they keep the single-object
+                # recompute. `fp.touch()` first is deliberate -- FreeCAD sets
+                # this object's Touched flag only AFTER onChanged returns, so
+                # without it the pass below would skip the patch itself.
+                doc = fp.Document
+                if (prop in ("USplit1", "USplit2", "VSplit1", "VSplit2")
+                        and doc):
+                    doc.recompute()
+                else:
+                    fp.recompute()
         elif prop == "_HiddenSubgridIdxs":
             # A Blend writes this (run_blend's auto-hide bookkeeping)
             # AFTER it last recomputed this patch, so the display has to
