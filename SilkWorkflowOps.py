@@ -130,7 +130,16 @@ def create_blend(patch_a, patch_b, edge=None, name="Blend"):
     obj.ViewObject.LineWidth = 2.00
     obj.ViewObject.LineColor = (0.00, 1.00, 0.00)
     obj.ViewObject.PointSize = 5.00
-    obj.ViewObject.DisplayMode = "Shaded"
+    # Flat Lines, NOT Shaded: a strip's four boundary edges are what the
+    # Surface workbench's Filling panel is meant to pick, and on this build
+    # a Shaded face puts no edge in the pick at all -- measured through
+    # FreeCAD's own `getObjectInfo` (5 px pick radius, Top view):
+    # `B12/Edge4` is absent from a 2601-pixel window around that edge while
+    # Shaded, and appears 72 times there at Flat Lines, against a 427-hit
+    # control on a Flat-Lines `Patch44` edge
+    # (docs/research/silk-fill-picking.md). Transparency 30 keeps the
+    # surface readable through the strip.
+    obj.ViewObject.DisplayMode = "Flat Lines"
     obj.ViewObject.ShapeColor = (0.00, 1.00, 0.00)
     obj.ViewObject.Transparency = 30
     doc.recompute()
@@ -357,7 +366,7 @@ def create_corner_blend(*strips, name="CornerBlend"):
     obj.ViewObject.LineWidth = 1.50
     obj.ViewObject.LineColor = (1.00, 0.67, 0.00)
     obj.ViewObject.PointSize = 4.00
-    obj.ViewObject.DisplayMode = "Shaded"
+    obj.ViewObject.DisplayMode = "Flat Lines"
     obj.ViewObject.ShapeColor = (1.00, 0.67, 0.00)
     obj.ViewObject.Transparency = 30
     doc.recompute()
@@ -376,9 +385,10 @@ def create_corner_blend(*strips, name="CornerBlend"):
 # the ring strips' own `EdgeN` boundary rows DIRECTLY -- no throwaway
 # `Part::Feature` carriers, so it stays live-linked to the strips -- and
 # returns one valid face at order 0/1/2 with `distToShape` boundary residual
-# 0.0 mm. The manual Surface-workbench path is blocked on our side by
-# `DisplayMode = "Shaded"` (the picker can only return `Face1` there), which
-# is why the boundary is taken from the SELECTION here instead of from a pick.
+# 0.0 mm. The manual Surface-workbench path now works too: `create_blend`
+# draws the strips Flat Lines, so their boundary edges are pickable (the same
+# measurement is what made Shaded untenable). This command stays because it is
+# the exact path, with the ring contract checked and named BEHIND it.
 
 # `Surface::Filling.BoundaryOrder`: 0 = C0, 1 = G1, 2 = G2. >= 3 is refused by
 # FreeCAD ("BRepFill : The continuity is not G0 G1 or G2").

@@ -176,10 +176,11 @@ What blocks the *manual* Surface-panel path is Silk's own deliberate
 427 hits. The Surface panel's gate (`ShapeSelection::allow` in `SurfaceGui.so`)
 accepts `Part::Feature`-derived objects with an `Edge*` subname, and the panel
 records `(Blend, "EdgeN")` correctly, so nothing rejects Silk objects: the
-picker simply has nothing to hit. **Therefore #96 ships the Silk-side assembly
-path** (select the ring strips in Silk, Silk builds the `Surface::Filling`) and
-leaves the display mode to the owner; the one-line picker fix is recorded but
-not applied.
+picker simply has nothing to hit. **#96 therefore fixes the display mode** --
+blends and corners are created `Flat Lines`, so their boundary edges are
+drawn and selectable -- **and ships the Silk-side assembly path as well**
+(select the ring strips in Silk, Silk builds the `Surface::Filling`), which is
+the exact path and the checkable one.
 
 **Consequence to keep in view.** Silk's own corner ships the degenerate
 triangular member that upstream calls *"not intended to produce a final

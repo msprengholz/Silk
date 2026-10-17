@@ -85,10 +85,17 @@ Reading:
   pixel: where the radial `Edge` object `E_s12` crosses the row, `E_s12/Edge1`
   wins the depth test, so the *ends* of a strip's row are the reliably
   clickable part of it (this is the same overlap the owner would meet by hand).
-* **The one-line Silk-side fix** is `DisplayMode = "Flat Lines"` at those three
-  sites (or "Wireframe"). It is **not applied in this ticket**: it changes what
-  every blend in every document looks like, which is the owner's call, not the
-  implementer's. The picker question is settled by the measurement above.
+* **The fix applied is `DisplayMode = "Flat Lines"`** at all three sites
+  (`SilkWorkflowOps.create_blend`, `SilkBlend.CreateBlend.Activated`,
+  `SilkWorkflowOps.create_corner_blend`), paired with the existing
+  `Transparency = 30` so the surface still reads through the strip. Chosen over
+  `Wireframe` because Flat Lines is the Part mode that draws faces *and*
+  edges: the strips keep their shaded, semi-transparent look and gain exactly
+  the four boundary edges the Filling panel is meant to pick. The owner's ask
+  was to be able to select those edges, and a display mode that draws none of
+  them is the defect, so this is fixed rather than worked around. (No test
+  asserted `DisplayMode == "Shaded"`; the #110/#108 display-contract tests
+  assert the grid node, not the mode.)
 
 ### 3. The Surface panel accepts our objects — it only ever sees `Face1`
 

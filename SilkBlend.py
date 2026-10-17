@@ -1143,7 +1143,7 @@ class CreateBlend:
             obj.ViewObject.LineWidth = 2.00
             obj.ViewObject.LineColor = (0.00, 1.00, 0.00)
             obj.ViewObject.PointSize = 5.00
-            obj.ViewObject.DisplayMode = "Shaded"
+            obj.ViewObject.DisplayMode = "Flat Lines"
             obj.ViewObject.ShapeColor = (0.00, 1.00, 0.00)
             obj.ViewObject.Transparency = 30
             doc.recompute()
