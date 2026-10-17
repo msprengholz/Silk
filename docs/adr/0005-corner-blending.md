@@ -159,6 +159,28 @@ author's own position agrees: *"FreeCAD Surface/Filling is known to flip out on
 G2. I never recommend trying to achieve G2 with this. I personally use G1 as a
 final surface"* (2026).
 
+## Measurement update (#96: the picker, measured)
+
+The reopened ticket's first job — make the corner boundary *fillable now* — was
+diagnosed on current HEAD (`docs/research/silk-fill-picking.md`): the ring
+strips' `Shape` is sound (1 face / 4 edges / 4 vertices, `Selectable = True`,
+`EdgeN` names stable) and `Surface::Filling` accepts
+`BoundaryEdges=[(B12, "Edge4"), ...]` **directly on the strips** — 1 face, valid,
+boundary residual `distToShape` `0.0` mm at order 0/1/2, no throwaway carriers.
+What blocks the *manual* Surface-panel path is Silk's own deliberate
+`DisplayMode = "Shaded"` for blends and corners: measured with
+`View3DInventorPy.getObjectInfo` (FreeCAD's 5 px pick radius, Top view), a
+2601-pixel scan around a strip's junction-end edge returns `Face1` and never
+`EdgeN` while Shaded, and returns `EdgeN` (72 hits) on the same pixels at
+`Flat Lines` — with the same-type control `Patch44/Edge4` (Flat Lines) reading
+427 hits. The Surface panel's gate (`ShapeSelection::allow` in `SurfaceGui.so`)
+accepts `Part::Feature`-derived objects with an `Edge*` subname, and the panel
+records `(Blend, "EdgeN")` correctly, so nothing rejects Silk objects: the
+picker simply has nothing to hit. **Therefore #96 ships the Silk-side assembly
+path** (select the ring strips in Silk, Silk builds the `Surface::Filling`) and
+leaves the display mode to the owner; the one-line picker fix is recorded but
+not applied.
+
 **Consequence to keep in view.** Silk's own corner ships the degenerate
 triangular member that upstream calls *"not intended to produce a final
 surface … a stepping stone"*. With the fill path merely deferred rather than
