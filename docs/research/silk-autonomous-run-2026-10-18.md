@@ -1,12 +1,13 @@
 # Autonomous run, 2026-10-18 — handover briefing
 
-Eight hours, no human in the loop, the whole `ready-for-agent` queue worked.
+This run (about 5.5 hours of goal time), no human in the loop, the whole
+`ready-for-agent` queue worked.
 Every ticket is either **merged with the gate green and closed**, or **open with
 a written blocker and the question to ask**. This document is the single place
 that names what landed, what is blocked and why, and what to decide.
 
-Gate at the end: **359/359 green** on `unified-workflow-wizard` (94 commits
-ahead of `origin`, unpushed). One test — `test_runner_stall_ends_the_run_before_the_ceiling`
+Gate at the end: **359/359 green** on `unified-workflow-wizard` (**95 commits
+ahead** of `origin`, counting the briefing commit itself; unpushed). One test — `test_runner_stall_ends_the_run_before_the_ceiling`
 — is a known load-sensitive flake that passes 4/4 on re-run.
 
 ---
@@ -36,8 +37,8 @@ reviewer's own full-suite run, not the author's.
 
 | ticket | blocker, in one line |
 |---|---|
-| **#96** | The reusable fill component shipped; the **automated** 3-sided + 4-sided fill is blocked on **#114** — building it before the corner construction is decided would be guessing. |
-| **#98** | Narrowed to **item 3**: a manual continuity measurement comparing the demo's stored-grid seams with our rebuilt blends' seams — two different quantities, needing the instrument pointed at both. |
+| **#96** | The reusable fill component shipped; the **automated** 3-sided + 4-sided fill is blocked on **#114** — building it before the corner construction is decided would be guessing. **Questions 6 and 9.** |
+| **#98** | Narrowed to **item 3**: a manual continuity measurement comparing the demo's stored-grid seams with our rebuilt blends' seams — two different quantities, and the rebuild cannot reach a corner at all (the demo's ring faces are rib halves). **Question 9 below.** |
 | **#10** | Not a lossy restore. It surfaced `fullyRestore(): failed for <class 'SilkBlend.Blend'>` and **five snapshots with null proxies**; whether that is the same root cause as the original report is unresolved. |
 | **#27** | Item 2 (the generalized hidden-cell list) shipped by a later route; **item 1** (trimmed-as-primary display) is now a decision, because #110 made `Shape` geometry-only. |
 | **#74** | Safety half shipped (an expression-owned band is **refused by name**, a broken binding is **named**, unblend detaches the binding). The feature needs per-element expression *text* and whole-list rewrites; a partial version would flatten a live cell reference **while appearing to work**. |
@@ -53,6 +54,8 @@ reviewer's own full-suite run, not the author's.
 6. **#96** — where does `Silk_CornerFill` live in the UI? It is registered but deliberately not in the #50 visible set.
 7. **#12** — is a split-but-exact chain the goal or an approximation within a stated tolerance, and does the user see N edges or one boundary?
 8. **#88** — the message-text reductions the audit's numbers suggest but do not decide (listed at the end of `silk-console-noise-audit.md`).
+9. **#98** — should the demo's stored corner stand as the reference and the rebuild stop at the patch stage, **or** is adding edge trimming (so a rib half becomes a buildable boundary) the thing worth building? The answer decides whether #98 narrows to a measurement or grows into a feature.
+10. **#96** — is the automated corner fill wanted at all once #114 is answered, and where should `Silk_CornerFill` live in the UI today (it is registered but not in the visible set)?
 
 ## 4. Process notes from this run
 
