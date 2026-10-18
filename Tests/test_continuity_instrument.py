@@ -216,9 +216,10 @@ def test_manual_measurement_scripts_reachable(doc):
     import Tests.g2_corner_solve as solve
     import Tests.g2_edge_blend_probe as edge
     import Tests.g2_corner_fill_continuity as fill
+    import Tests.g2_corner_roll_measure as roll
     errs = []
     checks = []
-    for mod in (demo, cm, solve, edge, fill):
+    for mod in (demo, cm, solve, edge, fill, roll):
         ok = callable(getattr(mod, "main", None))
         checks.append("%s.main callable: %s" % (mod.__name__, ok))
         if not ok:
