@@ -301,6 +301,11 @@ def _drop_band_split(doc, dying, p, etype):
       * the whole axis, untouched, when a CornerBlend still feeds off
         this blend (#28).
 
+    #74: an expression-driven band edge cannot simply be overwritten with
+    a sentinel -- FreeCAD stores the write and reverts it at the next
+    recompute, so the unblend would look done and half-work. The binding
+    is detached with the band it drives, and the detachment is named.
+
     The width is the price: re-blending a seam whose axis was cleared
     rebuilds at the default (0.1 / 0.9).
     """
@@ -315,6 +320,26 @@ def _drop_band_split(doc, dying, p, etype):
              before[1] if 1 in keep else NO_BAND_2)
     if after == before:
         return False            # every end on the axis is still needed
+    # #74: an expression OWNS a band edge -- and a sentinel written into
+    # a driven property is reverted at the next recompute, so the unblend
+    # would half-work (the blend gone, its band still carving the axis).
+    # The unblend is the user's decision to take the band with it, so the
+    # binding goes with the band, named on the console as it is detached.
+    for end in (0, 1):
+        if end in keep:
+            continue            # a surviving seam keeps its own binding
+        prop = band_edge_prop(letter, end)
+        text = dict(getattr(p, "ExpressionEngine", [])).get(prop)
+        if text is None:
+            continue
+        try:
+            p.setExpression(prop, None)
+        except Exception:
+            return False        # cannot release it -> leave the axis alone
+        FreeCAD.Console.PrintMessage(
+            "Silk: unblended band on %s.%s was driven by the expression "
+            "'%s'; the expression was detached with the band.\n"
+            % (p.Name, prop, text))
     setattr(p, band_edge_prop(letter, 0), after[0])
     setattr(p, band_edge_prop(letter, 1), after[1])
     return True

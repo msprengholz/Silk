@@ -1766,6 +1766,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             spin.setButtonSymbols(
                 QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
             spin.setValue(value)
+            # #74: a band edge an expression owns is not editable here --
+            # typing a number into a driven property is silently reverted
+            # at the next recompute, so the editor shows the driven value
+            # and says so; the binding, and why it may not resolve, is in
+            # the tooltip (`write_band_split` refuses the write too, for
+            # the paths that do not come through this widget).
+            if band_expression(patch, prop) is not None:
+                spin.setReadOnly(True)
             spin.setToolTip(self._band_tooltip(entry, which, read))
             spin.editingFinished.connect(
                 lambda e=entry, w=which, s=spin:
@@ -1800,6 +1808,24 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         other = BAND_B if which == BAND_A else BAND_A
         o_patch, o_prop, o_ss, o_value = band_side(entry, other, read)
         same = abs(o_value - value) < 1e-12
+        binding = band_expression(patch, prop)
+        driven = ""
+        if binding is not None:
+            problem = band_binding_problem(patch, prop, binding)
+            driven = (
+                "\n%s.%s is DRIVEN by the expression '%s'%s. This editor "
+                "shows what the expression resolves to and cannot write a "
+                "literal (a literal would be reverted at the next "
+                "recompute); edit the expression, or detach it to type a "
+                "width here."
+                % (patch.Name, prop, binding,
+                   "" if problem is None else
+                   ", and that expression does not resolve: %s" % problem)
+                + ("" if problem is None else
+                   "\nThe number shown is the last value stored on the "
+                   "property, NOT the expression's -- the binding is "
+                   "broken, so the two differ and only the expression can "
+                   "say what the width should be."))
         return (
             "Band width on %s.%s (this seam's %s end).\n"
             "The blend reads this edge, so this is the width the band is "
@@ -1820,7 +1846,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                "blend." if entry["status"] == "blended" else "")
             + ("\nThe width stops short of 1: a band's own end IS the "
                "'no band at this end' sentinel, so a width of exactly 0 "
-               "or 1 would store the absence of a band instead (#75)."))
+               "or 1 would store the absence of a band instead (#75).")
+            + driven)
 
     def _on_split_edited(self, entry, which=BAND_A, edited=None):
         """One split edit: validate against ITS OWN patch, then write
@@ -2528,6 +2555,60 @@ def band_label(which):
     return "band %s" % which
 
 
+def band_expression(p, prop):
+    """The expression TEXT that owns `p.prop`, or None when the property
+    is a plain literal (#74).
+
+    One read, one spelling: `ExpressionEngine` is the object's own list of
+    `(property, expression)` pairs, so "is this property driven?" is asked
+    in exactly one place. A write to a driven property is NOT refused by
+    FreeCAD -- it is stored and silently reverted at the next recompute --
+    so every writer that would otherwise discard a user's number has to
+    ask this first."""
+    try:
+        return dict(p.ExpressionEngine).get(prop)
+    except Exception:
+        return None
+
+
+def band_binding_problem(p, prop, text):
+    """Why the expression `text` on `p.prop` does not produce a band edge,
+    or None when it does (#74's blocking question).
+
+    The property value alone is silently stale -- it keeps the last number
+    it held, and reads like a working one -- so the VALUE cannot answer
+    this. The object state can, by two mechanisms measured on this build:
+
+      * `isValid()` / `getStatusString()` -- after a recompute a binding
+        that cannot produce a value leaves the object `Invalid` and the
+        status string NAMES the binding (`Property 'X' not found in
+        'X.Y' in property binding 'P.USplit1'`);
+      * `evalExpression(text)` -- immediately, without a recompute, and it
+        is the one that says WHY: it raises for an unresolvable reference
+        and returns the raw type otherwise (a `str` for a binding that
+        cannot yield a number).
+
+    Both are consulted; the state string wins when it is there, because it
+    names the property binding the way the property editor does."""
+    if text is None:
+        return None
+    try:
+        if not p.isValid():
+            why = p.getStatusString().strip()
+            if why:
+                return why
+    except Exception:
+        pass
+    try:
+        out = p.evalExpression(text)
+    except Exception as exc:
+        return str(exc)
+    if isinstance(out, (int, float)):
+        return None
+    return ("the expression evaluates to %s, not a number"
+            % type(out).__name__)
+
+
 def write_band_split(entry, which, value):
     """Write `value` onto ONE patch's band edge for this seam.
 
@@ -2563,6 +2644,24 @@ def write_band_split(entry, which, value):
     then show DEFAULT_BAND for it, the display bug #75 reports."""
     p, prop, ss = band_side(entry, which)[:3]
     if p is None or prop is None:
+        return False
+    # #74: an expression owns the property -> a literal write is not
+    # ignored, it is stored and SILENTLY REVERTED at the next recompute
+    # (measured: USplit1 = 0.55 under a binding reads 0.55 until the
+    # recompute, then 0.25 again, with no message either time). So the
+    # write is refused by name, and -- when the binding cannot produce a
+    # value -- the reason is the binding's own, not a stale number.
+    binding = band_expression(p, prop)
+    if binding is not None:
+        why = band_binding_problem(p, prop, binding)
+        FreeCAD.Console.PrintError(
+            "Silk: cannot set the band width on %s.%s -- the property is "
+            "driven by the expression '%s'%s. A literal written there is "
+            "reverted at the next recompute, so nothing was written; edit "
+            "the expression, or detach it to type a width here.\n"
+            % (p.Name, prop, binding,
+               "" if why is None else
+               ", and that expression does not produce a value (%s)" % why))
         return False
     unreadable = band_width_problem(value, ss)
     if unreadable:
