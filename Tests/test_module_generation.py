@@ -13,11 +13,15 @@ green suite was validating one generation of the maths against the
 surfaces built by another.
 """
 
+import contextlib
 import gc
+import io
 import os
 import sys
 import tempfile
 import types
+
+import FreeCAD
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from Tests import silk_reload  # noqa: E402
@@ -246,6 +250,169 @@ def test_location_purge_covers_every_mod_source_file(doc):
 
 
 # ----------------------------------------------------------------------
+# stale RPC namespace bindings (#105)
+# ----------------------------------------------------------------------
+#
+# The execute_code namespace is persistent by design, so a killed or
+# over-running RPC call leaves bindings into the document it was working on
+# after that document closes. Two things must hold for the sweep over them:
+# it must DROP them (a binding into a closed document is useless), and it
+# must never fail the reload -- the reload is how you recover from the
+# state that broke it.
+
+
+def _raw_inspection_error(value):
+    """The text of the access the sweep has to survive, or None if *value*
+    is still inspectable."""
+    try:
+        getattr(value, "__module__", None)
+    except BaseException as exc:
+        return "%s: %s" % (type(exc).__name__, exc)
+    return None
+
+
+def _sweep_with_report(namespace):
+    """Run the sweep on *namespace*; return (dropped, what it printed)."""
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        dropped = silk_reload.clear_stale_namespace(namespace)
+    return dropped, printed.getvalue()
+
+
+def test_a_dead_document_binding_is_dropped_not_fatal(doc):
+    """#105: bindings into a CLOSED document are dropped, and reported.
+
+    Reproduces the leftover state an interrupted run creates: document
+    objects bound in a namespace, the document closed under them. The
+    sweep has to survive inspecting them -- a deleted object refuses
+    attribute access, which is the access the sweep makes -- and drop
+    them, because a binding into a closed document can never be a live
+    Silk binding.
+
+    The exception CLASS is a FreeCAD detail this build answers with
+    ReferenceError (captured in `checks`); the #105 report was filed from
+    a build that answered RuntimeError for the same access. The sweep
+    must not care which, which is what
+    test_the_sweep_survives_a_runtime_error_from_inspection pins.
+    """
+    errors = []
+    checks = []
+    doc_name = doc.Name
+    probe = doc.addObject("Part::FeaturePython", "probe105")
+    doc.recompute()
+    dead = {
+        "dead_object105": probe,        # a document object
+        "dead_objects105": doc.Objects,  # the document's own object list
+        "dead_doc105": doc,             # the document itself
+    }
+    try:
+        dead["dead_view105"] = probe.ViewObject
+    except Exception:
+        pass  # headless FreeCAD: nothing of Gui to leave behind
+    FreeCAD.closeDocument(doc_name)
+
+    raw = _raw_inspection_error(probe)
+    if raw is None:
+        errors.append("the planted binding is still inspectable -- the probe "
+                      "did not reproduce a closed document")
+    checks.append("closed-document access raised: %s" % raw)
+
+    namespace = dict(dead)
+    namespace["live_int105"] = 42
+    namespace["live_module105"] = silk_reload
+    namespace["live_function105"] = silk_reload.fingerprint
+    live = {n: namespace[n] for n in namespace if n not in dead}
+
+    dropped, printed = _sweep_with_report(namespace)
+    checks.append("sweep dropped %d binding(s): %s"
+                  % (len(dropped), ", ".join(dropped)))
+    if dropped != sorted(dead):
+        errors.append("sweep dropped %r, expected the %d dead binding(s) %r"
+                      % (dropped, len(dead), sorted(dead)))
+    left = sorted(namespace)
+    if left != sorted(live):
+        errors.append("sweep felled live binding(s): namespace holds %r, "
+                      "expected %r" % (left, sorted(live)))
+    for key, value in live.items():
+        if key not in namespace or namespace[key] is not value:
+            errors.append("live binding %s was not left alone" % key)
+    if not dropped:
+        errors.append("the sweep kept every dead binding -- the reload would "
+                      "carry them into the next run")
+    line = "[leak] cleared %d stale RPC namespace binding(s):" % len(dropped)
+    if line not in printed:
+        errors.append("the sweep reported nothing usable: %r" % printed)
+    else:
+        checks.append("reported: %s" % printed.strip().splitlines()[0])
+    if not errors:
+        checks.append("%d dead binding(s) dropped, %d live binding(s) intact"
+                      % (len(dropped), len(live)))
+    return _ok(checks, errors)
+
+
+class _DeadLikeBinding105:
+    """A value whose attribute access raises, with FreeCAD's own message.
+
+    Every instance attribute access raises, which is what a deleted
+    document's object does; the message text is FreeCAD's. The class
+    claims a module outside the Mod directory on purpose: the sweep's
+    never-raising probe reads the value's TYPE first, so a class defined
+    normally in this test module would answer it and the probe would
+    never reach the value's own attribute access -- the access that
+    raises. Which class the error is, is FreeCAD's own business: 1.1.3
+    raises ReferenceError for this access, the build that filed #105
+    raised RuntimeError, and both say "Cannot access attribute '<name>' of
+    deleted object".
+    """
+
+    __module__ = "silk105_uninspectable"  # deliberately not a Mod module
+
+    def __getattribute__(self, name):
+        raise RuntimeError(
+            "Cannot access attribute '%s' of deleted object" % name)
+
+
+def test_the_sweep_survives_a_runtime_error_from_inspection(doc):
+    """#105: a binding whose inspection raises RuntimeError is dropped,
+    not fatal.
+
+    The ticket: a stale binding made `run_all.py` report
+    {'success': False, 'error': "RuntimeError: ..."} with 0 tests run,
+    because the sweep enumerated the exception classes it expected and
+    the class it met was not among them. FreeCAD's exception class for a
+    deleted object is not stable across builds, so the rule is the one
+    stated in the ticket: any exception from inspecting a value means
+    stale, drop it.
+    """
+    errors = []
+    checks = []
+    dead = _DeadLikeBinding105()
+    checks.append("the planted binding's inspection raises: %s"
+                  % _raw_inspection_error(dead))
+    namespace = {"dead_like105": dead, "live_int105": 42}
+    try:
+        dropped, printed = _sweep_with_report(namespace)
+    except BaseException as exc:
+        # The defect itself: the sweep died, so the reload died, so the
+        # suite could not start. Report the text rather than only a
+        # traceback -- it is the evidence the ticket asks for.
+        errors.append("the sweep raised out of the reload: %s: %s"
+                      % (type(exc).__name__, exc))
+        dropped, printed = [], ""
+    if dropped != ["dead_like105"]:
+        errors.append("sweep dropped %r, expected ['dead_like105']" % (dropped,))
+    if namespace.get("live_int105") != 42:
+        errors.append("the sweep felled the live binding too")
+    if dropped and "dead_like105" not in printed:
+        errors.append("the sweep dropped the dead binding without saying so: "
+                      "%r" % printed)
+    if not errors:
+        checks.append("the sweep survived a RuntimeError from inspection and "
+                      "dropped the binding")
+    return _ok(checks, errors)
+
+
+# ----------------------------------------------------------------------
 # reload only when the sources changed
 # ----------------------------------------------------------------------
 
@@ -389,6 +556,8 @@ ALL_TESTS = [
     test_the_guard_fails_on_a_planted_stale_binding,
     test_prefix_only_purge_would_leave_split_brain,
     test_location_purge_covers_every_mod_source_file,
+    test_a_dead_document_binding_is_dropped_not_fatal,
+    test_the_sweep_survives_a_runtime_error_from_inspection,
     test_fingerprint_detects_edits_and_force_reload,
     test_unchanged_sources_perform_no_reimport,
     test_no_new_orphan_module_generations,
