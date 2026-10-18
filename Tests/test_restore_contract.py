@@ -62,10 +62,19 @@ FIXTURE_DIR = os.path.join(_HERE, "..", "Resources", "Test_files")
 # fixtures: the `SketchOnly_*_withEdges/withPatches` under Test_files root
 # are RECOVERY SNAPSHOTS of a human's work-in-progress session (`57dd0dd`,
 # "so git can recover them"), with no declared meaning and no owner -- only
-# the `examples/` set has one (Tests/test_example_documents.py). Their
-# `E_*` objects save `Proxy` = JSON null, so a sweep reports them as "0
-# declared proxies" and quietly pads the assertion set with files nothing
-# reads; their null proxies belong to the #10 family, not to this contract.
+# the `examples/` set has one (Tests/test_example_documents.py). A sweep
+# would quietly pad the assertion set with files nothing reads: the four
+# 2026-10-11 snapshots' `E_*` objects (`object_type` = "Edge") save `Proxy`
+# = JSON null, so a sweep reports them as "0 declared proxies". #10 measured
+# what that null is: not a BoundarySpline fact at all (the `BoundarySpline*`
+# rows in the two `Silk_2Boundaries*` documents are
+# `App::DocumentObjectGroupPython` groups that never HAD a document-side
+# proxy -- `SilkWorkflow.CreateBoundarySplineCommand` sets only the
+# ViewObject one -- and they restore with SilkType, Group children and icon
+# intact), and not uniform across the snapshots either: the newer
+# `SketchOnly_Demo01Subset_withPatches.FCStd` does declare
+# `module="SilkEdge"` for the same kind of object. Neither case is this
+# contract's subject.
 # `examples/` is left out for the same reason it contributes nothing: it is
 # sketch-only, so it declares no proxy and would add only a "0 declared
 # proxies" line. `_inspect/` is gitignored scratch.
