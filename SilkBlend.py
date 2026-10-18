@@ -322,10 +322,74 @@ def _drop_band_split(doc, dying, p, etype):
 
 # ---- the blend algorithm (single implementation, #39 decision B) --------
 
+def _junction_corner_cells(p, tol):
+    """Cell indices at `p`'s junctions whose RING of blends already
+    exists (#113).
+
+    A junction corner cell is pinned by a seam on EACH axis, and one blend
+    knows only its own seam -- so a single blend can never identify a
+    corner. The trigger is a PAIR of live blends on `p` whose seams lie on
+    DIFFERENT axes: the two neighbours that meet at that corner. The cell
+    itself comes from `CornerBlend._corner_cell(p, pair, tol)`, the very
+    derivation the corner fill uses, so the ring path and the corner path
+    cannot disagree about which cell a junction owns -- the corner blend's
+    own write is the same index.
+
+    Two exclusions, both of them the difference between "a junction" and
+    "two seams on one patch":
+
+      * the pair must be on DIFFERENT axes -- the two-seam tube's seams
+        both sit on TubeA's U axis, and its corner is not a junction;
+      * the pair must lead away from `p` to two DIFFERENT patches -- a
+        junction is three or more patches, and a pair that leads both
+        seams back to one neighbour is the degenerate closed ring.
+
+    `p`'s OTHER corners are never touched: no such pair pins them, which
+    is why a 3-valent junction patch keeps its far corners. A dying blend
+    is skipped (`_dying`), so unblending a ring gives the cell back."""
+    doc = getattr(p, "Document", None)
+    idxs = set()
+    if doc is None:
+        return idxs
+    live = []
+    for o in doc.Objects:
+        if (getattr(o, "object_type", "") not in BLEND_TYPES
+                or getattr(getattr(o, "Proxy", None), "_dying", False)
+                or not (getattr(o, "PatchA", None) is p
+                        or getattr(o, "PatchB", None) is p)):
+            continue
+        live.append(o)
+    if len(live) < 2:
+        return idxs
+    try:
+        from SilkCorner import CornerBlend as _CB
+    except ImportError:
+        return idxs
+    sides = {}
+    for o in live:
+        sides[o.Name] = side_and_end(o, p, tol)[0]
+    for i, a in enumerate(live):
+        ea = sides[a.Name]
+        if not ea:
+            continue
+        na = a.PatchB if a.PatchA is p else a.PatchA
+        for b in live[i + 1:]:
+            eb = sides[b.Name]
+            if not eb or ea[0] == eb[0]:
+                continue
+            nb = b.PatchB if b.PatchA is p else b.PatchA
+            if na is nb:
+                continue
+            iu_c, iv_c, nu, nv = _CB._corner_cell(p, [a, b], tol)
+            if iu_c is not None and iv_c is not None:
+                idxs.add(iu_c * nv + iv_c)
+    return idxs
+
+
 def _linked_band_cells(fp, p):
     """Band cells hidden on patch `p` by every blend linked to it EXCEPT
     `fp` itself, plus the corner cells owned by corner blends on `p`
-    (#28).
+    (#28) and the junction corner cells whose ring already exists (#113).
 
     The shared derivation behind BOTH writers of _HiddenSubgridIdxs:
     run_blend (which seeds the set with fp's own band on top of this) and
@@ -376,6 +440,14 @@ def _linked_band_cells(fp, p):
                     break
     except ImportError:
         pass
+    # #113: the junction corner cells of every ring that ALREADY exists.
+    # The corner fill used to be the only thing that hid them, so a
+    # junction with its ring built but no corner blend showed a small
+    # subpatch sitting in the hole the owner was about to fill by hand.
+    # It is scanned from the LIVE blends including fp (fp's own seam is
+    # half of every pair it is in), which is why it is a scan of its own
+    # rather than another arm of the sibling loop above.
+    idxs |= _junction_corner_cells(p, fp.tolerance)
     return idxs
 
 

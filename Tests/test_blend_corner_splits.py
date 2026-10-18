@@ -8,6 +8,11 @@ ensure the edge that isolates its 0.1 band — on the correct axis and on
 the seam's own END (0.9 for a seam at parametric 1). Only then does the
 0.1x0.1 corner cell at the central junction exist.
 
+#113 (in the second test): the corner cell is HIDDEN as soon as its ring
+exists, not only when a corner blend is created — so the hole a manual
+fill is about to cover reads as empty. The cell is still excluded from
+every band (#33); what changed is who hides it.
+
 Pre-#82, SilkBlend wrote a split value into a per-axis LIST once per
 patch (whenever the patch had no subgrids at all), regardless of seam
 axis/side, and the second strip on the same patch never added the
@@ -84,15 +89,19 @@ def test_corner_patches_have_both_band_splits(doc):
 
 
 def test_corner_patch_hidden_cells_cover_both_bands(doc):
-    """Both trimmed strip bands are recorded; the corner cell stays visible.
+    """Both trimmed strip bands are recorded, and the junction corner cell
+    is hidden with them (#113).
 
     Cell index = iu * nv + iv (row-major over the 2x2 subgrid).
     With the #33 trim, each band stops at the corner-cell boundary, so the
-    0.1x0.1 corner cell at C is no longer covered by any strip band — it
-    stays visible as the placeholder face for the #28 corner blend.
+    0.1x0.1 corner cell at C is covered by no strip band -- and since #113
+    it is HIDDEN as soon as the ring exists, rather than staying drawn as a
+    placeholder face until a corner blend is created (the owner's "why do I
+    see that subpatch in the hole I am about to fill by hand").
     Patch44 (BL): B12 band (U, ss=1, trimmed) -> cells [2];
                   B31 band (V, ss=1, trimmed) -> cells [1];
-                  union [1, 2], visible cells = 0 and 3 (corner placeholder).
+                  junction corner cell (1,1)   -> cell 3;
+                  union [1, 2, 3], visible cell = 0 (the panel).
     """
     from Tests.corner_model import build_corner_model
 
@@ -102,20 +111,22 @@ def test_corner_patch_hidden_cells_cover_both_bands(doc):
     checks = []
 
     hidden = sorted(p44._HiddenSubgridIdxs)
-    if hidden != [1, 2]:
-        errors.append(f"Patch44 _HiddenSubgridIdxs={hidden}, want [1, 2]")
+    if hidden != [1, 2, 3]:
+        errors.append(f"Patch44 _HiddenSubgridIdxs={hidden}, want [1, 2, 3] "
+                      f"(both bands + the junction corner cell, #113)")
     checks.append(f"Patch44 hidden={hidden}")
 
-    # In subgrid view the patch must show exactly two faces: the outer
-    # panel cell (0) and the corner placeholder cell (3) at C.
+    # In subgrid view the patch must show exactly ONE face: the outer panel
+    # cell (0). The corner cell (3) is hidden as soon as its ring exists.
     p44.ShowSurface = True
     p44.ShowSubgrids = True
     p44.AutoHideBlend = True
     p44.recompute()
     faces = [s for s in p44.Shape.SubShapes if s.ShapeType == "Face"]
-    if len(faces) != 2:
-        errors.append(f"Patch44 subgrid view shows {len(faces)} faces, want 2")
-    checks.append(f"subgrid view faces={len(faces)} (want 2: panel + corner)")
+    if len(faces) != 1:
+        errors.append(f"Patch44 subgrid view shows {len(faces)} faces, want 1 "
+                      f"(the panel cell only -- the corner cell is hidden)")
+    checks.append(f"subgrid view faces={len(faces)} (want 1: panel only)")
 
     return {"pass": not errors, "errors": errors, "checks": checks}
 
