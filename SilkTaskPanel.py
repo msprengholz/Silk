@@ -80,6 +80,15 @@
 #    step's guidance below the accordion and in the tooltips rather than
 #    in a block above it (#62 follow-up).
 #
+#    #95 adds ONE row below the accordion: the two view toggles the
+#    owner asked for by name -- `Hide edges` (every Edge, and through the
+#    Edge's OWN visibility cascade the sketches it claims; a sketch no
+#    Edge claims stays visible) and `Hide grids` (every control grid and
+#    control polygon: Patch / Blend / CornerBlend ShowGrid and an Edge's
+#    ShowPolygon). Two buttons, not one (Q1), and releasing either is the
+#    UNIFORM restore (Q4): everything of that kind comes back visible.
+#    Display only -- nothing in this row touches geometry.
+#
 #    #47's `compute_guide_state` stays the source of truth for the
 #    next-step hint and the seam table; its WorkflowGuide container
 #    (#47/#19's persisting half) and #48's panel are gone.
@@ -203,6 +212,26 @@ def flag_column_width(table):
 # because the read / write / validate helpers all key off it, and the
 # helpers are module level.
 BAND_A, BAND_B = "A", "B"
+
+# ---- the inspection row (#95) ---------------------------------------------
+#
+# Two buttons, NOT one (owner, #95 Q1): "controlgrids are most seldomly
+# needed, and would be off most of the time. edges, however are needed to
+# change the design. so we need two toggles." A checkable button reads
+# pressed = hidden, and releasing it is the UNIFORM restore (Q4):
+# everything of that kind comes back VISIBLE rather than replaying what
+# was visible before -- so nothing here remembers per-object state.
+HIDE_EDGES_TEXT = "Hide edges"
+HIDE_GRIDS_TEXT = "Hide grids"
+HIDE_EDGES_TOOLTIP = (
+    "Hide every Edge, and with it the sketches that Edge claims (an Edge "
+    "mirrors its own visibility onto its Sketches). A sketch no Edge uses "
+    "is NOT touched -- it stays visible. Release the button to show them "
+    "all again.")
+HIDE_GRIDS_TOOLTIP = (
+    "Hide every control grid and control polygon: the Coin node each Silk "
+    "object draws from its Legs -- Patch / Blend / CornerBlend ShowGrid "
+    "and an Edge's ShowPolygon. Release the button to show them all again.")
 
 # Placeholder shown in an empty collection list, so "nothing yet" reads
 # as deliberate rather than as a list that failed to load.
@@ -750,6 +779,29 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self._build_blend_page()
         self._build_corner_page()
 
+        # --- the inspection row (#95): two view toggles ------------------
+        # The panel is where the wizard lives (Q2), so the most-needed
+        # inspection actions live here rather than in the toolbar or a
+        # menu. They act on the DOCUMENT's display, never on geometry: an
+        # Edge's visibility, and each object's own grid toggle.
+        self.inspection_row = QtWidgets.QWidget(self)
+        inspection = QtWidgets.QHBoxLayout(self.inspection_row)
+        inspection.setContentsMargins(0, 0, 0, 0)
+        inspection.setSpacing(4)
+        self.hide_edges_btn = QtWidgets.QPushButton(HIDE_EDGES_TEXT,
+                                                   self.inspection_row)
+        self.hide_edges_btn.setCheckable(True)
+        self.hide_edges_btn.setToolTip(HIDE_EDGES_TOOLTIP)
+        self.hide_edges_btn.toggled.connect(self.set_edges_hidden)
+        self.hide_grids_btn = QtWidgets.QPushButton(HIDE_GRIDS_TEXT,
+                                                   self.inspection_row)
+        self.hide_grids_btn.setCheckable(True)
+        self.hide_grids_btn.setToolTip(HIDE_GRIDS_TOOLTIP)
+        self.hide_grids_btn.toggled.connect(self.set_control_grids_hidden)
+        inspection.addWidget(self.hide_edges_btn)
+        inspection.addWidget(self.hide_grids_btn)
+        form.addWidget(self.inspection_row)
+
         # --- the footer: guidance OUT of the prime top-of-panel space --
         # #62 put the next-step hint in a QGroupBox above the accordion,
         # where it restated the section instruction sitting directly
@@ -1232,6 +1284,75 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         return seam_inventory(self.doc)
 
     # ---- refresh (panel-side only, settled Q16b) -----------------------
+
+    # ---- the inspection toggles (#95) -------------------------------
+
+    def _document_is_live(self):
+        """True while `self.doc` is an open document (the same guard
+        `refresh` uses): a toggle pressed after the document closed must
+        be a no-op, not a ReferenceError."""
+        return (self.doc is not None
+                and self.doc.Name in FreeCAD.listDocuments())
+
+    @staticmethod
+    def _set_visible(obj, visible):
+        """One object's 3D-view visibility. Headless (no ViewObject) is a
+        silent no-op, exactly like the grid path."""
+        vobj = getattr(obj, "ViewObject", None)
+        if vobj is None:
+            return
+        try:
+            vobj.Visibility = bool(visible)
+        except Exception:
+            pass
+
+    def set_edges_hidden(self, hidden):
+        """#95 Q3: hide every Edge -- and the sketches each Edge CLAIMS.
+
+        The cascade is not re-implemented here: hiding an Edge is what
+        `EdgeViewProvider.onChanged("Visibility")` already answers with
+        (#110 `_mirror_sketch_visibility`), so this button is that rule's
+        GLOBAL form and there is exactly one place that decides what an
+        Edge hides. A sketch no Edge claims is never visited -- it is not
+        part of any Edge, so it stays visible (Q3: in the owner's Demo 01
+        model 17 of 33 sketches are unclaimed).
+
+        `hidden=False` is the uniform restore (Q4): every Edge and every
+        claimed sketch goes back to visible.
+        """
+        if not self._document_is_live():
+            return
+        for obj in self.doc.Objects:
+            if getattr(obj, "object_type", None) == "Edge":
+                self._set_visible(obj, not hidden)
+
+    def set_control_grids_hidden(self, hidden):
+        """#95: one toggle for ALL control grids -- the Coin node every
+        Silk object draws from its `Legs` (#108): `ShowGrid` on a Patch /
+        Blend / CornerBlend, `ShowPolygon` on an Edge.
+
+        `hidden=False` is the uniform restore (Q4): every one of them
+        comes back on. Nothing is remembered, so a grid the user had
+        deliberately switched off in the data tab comes back too -- the
+        accepted consequence of Q4.
+        """
+        if not self._document_is_live():
+            return
+        prop_of_type = {"Patch": "ShowGrid", "Patch44": "ShowGrid",
+                        "Blend": "ShowGrid", "BlendStrip": "ShowGrid",
+                        "CornerBlend": "ShowGrid", "Edge": "ShowPolygon"}
+        touched = 0
+        for obj in self.doc.Objects:
+            prop = prop_of_type.get(getattr(obj, "object_type", None))
+            if prop is None or not hasattr(obj, prop):
+                continue
+            setattr(obj, prop, not hidden)
+            touched += 1
+        if touched:
+            # the grid is a Coin node the view provider refreshes from
+            # `updateData`, which a recompute is what delivers -- the same
+            # gesture the data tab's own toggle needs.
+            self.doc.recompute()
 
     def _set_hint(self, text):
         """Render the next-step hint in the footer -- THE one place that
