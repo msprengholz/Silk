@@ -413,10 +413,13 @@ def test_oracle_band_cells_matches_the_pre_63_oracle_on_default_layouts(doc):
 # ---------------------------------------------------------------------------
 
 def test_oracle_reference_rows_identical_to_legacy_on_default_splits(doc):
-    """One level up from the rule: on REAL geometry, the (l_rev, rc) rows
-    SilkChecks._blend_reference_rows derives for B1/B2 are byte-identical
-    to the pre-#63 derivation's, for every default-reachable layout on
-    both patches of the corner pair.
+    """One level up from the rule: on REAL geometry, the (l_rev, rc)
+    POLES of the rows SilkChecks._blend_reference_rows derives for B1/B2
+    are byte-identical to the pre-#63 derivation's, for every
+    default-reachable layout on both patches of the corner pair. (#107
+    added the rows' weights -- (l_rev, l_w, rc, r_w) -- which the legacy
+    copy has no counterpart for, so the comparison stays on the poles,
+    which is what this test has always pinned.)
 
     Exact Vector equality, not a tolerance: the rows are handed to B1/B2
     as reference geometry, so any difference in the selected cell would
@@ -465,8 +468,14 @@ def test_oracle_reference_rows_identical_to_legacy_on_default_splits(doc):
                         errors.append("%s=%s on %s: %d reference rows, want 4"
                                       % (letter, _fmt_pair(pair), target.Name,
                                          len(got)))
-                    for i, ((l_new, r_new), (l_old, r_old)) in enumerate(
+                    for i, (new_row, old_row) in enumerate(
                             zip(got, want)):
+                        # #107: the row gained the cell's WEIGHTS next to its
+                        # poles (l_rev, l_w, rc, r_w); the legacy copy has no
+                        # weights to compare, so this stays the pole/selection
+                        # comparison it always was.
+                        l_new, r_new = new_row[0], new_row[2]
+                        l_old, r_old = old_row
                         if list(l_new) != list(l_old) or \
                                 list(r_new) != list(r_old):
                             errors.append(

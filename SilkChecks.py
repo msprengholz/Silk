@@ -79,6 +79,25 @@ def _dist(a, b):
     return (a - b).Length
 
 
+def _bezier4_point(poles, weights, t):
+    """The rational cubic Bezier through `poles` / `weights` at `t`.
+
+    Bernstein basis in homogeneous coordinates, divided through -- i.e. the
+    curve the 4 (pole, weight) pairs actually describe, which is NOT the
+    curve through the poles alone whenever the weights differ from 1
+    (#107). Used by B1 to compare boundary CURVES, not pole lists.
+    """
+    b = ((1.0 - t) ** 3, 3.0 * t * (1.0 - t) ** 2,
+         3.0 * t * t * (1.0 - t), t ** 3)
+    num = FreeCAD.Vector(0.0, 0.0, 0.0)
+    den = 0.0
+    for i in range(4):
+        w = float(weights[i]) * b[i]
+        num += poles[i] * w
+        den += w
+    return num * (1.0 / den)
+
+
 def _seg_cross(a, b, c, d, tol=1e-7):
     """Do segments ab and cd cross, touch, or overlap? (3D-safe distance test.)"""
     try:
@@ -729,6 +748,49 @@ def _oracle_band_cells(p, etype, ss):
     return [a * nv + b for b in sorted(keep_v)]
 
 
+def _oracle_cell_net(p, idx):
+    """`(flat poles, flat weights)` of subgrid cell `idx` of patch `p`.
+
+    #107: the WEIGHTS come with the poles here. A pole-only reference is
+    what let a blend built with unit weights pass B1 on a rational (arc)
+    patch: the strip's outer boundary curve is a different curve through
+    the same 4 end poles, so the pole comparison stays exact while the
+    geometry is 0.39 mm out at the middle of a 90 deg arc.
+
+    The net is re-derived from the patch's own base surface -- the
+    segmented cell -- through `Proxy.getSubgrid`, which is the patch's raw
+    reader, not the cell cache the blend consumes (`_subgrids` /
+    `_subgrid_weights`, the #107 seam itself). A proxy without `getSubgrid`
+    (the legacy Patch44 shim, a test stub) falls back to that cache, with
+    unit weights when the patch stores none -- the pre-#107 reading, so
+    those objects keep the verdict they always had.
+
+    Returns (None, None) when `idx` is outside the patch's cells.
+    """
+    proxy = getattr(p, "Proxy", None)
+    us = _oracle_intervals(*_oracle_axis(p, "U"))
+    vs = _oracle_intervals(*_oracle_axis(p, "V"))
+    iu, iv = divmod(int(idx), len(vs))
+    getter = getattr(proxy, "getSubgrid", None)
+    if getter is not None and iu < len(us) and iv < len(vs):
+        try:
+            poles2d, weights2d = getter(us[iu][0], us[iu][1],
+                                        vs[iv][0], vs[iv][1])
+            flat_p = [poles2d[r][c] for r in range(4) for c in range(4)]
+            flat_w = [float(weights2d[r][c]) for r in range(4)
+                      for c in range(4)]
+            if len(flat_p) == 16 and len(flat_w) == 16:
+                return flat_p, flat_w
+        except Exception:
+            pass
+    cells = list(getattr(proxy, "_subgrids", None) or [])
+    if not 0 <= idx < len(cells):
+        return None, None
+    stored = list(getattr(proxy, "_subgrid_weights", None) or [])
+    flat_w = list(stored[idx]) if len(stored) == len(cells) else [1.0] * 16
+    return list(cells[idx]), flat_w
+
+
 def _oracle_side_and_end(o, p, tol):
     """`(etype, ss)` -- the boundary side AND the end it names -- of the
     seam blend-shaped `o` takes on patch `p`, or (None, None) when `o`
@@ -813,14 +875,15 @@ def _oracle_seam_identity(o, tol):
 
 
 def _blend_reference_rows(pa, pb, tol=0.01, edge=None):
-    """Independently re-derive the 4 (l_rev, rc) strip-row pairs that drive
-    a blend between two patches.
+    """Independently re-derive the 4 (l_rev, l_w, rc, r_w) strip-row pairs
+    that drive a blend between two patches.
 
     Mirrors SilkBlend's blend run (shared seam detection, edge type,
     strip segmentation, corner-pair row mapping) so the oracle checks the
     stored blend poles against geometry it derived itself. Returns
-    [(l_rev, rc), ...] (4 rows, each a list of 4 Vectors) or None when
-    the patches do not share an edge.
+    [(l_rev, l_w, rc, r_w), ...] (4 rows; each side's poles are a list of 4
+    Vectors and its weights the matching 4 floats, #107) or None when the
+    patches do not share an edge.
 
     edge (#49): optional seam PIN, an Edge object, mirroring
     create_blend's edge= contract -- the seam is then derived from that
@@ -854,12 +917,14 @@ def _blend_reference_rows(pa, pb, tol=0.01, edge=None):
         idxs = band_cells(p, etype, ss)
         if len(idxs) != 1 or not p.Proxy._subgrids:
             return None
-        return list(p.Proxy._subgrids[idxs[0]])
+        return _oracle_cell_net(p, idxs[0])
 
     sga = get_strip(pa, ea, ss_a)
     sgb = get_strip(pb, eb, ss_b)
     if sga is None or sgb is None:
         return None
+    sga_p, sga_w = sga
+    sgb_p, sgb_w = sgb
 
     cmap = _ORACLE_SEAM_CMAP
     # Seam alignment (#30): middle rows follow the corner-pair alignment
@@ -882,15 +947,19 @@ def _blend_reference_rows(pa, pb, tol=0.01, edge=None):
     # #31: strip index 0 sits at param 0 of the strip window, so the shared
     # edge is at index 0 for ss=0 and index 3 for ss=1. Build each row in
     # shared->outer order, then orient: poles_0 outer->shared, poles_1
-    # shared->outer.
+    # shared->outer. #107: the WEIGHTS are read with the same indices as the
+    # poles -- a row is (poles, weights) in both orientations, so
+    # `rows[i][1][k]` is the weight of `rows[i][0][k]`.
     va = range(4) if ss_a == 0 else range(3, -1, -1)   # left:  shared->outer
     vb = range(4) if ss_b == 0 else range(3, -1, -1)   # right: shared->outer
     rows = []
     for li in range(4):
         if ea[0] == "U":  # shared along U -> COLUMNS (const U)
-            l_rev = list(reversed([sga[li * 4 + v] for v in va]))
+            l_idx = [li * 4 + v for v in va]
         else:  # shared along V -> ROWS (const V)
-            l_rev = list(reversed([sga[v * 4 + li] for v in va]))
+            l_idx = [v * 4 + li for v in va]
+        l_rev = list(reversed([sga_p[i] for i in l_idx]))
+        l_rev_w = list(reversed([sga_w[i] for i in l_idx]))
         for lc_idx, rc_idx in pairs:
             rb = cmap[eb].get(rc_idx)
             if rb is not None and li == cmap[ea].get(lc_idx):
@@ -899,10 +968,12 @@ def _blend_reference_rows(pa, pb, tol=0.01, edge=None):
         else:
             ri = li if identity else 3 - li
         if eb[0] == "U":
-            rc = [sgb[ri * 4 + v] for v in vb]
+            r_idx = [ri * 4 + v for v in vb]
         else:
-            rc = [sgb[v * 4 + ri] for v in vb]
-        rows.append((l_rev, rc))
+            r_idx = [v * 4 + ri for v in vb]
+        rc = [sgb_p[i] for i in r_idx]
+        rc_w = [sgb_w[i] for i in r_idx]
+        rows.append((l_rev, l_rev_w, rc, rc_w))
     return rows
 
 
@@ -914,14 +985,23 @@ def _check_blend(blend, pa, pb, reference_poles, edge=None):
     st = getattr(blend, "object_type", None)
     poles = blend.Poles or []
     weights = blend.Weights or []
+    # #107: the weights are no longer asserted to be 1. A strip across a
+    # rational (arc) patch edge carries that edge's weights, which is the
+    # whole point of the fix; what a blend must never carry is a
+    # non-positive or missing weight. The unit-weight path is separately
+    # pinned in the tests (and the demo/legacy fixtures are unit-weight,
+    # so this reads "unit" there).
+    unit_weights = (len(weights) == 24
+                    and all(abs(w - 1.0) < 1e-12 for w in weights))
     ok = (st in ("Blend", "BlendStrip") and len(poles) == 24
-          and len(weights) == 24 and all(abs(w - 1.0) < 1e-12 for w in weights)
+          and len(weights) == 24 and all(w > 1e-12 for w in weights)
           and pa is not None and pb is not None
           and getattr(blend, "Shape", None) is not None
           and not blend.Shape.isNull())
     results.append(("structural", ok,
-                    "type=%s poles=%d weights=%d shape=%s" % (
+                    "type=%s poles=%d weights=%d (%s) shape=%s" % (
                         st, len(poles), len(weights),
+                        "unit" if unit_weights else "rational",
                         "ok" if ok else "bad")))
 
     rows = _blend_reference_rows(pa, pb,
@@ -937,21 +1017,53 @@ def _check_blend(blend, pa, pb, reference_poles, edge=None):
 
     # B1: C0 -- each blend row's outer poles sit on the strip-curve
     # endpoints (row layout: [outer_L, t_L, inner_L, inner_R, t_R, outer_R])
-    b1_dev = 0.0
-    for i, (l_rev, rc) in enumerate(rows):
+    # AND the two outer boundary CURVES coincide with the patch cells'
+    # outer edge curves, weights included (#107).
+    #
+    # The pole comparison alone is structurally blind: the strip's outer
+    # boundary curve is the cubic Bezier through the 4 outer poles WITH
+    # their 4 weights, and the unit-weight curve through the same 4 poles is
+    # a different curve whenever the patch is rational (an arc edge). It
+    # stays exact at the poles -- which is precisely why this check shipped
+    # green on geometry that is 0.39 mm out at the middle of a 90 deg arc,
+    # R=10. Forgotten weights are the #67 trap in a new place, so the
+    # comparison is now on the evaluated curve.
+    b1_pole_dev = 0.0
+    b1_weight_dev = 0.0
+    b1_curve_dev = 0.0
+    _ts = [i / 32.0 for i in range(33)]
+    for i, (l_rev, l_w, rc, r_w) in enumerate(rows):
         row = poles[i * 6:i * 6 + 6]
-        b1_dev = max(b1_dev, (row[0] - l_rev[0]).Length,
-                     (row[5] - rc[3]).Length)
-    results.append(("B1_c0_seams", b1_dev <= TOL,
-                    "max endpoint deviation %.3e" % b1_dev))
+        row_w = weights[i * 6:i * 6 + 6]
+        b1_pole_dev = max(b1_pole_dev, (row[0] - l_rev[0]).Length,
+                          (row[5] - rc[3]).Length)
+        b1_weight_dev = max(b1_weight_dev, abs(row_w[0] - l_w[0]),
+                            abs(row_w[5] - r_w[3]))
+    # the two boundary curves: the 4 rows' outer poles/weights (the blend's
+    # own outer rows) against the reference cells' outer edge curves, both
+    # cubic Beziers over the same 4 seam stations, sampled point-for-point.
+    for ref_p, ref_w, own in (
+            ([r[0][0] for r in rows], [r[1][0] for r in rows], 0),
+            ([r[2][3] for r in rows], [r[3][3] for r in rows], 5)):
+        own_p = [poles[i * 6 + own] for i in range(4)]
+        own_w = [weights[i * 6 + own] for i in range(4)]
+        for t in _ts:
+            b1_curve_dev = max(b1_curve_dev,
+                               (_bezier4_point(own_p, own_w, t)
+                                - _bezier4_point(ref_p, ref_w, t)).Length)
+    results.append(("B1_c0_seams",
+                    b1_pole_dev <= TOL and b1_curve_dev <= TOL,
+                    "max boundary-curve deviation %.3e mm (outer poles "
+                    "%.3e, boundary weights %.3e)"
+                    % (b1_curve_dev, b1_pole_dev, b1_weight_dev)))
 
     # B2: C1 construction -- the tangent poles must match the reference
     # blend of the independently derived strip rows
     import ArachNURBS as AN
     b2_dev = 0.0
-    for i, (l_rev, rc) in enumerate(rows):
+    for i, (l_rev, l_w, rc, r_w) in enumerate(rows):
         ref_row = AN.blend_poly_2x4_1x6(
-            l_rev, [1.0] * 4, rc, [1.0] * 4,
+            l_rev, l_w, rc, r_w,
             BLEND_TANGENT_SCALE, BLEND_TANGENT_SCALE,
             BLEND_TANGENT_SCALE, BLEND_TANGENT_SCALE)[0]
         row = poles[i * 6:i * 6 + 6]
