@@ -21,6 +21,16 @@ quality):
 
 A failing pin means the maths changed -- update the pin AND
 `docs/research/silk-g2-feasibility.md`.
+
+WHY THE SAMPLE COUNTS STAY (#116).  `N_FINAL = 401`, `measure_against`'s
+`n=41` and the solve's `n_st=9` / `n_iter=3` are not knobs: every pinned
+number below IS the reading taken at those counts, so a smaller `n`
+re-pins a WEAKER measurement rather than the same one -- the calibration
+record would no longer be the one #100/#106 published.  The measured cost
+of the four tests is 49 s (`test_port_calibrates_on_synthetic_compatible_ring`
+-- the first of the four to run -- pays the whole `_analysis()`; the
+module-level `_CACHE` makes the other three free).  That is the price of
+the record, and it is paid once per run.
 """
 
 import os
