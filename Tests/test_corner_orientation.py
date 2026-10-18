@@ -160,11 +160,16 @@ def test_owner_model_three_valent_rings_build(doc):
 
 # ---- 2. the minimal reproduction: one face's cycle rotated ----------------
 
-def _build_fixture(doc, source, rotate=(), swap=()):
+def _build_fixture(doc, source):
     """Build the documented fixture into `doc` from an already-open
-    `source` (the sketch-only fixture), with `rotate` patch names whose edge
-    cycle is rotated one edge and `swap` blend names whose PatchA/PatchB
-    order is reversed.  Returns (patches, blends)."""
+    `source` (the sketch-only fixture): 12 Edges, 5 Patches and 8 Blends in
+    the documented order, NO corners.  Returns (edges, patches, blends).
+
+    #116: the two sweeps build this ONCE and then move the one parameter
+    they vary, in place.  Building it again per iteration cost ~25 s an
+    iteration (20 objects, each with a full-document recompute) for a
+    model whose every other object is byte-identical to the baseline.
+    """
     FreeCAD.setActiveDocument(doc.Name)
     for name in MODEL.used_sketch_names():
         MODEL._copy_sketch(doc, source, name)
@@ -175,16 +180,59 @@ def _build_fixture(doc, source, rotate=(), swap=()):
             [doc.getObject(s) for s in sketches], name=name)
     patches = {}
     for name, order, _grid in MODEL.PATCHES:
-        order = list(order)
-        if name in rotate:
-            order = order[1:] + order[:1]
         patches[name] = OPS.create_patch([edges[k] for k in order],
                                          name=name)
     blends = {}
     for name, pa, pb, _edge in MODEL.BLENDS:
-        a, b = (pb, pa) if name in swap else (pa, pb)
-        blends[name] = OPS.create_blend(patches[a], patches[b], name=name)
-    return patches, blends
+        blends[name] = OPS.create_blend(patches[pa], patches[pb], name=name)
+    return edges, patches, blends
+
+
+# The documented click order per patch, so a sweep can put the cycle back.
+_PATCH_ORDER = {name: tuple(order) for name, order, _grid in MODEL.PATCHES}
+
+
+def _set_cycle(doc, patch, order):
+    """Write `order` (edge objects, in order) onto `patch.Edges` and settle
+    it.
+
+    `Edges` is a link list, not one of the recompute-trigger properties
+    (onChanged watches the split lists and the display toggles), so the
+    write needs the explicit touch a data-tab edit needs (#67).  The fill
+    re-derives from the stored list on that recompute, so this is the same
+    patch `create_patch([...that order])` builds -- `patch.Edges[k]` is
+    boundary side k either way (#66/#67).
+    """
+    patch.Edges = list(order)
+    patch.touch()
+    doc.recompute()
+
+
+def _swap_pair(doc, blend):
+    """Hand `blend` its two patches in the other order.
+
+    `run_blend` reads `PatchA`/`PatchB` and re-derives the seam from them
+    on every execute, so this is the strip `create_blend(pb, pa)` builds --
+    reversed columns, same seam.  The write itself recomputes the strip
+    (onChanged watches `Patch*`); the explicit recompute settles the rest
+    of the chain.
+    """
+    a, b = blend.PatchA, blend.PatchB
+    blend.PatchA = b
+    blend.PatchB = a
+    doc.recompute()
+
+
+def _strip_corners(doc):
+    """Drop every CornerBlend in `doc`.
+
+    Each iteration must fill a junction that has NO corner yet: a second
+    ask for a junction that already has one is an idempotent no-op, so a
+    leftover corner would make the next iteration assert nothing.
+    """
+    for obj in [o for o in doc.Objects
+                if getattr(o, "object_type", "") == "CornerBlend"]:
+        doc.removeObject(obj.Name)
 
 
 # Which patches a ring's seams belong to, from the documented tables (no
@@ -208,9 +256,7 @@ def _corners_touched(rotate=(), swap=()):
     swapped pair order only reverses that strip, so a junction whose ring
     touches NEITHER is built from byte-identical inputs and cannot change
     -- filling it again would re-assert the unmutated baseline, not the
-    mutation.  Each case fills exactly the junctions it moves: 24 builds
-    instead of the 52 the two sweeps used to run (~21 s per case, mostly
-    the full-fixture build plus a full-document recompute per corner).
+    mutation.  Each case fills exactly the junctions it moves.
     """
     out = []
     for name, ring, point in MODEL.CORNERS:
@@ -237,30 +283,39 @@ def test_rotated_patch_cycle_still_fills_every_junction(doc):
     build produced.  Before #107 that made the two affected junctions refuse
     with "twisted input" (`li_map` compared raw); now every junction the
     rotated face touches fills, and the fill is the same one the documented
-    order gives."""
+    order gives.
+
+    #116: ONE fixture build for the whole sweep.  Each iteration rotates
+    one face's stored cycle in place -- the data-tab path, an `Edges` write
+    plus a touch, from which the fill re-derives -- and puts it back
+    afterwards.  Nothing else in the model differs from the baseline.
+    """
     errors, checks, report = [], [], []
     source, opened_dir = MODEL.open_fresh(MODEL.FIXTURE_PATH)
+    sub = FreeCAD.newDocument("_rotate_sweep")
     try:
+        FreeCAD.setActiveDocument(sub.Name)
+        edges, patches, blends = _build_fixture(sub, source)
         for rotated in ("P_Right", "P_Top", "P_Front", "P_Bottom",
                         "P_Back"):
-            sub = FreeCAD.newDocument("_rot_%s" % rotated)
-            try:
-                patches, blends = _build_fixture(sub, source,
-                                                 rotate=(rotated,))
-                touched = _corners_touched(rotate=(rotated,))
-                errs, _chks = _assert_junctions_build(sub, blends, touched)
-                errors.extend("%s rotated: %s" % (rotated, e) for e in errs)
-                if not errs:
-                    checks.append("cycle of %s rotated one edge: all %d "
-                                  "junctions it touches fill (36 poles, "
-                                  "valid, oracle-green)"
-                                  % (rotated, len(touched)))
-                    report.append("rotated %s -> %d/%d corners"
-                                  % (rotated, len(touched), len(touched)))
-            finally:
-                FreeCAD.closeDocument(sub.Name)
-                FreeCAD.setActiveDocument(doc.Name)
+            order = _PATCH_ORDER[rotated]
+            _set_cycle(sub, patches[rotated],
+                       [edges[k] for k in order[1:] + order[:1]])
+            touched = _corners_touched(rotate=(rotated,))
+            errs, _chks = _assert_junctions_build(sub, blends, touched)
+            errors.extend("%s rotated: %s" % (rotated, e) for e in errs)
+            if not errs:
+                checks.append("cycle of %s rotated one edge: all %d "
+                              "junctions it touches fill (36 poles, "
+                              "valid, oracle-green)"
+                              % (rotated, len(touched)))
+                report.append("rotated %s -> %d/%d corners"
+                              % (rotated, len(touched), len(touched)))
+            _strip_corners(sub)
+            _set_cycle(sub, patches[rotated], [edges[k] for k in order])
     finally:
+        FreeCAD.closeDocument(sub.Name)
+        FreeCAD.setActiveDocument(doc.Name)
         MODEL.close_fresh(source, opened_dir)
     _report(report)
     return {"pass": not errors, "errors": errors, "checks": checks}
@@ -271,28 +326,35 @@ def test_swapped_blend_direction_still_fills_every_junction(doc):
     strip's column orientation (PatchA's outer sits at column 0).  Before
     #107 a ring whose blends did not run as a directed cycle could not
     assemble ("could not build triangular 4th member"); now every junction
-    the reversed strip belongs to fills."""
+    the reversed strip belongs to fills.
+
+    #116: ONE fixture build for the whole sweep.  Each iteration hands one
+    strip its two patches in the other order (the toolbar's selection
+    order, reversed) and puts it back afterwards.  Nothing else in the
+    model differs from the baseline.
+    """
     errors, checks, report = [], [], []
     source, opened_dir = MODEL.open_fresh(MODEL.FIXTURE_PATH)
+    sub = FreeCAD.newDocument("_swap_sweep")
     try:
+        FreeCAD.setActiveDocument(sub.Name)
+        _edges, _patches, blends = _build_fixture(sub, source)
         for swapped, _pa, _pb, _e in MODEL.BLENDS:
-            sub = FreeCAD.newDocument("_swap_%s" % swapped)
-            try:
-                patches, blends = _build_fixture(sub, source,
-                                                 swap=(swapped,))
-                touched = _corners_touched(swap=(swapped,))
-                errs, _chks = _assert_junctions_build(sub, blends, touched)
-                errors.extend("%s swapped: %s" % (swapped, e) for e in errs)
-                if not errs:
-                    checks.append("blend %s reversed: all %d junctions it "
-                                  "belongs to fill (36 poles, valid, "
-                                  "oracle-green)" % (swapped, len(touched)))
-                    report.append("swapped %s -> %d corners"
-                                  % (swapped, len(touched)))
-            finally:
-                FreeCAD.closeDocument(sub.Name)
-                FreeCAD.setActiveDocument(doc.Name)
+            _swap_pair(sub, blends[swapped])
+            touched = _corners_touched(swap=(swapped,))
+            errs, _chks = _assert_junctions_build(sub, blends, touched)
+            errors.extend("%s swapped: %s" % (swapped, e) for e in errs)
+            if not errs:
+                checks.append("blend %s reversed: all %d junctions it "
+                              "belongs to fill (36 poles, valid, "
+                              "oracle-green)" % (swapped, len(touched)))
+                report.append("swapped %s -> %d corners"
+                              % (swapped, len(touched)))
+            _strip_corners(sub)
+            _swap_pair(sub, blends[swapped])
     finally:
+        FreeCAD.closeDocument(sub.Name)
+        FreeCAD.setActiveDocument(doc.Name)
         MODEL.close_fresh(source, opened_dir)
     _report(report)
     return {"pass": not errors, "errors": errors, "checks": checks}
