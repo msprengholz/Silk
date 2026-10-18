@@ -136,20 +136,22 @@ def demo_sketch_names(demo):
                   key=lambda s: int(s[6:]))
 
 
-def copy_external_geometry(src, dst, copied):
+def copy_external_geometry(src, dst, destinations):
     """Re-attach `dst` to the same external geometry `src` sits on.
 
-    `ExternalGeometry` is read-only from Python in FreeCAD 1.1, so the link
-    is re-made with `addExternal`, one call per sub-element.  `addExternal`
-    APPENDS, so the external indices come out in the demo's order: external
-    edge `i` is `GeoEnum::RefExt - i` = -3, -4, -5, ... -- exactly the
-    indices the demo's own constraints address.  Returns how many links were
-    added.
+    `destinations` maps a demo sketch's name to its copy in the fixture, so
+    the links point at the copies and not at the demo's objects.
+    `ExternalGeometry` is read-only from Python in FreeCAD 1.1, so each link
+    is re-made with `addExternal`, one call per sub-element; `addExternal`
+    APPENDS, so the external indices come out in the demo's order --
+    external edge `i` is `GeoEnum::RefExt - i` = -3, -4, -5, ... -- exactly
+    the indices the demo's own constraints address.  Returns how many links
+    were added.
     """
     added = 0
     for obj, subs in src.ExternalGeometry:
         for sub in subs:
-            dst.addExternal(copied[obj.Name].Name, sub)
+            dst.addExternal(destinations[obj.Name].Name, sub)
             added += 1
     return added
 
@@ -177,7 +179,6 @@ def copy_constraints(src, dst):
                "\n  ".join(failures)))
 
 
-
 def build_fixture(verbose=True):
     """Write the fixture.  Returns (sketch names, geometry digest)."""
     demo = FreeCAD.openDocument(DEMO01_PATH)
@@ -188,7 +189,7 @@ def build_fixture(verbose=True):
                                % len(names))
         doc = FreeCAD.newDocument(FIXTURE_NAME)
         try:
-            copied = {}
+            destinations = {}
             for nm in names:
                 src = demo.getObject(nm)
                 dst = doc.addObject("Sketcher::SketchObject", nm)
@@ -196,7 +197,7 @@ def build_fixture(verbose=True):
                 dst.Placement = src.Placement
                 for g in src.Geometry:
                     dst.addGeometry(g, False)
-                copied[nm] = dst
+                destinations[nm] = dst
                 try:
                     dst.ViewObject.Visibility = True
                 except Exception:
@@ -210,11 +211,12 @@ def build_fixture(verbose=True):
             external = 0
             for nm in names:
                 external += copy_external_geometry(demo.getObject(nm),
-                                                   copied[nm], copied)
+                                                   destinations[nm],
+                                                   destinations)
             constraints = 0
             for nm in names:
-                copy_constraints(demo.getObject(nm), copied[nm])
-                constraints += len(copied[nm].Constraints)
+                copy_constraints(demo.getObject(nm), destinations[nm])
+                constraints += len(destinations[nm].Constraints)
             for src_name, half_name in HALF_RIBS:
                 add_half_rib(doc, demo.getObject(src_name), half_name)
             doc.recompute()
@@ -223,7 +225,7 @@ def build_fixture(verbose=True):
             # construction must say so here (#108).
             for nm in names:
                 want = len(demo.getObject(nm).Constraints)
-                got = len(copied[nm].Constraints)
+                got = len(destinations[nm].Constraints)
                 if want != got:
                     raise RuntimeError("%s: copied %d of the demo's %d "
                                        "constraints" % (nm, got, want))

@@ -209,9 +209,14 @@ refusal texts are pinned in `Tests/test_demo01_rebuild.py`.
   (tree clutter, edge claims, panel content) without rebuilding geometry.
 - **Agents / automated checks**: `Tests/test_example_documents.py` opens
   every example and asserts the fixture invariant — **zero Silk objects**
-  and the **documented sketch set present**. These files are binary so
-  they cannot be diffed; the sketch names + this README are the
-  human- and agent-readable intent.
+  and the **documented sketch set present** — and for
+  `SketchOnly_Demo01Subset.FCStd` it also reads the demo's own
+  `Document.xml` and asserts each demo sketch carries the **demo's own
+  constraints, per type**, and the **same external geometry** (#108: a
+  fixture that copies a sketch's geometry but drops its construction is
+  still pole-identical, so nothing at the pole level can see it).  These
+  files are binary so they cannot be diffed; the sketch names + this
+  README are the human- and agent-readable intent.
 
 The `SketchOnly_*` **companion** files with `_withEdges` / `_withPatches`
 suffixes at the top level of `Resources/Test_files/` are the *built*
