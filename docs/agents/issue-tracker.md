@@ -12,7 +12,12 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
 
-Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+**Always pass `-R msprengholz/Silk`.** Do **not** let `gh` infer the repo: this
+clone's `origin` is a fork, and in a fork `gh` resolves the **base/parent** repo
+(`edwardvmills/Silk`), so a bare `gh issue list` returns *upstream's* issues while
+writing there too. Every command above is meant as `gh <verb> ... -R msprengholz/Silk`.
+Verified 2026-10-18: `gh repo view --json nameWithOwner` → `edwardvmills/Silk`;
+`gh issue list` → upstream #42/#39/#22, while the fork's issues run to #119.
 
 ## Pull requests as a triage surface
 
