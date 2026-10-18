@@ -360,9 +360,24 @@ def test_demo01_fixture_rebuild_reaches_the_demo_topology(doc):
     5 Patches -> 8 Blends -> 4 CornerBlends, every object oracle-green (the
     one inherited E2 deviation aside), every Edge pole-identical to the
     demo's stored curve and every Patch's net the demo's stored
-    `ControlGrid44_4_*` net up to a named square symmetry."""
+    `ControlGrid44_4_*` net up to a named square symmetry.
+
+    #116: the build is the SHARED documented build
+    (`MODEL.borrow_documented_build`), so this test rebuilds nothing -- the
+    click-through test and the demo-order test's reference measure the same
+    objects, and the harness closes the shared document when the run ends.
+    Read-only: every assertion below only reads them.
+    """
+    shared_doc, result = MODEL.borrow_documented_build()
+    try:
+        FreeCAD.setActiveDocument(shared_doc.Name)
+        return _fixture_rebuild_outcome(result)
+    finally:
+        FreeCAD.setActiveDocument(doc.Name)
+
+
+def _fixture_rebuild_outcome(result):
     errors, checks, report = [], [], []
-    result = MODEL.build(doc)
     errors.extend(result["problems"])
 
     counts = (len(result["edges"]), len(result["patches"]),
@@ -557,14 +572,13 @@ def test_demo01_demo_order_patches_fill_their_corners(doc):
     # ...and they are the SAME fill the documented order produced: the
     # corner no longer depends on the click order (#107).  The reference
     # runs in its own document -- the same `doc` already holds this build.
-    ref_doc = FreeCAD.newDocument("_demo01_doc_order_ref")
-    try:
-        doc_order = MODEL.build(ref_doc)
-        ref_poles = {n: list(c.Poles)
-                     for n, c in doc_order.get("corners", {}).items()}
-    finally:
-        FreeCAD.closeDocument(ref_doc.Name)
-        FreeCAD.setActiveDocument(doc.Name)
+    # the documented build the comparison needs is the SHARED one (#116):
+    # the same objects `test_demo01_fixture_rebuild...` measures, built once
+    # per run instead of once per test.
+    ref_doc, doc_order = MODEL.borrow_documented_build()
+    FreeCAD.setActiveDocument(doc.Name)
+    ref_poles = {n: list(c.Poles)
+                 for n, c in doc_order.get("corners", {}).items()}
     for name, _ring, _pt in MODEL.CORNERS:
         a = result.get("corners", {}).get(name)
         b = ref_poles.get(name)

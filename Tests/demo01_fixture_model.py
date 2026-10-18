@@ -277,6 +277,39 @@ def _copy_sketch(target_doc, source_doc, name):
     return dst
 
 
+# ---- one read-only build shared by the tests that only measure it -------
+#
+# Three tests measure the SAME documented build (#116): the click-through
+# (`test_demo01_fixture_clickthrough`), the fixture rebuild
+# (`test_demo01_rebuild`) and the demo-order test's reference fill.  A build
+# is 12 Edges -> 5 Patches -> 8 Blends -> 4 CornerBlends with a full-document
+# recompute per object (~25 s, measured), and none of the three writes to the
+# result, so they share ONE build in a module-owned document instead of
+# building it four times.
+#
+# The document lives for the RUN and the harness closes it: `run_tests` closes
+# every document the run created when it owns the documents (#116), so no
+# matter which of the three runs -- or whether a filter runs only one -- the
+# build is gone when the run ends.  A test that MUTATES the build must not use
+# this: there is nothing here to protect it.
+_DOCUMENTED = {"doc": None, "result": None}
+
+
+def borrow_documented_build():
+    """(doc, result) of the documented build, built once per run.
+
+    The document that was active on entry is active again on return.
+    """
+    rec = _DOCUMENTED
+    if rec["doc"] is None:
+        previous = FreeCAD.ActiveDocument
+        doc = FreeCAD.newDocument("_demo01_shared_documented")
+        rec["doc"] = doc
+        rec["result"] = build(doc)
+        FreeCAD.setActiveDocument(previous.Name if previous else doc.Name)
+    return rec["doc"], rec["result"]
+
+
 def _failed(results):
     return [(n, d) for (n, ok, d) in results if not ok]
 

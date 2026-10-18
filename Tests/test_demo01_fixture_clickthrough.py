@@ -46,16 +46,25 @@ def test_demo01_clickthrough_builds_the_documented_model(doc):
     """The documented click order, end to end, through the ops layer: the
     built model AND the corners it reaches.
 
-    One build carries both halves.  `MODEL.build` is this module's entire cost
-    (measured ~19 s: 12 Edges -> 5 Patches -> 8 Blends -> 4 CornerBlends, a
-    full-document recompute per created object), and the two halves assert
-    complementary contracts on exactly that one build, so building it twice
-    bought nothing but wall clock.  Every assertion the former
-    `test_demo01_clickthrough_corners_fill_their_junctions` carried is below,
-    unchanged.
+    One build carries both halves, and three tests carry one build (#116):
+    this one, `test_demo01_rebuild`'s fixture rebuild and that module's
+    demo-order reference all measure the SAME documented build, so they
+    borrow it (a full-document recompute per created object, ~25 s) rather
+    than building it four times.  The harness closes it when the run ends.
+    Every assertion the former
+    `test_demo01_clickthrough_corners_fill_their_junctions` carried is
+    below, unchanged.
     """
+    shared_doc, result = MODEL.borrow_documented_build()
+    try:
+        FreeCAD.setActiveDocument(shared_doc.Name)
+        return _documented_build_outcome(shared_doc, result)
+    finally:
+        FreeCAD.setActiveDocument(doc.Name)
+
+
+def _documented_build_outcome(shared_doc, result):
     errors, checks, report = [], [], []
-    result = MODEL.build(doc)
     errors.extend(result["problems"])
 
     counts = (len(result["edges"]), len(result["patches"]),
@@ -143,7 +152,8 @@ def test_demo01_clickthrough_builds_the_documented_model(doc):
     _report(report)
 
     # ---- the second half: the four 3-valent corners of the SAME build
-    corner_errors, corner_checks, corner_report = _assert_corners(result, doc)
+    corner_errors, corner_checks, corner_report = _assert_corners(
+        result, shared_doc)
     errors.extend(corner_errors)
     checks.extend(corner_checks)
     _report(corner_report)

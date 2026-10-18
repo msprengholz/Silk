@@ -111,6 +111,13 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
     results = []
     open_docs = []
     timings = []
+    # #116: a test may deliberately keep a document ALIVE across tests (a
+    # build several read-only tests share instead of rebuilding), so when
+    # the harness owns the documents it closes every document the RUN
+    # created, not only each test's own. Nothing a test builds survives the
+    # run either way; a run that ends with a scratch document open is the
+    # defect this closes.
+    _docs_before = set(FreeCAD.listDocuments()) if close_docs else set()
     saved = _patch_dialogs()
     func = doc = outcome = None
     try:
@@ -168,6 +175,14 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
             outcome = None
             test_funcs = ()
             del saved, func, doc, outcome, test_funcs
+
+    if close_docs:
+        for _name in sorted(set(FreeCAD.listDocuments()) - _docs_before):
+            try:
+                FreeCAD.closeDocument(_name)
+            except Exception:
+                pass
+        _docs_before = set()
 
     passed = sum(1 for r in results if r.get("pass"))
     failed = len(results) - passed
