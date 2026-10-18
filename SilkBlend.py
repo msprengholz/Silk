@@ -451,6 +451,25 @@ def _linked_band_cells(fp, p):
     return idxs
 
 
+def _cell_weights(p, idx):
+    """The flat 16 weights of subgrid cell `idx` of patch `p`, in the same
+    order as `_subgrids`' poles (#107).
+
+    `build_subgrids` stores them next to the poles; the fallback is UNIT,
+    which is what the pre-#107 code always used and therefore the honest
+    reading for a cell that carries no weights -- the legacy Patch44 shim,
+    and any patch whose proxy predates the attribute (there is no
+    migration: a patch recomputes its cells on the next execute, which is
+    where the weights come from).
+    """
+    cells = list(getattr(getattr(p, "Proxy", None), "_subgrids", None) or [])
+    stored = list(getattr(getattr(p, "Proxy", None), "_subgrid_weights",
+                          None) or [])
+    if len(stored) != len(cells) or not 0 <= idx < len(cells):
+        return [1.0] * 16
+    return list(stored[idx])
+
+
 def run_blend(fp):
     """Build the 2-patch blend strip on fp (shared by Blend and
     BlendStrip). Silent return leaves the object untouched (missing /
@@ -538,8 +557,8 @@ def run_blend(fp):
     # junction is not part of the band (reserved for the corner blend
     # op, #28).
     def get_strip(p, ea, ss):
-        """Extract the band cell's flat 16-pole array poles[U][V] = flat[U*4+V]
-        from the patch's pre-computed subgrids.
+        """Extract the band cell as `(flat 16 poles, flat 16 weights)`,
+        with poles[U][V] = flat[U*4+V] (FreeCAD convention).
 
         #61: the refusal stays, but it now says WHAT is wrong and what
         would fix it — the patch, the seam, both axis split lists, how
@@ -547,6 +566,13 @@ def run_blend(fp):
         split value that would leave a one-cell band. The old text named
         the cell count and nothing else, so the only way to act on it was
         to go and re-derive the whole split layout by hand.
+
+        #107: the WEIGHTS come out with the poles. A rational patch (an
+        arc edge) has a rational cell, and `blend_poly_2x4_1x6` takes
+        weights -- feeding it `[1.0]*4` drew a different curve through the
+        same 4 end poles, so the strip met the patch exactly at the poles
+        and up to 0.39 mm off in between (90 deg arc, R=10). The fallback
+        for a cell with no stored weights is unit (`_cell_weights`).
         """
         idxs = band_cells(p, ea, ss)
         if len(idxs) != 1:
@@ -563,12 +589,14 @@ def run_blend(fp):
                 "seam %s band needs at least the edge that isolates it.\n"
                 % (p.Name, *split_pair(p, "U"), *split_pair(p, "V"), ea))
             return None
-        return list(p.Proxy._subgrids[idxs[0]])
+        return (list(p.Proxy._subgrids[idxs[0]]), _cell_weights(p, idxs[0]))
 
     sga = get_strip(pa, ea, ss_a)
     sgb = get_strip(pb, eb, ss_b)
     if sga is None or sgb is None:
         return
+    sga_p, sga_w = sga
+    sgb_p, sgb_w = sgb
 
     # Auto-hide: re-derive the FULL hidden set for each patch from ALL
     # blend bands on it, using the current splits. Cell indices shift
@@ -611,11 +639,15 @@ def run_blend(fp):
     va = range(4) if ss_a == 0 else range(3, -1, -1)   # left:  shared→outer
     vb = range(4) if ss_b == 0 else range(3, -1, -1)   # right: shared→outer
     for li in range(4):
-        # Left strip: shared edge → outward, then reverse for outer→shared
+        # Left strip: shared edge → outward, then reverse for outer→shared.
+        # #107: the weights are read with the SAME indices as the poles, so
+        # l_rev_w[k] is the weight of l_rev[k].
         if ea[0] == "U":  # shared along U → take COLUMNS
-            l_rev = list(reversed([sga[li * 4 + v] for v in va]))
+            l_idx = [li * 4 + v for v in va]
         else:  # shared along V → take ROWS
-            l_rev = list(reversed([sga[v * 4 + li] for v in va]))
+            l_idx = [v * 4 + li for v in va]
+        l_rev = list(reversed([sga_p[i] for i in l_idx]))
+        l_rev_w = list(reversed([sga_w[i] for i in l_idx]))
 
         # Map left param index to right param index: corner pairs fix
         # the seam ends, the inferred alignment governs the middle.
@@ -629,11 +661,13 @@ def run_blend(fp):
 
         # Right strip: shared edge → outward (keep shared→outer direction)
         if eb[0] == "U":  # shared along U → take COLUMNS
-            rc = [sgb[ri * 4 + v] for v in vb]
+            r_idx = [ri * 4 + v for v in vb]
         else:  # shared along V → take ROWS
-            rc = [sgb[v * 4 + ri] for v in vb]
+            r_idx = [v * 4 + ri for v in vb]
+        rc = [sgb_p[i] for i in r_idx]
+        rc_w = [sgb_w[i] for i in r_idx]
 
-        res = AN.blend_poly_2x4_1x6(l_rev, [1.0] * 4, rc, [1.0] * 4,
+        res = AN.blend_poly_2x4_1x6(l_rev, l_rev_w, rc, rc_w,
                                     2.0, 2.0, 2.0, 2.0)
         blend_poles.append(res[0])
         blend_weights.append(res[1])

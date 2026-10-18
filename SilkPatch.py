@@ -158,6 +158,7 @@ class Patch:
         obj.setEditorMode("internalName", 1)
         obj.Proxy = self
         self._subgrids = []
+        self._subgrid_weights = []      # #107: one flat 16-weight net per cell
         self._subsurfaces = []
         self._sub_legs = []
         self._base_surface = None
@@ -765,7 +766,8 @@ class Patch:
             # Fills are picked from the edge count (#37 quad, #38
             # pointed); other counts leave the object empty/valid.
             fp.Poles = []; fp.Weights = []; fp.Legs = []
-            self._subgrids = []; self._subsurfaces = []; self._base_surface = None
+            self._subgrids = []; self._subgrid_weights = []
+            self._subsurfaces = []; self._base_surface = None
             self._sub_legs = []
             build_display(fp, Part.Shape(), [], [], [], False)
             return
@@ -809,7 +811,8 @@ class Patch:
         if filled is None:
             # degenerate / non-connecting loop: leave the object empty/valid
             fp.Poles = []; fp.Weights = []; fp.Legs = []
-            self._subgrids = []; self._subsurfaces = []; self._base_surface = None
+            self._subgrids = []; self._subgrid_weights = []
+            self._subsurfaces = []; self._base_surface = None
             self._sub_legs = []
             fp.Shape = Part.Shape()
             return
@@ -839,8 +842,8 @@ class Patch:
         u_pair = split_pair(fp, "U")
         v_pair = split_pair(fp, "V")
         has_subgrids = bool(axis_splits(*u_pair) or axis_splits(*v_pair))
-        self._subgrids, self._subsurfaces, sub_legs = build_subgrids(
-            surf, u_pair, v_pair)
+        self._subgrids, self._subgrid_weights, self._subsurfaces, sub_legs = \
+            build_subgrids(surf, u_pair, v_pair)
         self._sub_legs = sub_legs   # cached for _rebuild_display (#59)
         if has_subgrids:
             fp.Legs = sub_legs

@@ -391,34 +391,47 @@ def build_subgrids(base_surface, u_pair, v_pair):
 
     `u_pair` / `v_pair` are `(Split1, Split2)` — see `split_pair`.
 
-    Returns (subgrids, subsurfaces, sub_legs):
-      - subgrids:    flat 16-pole arrays, one per cell;
-                     poles[U][V] == flat[U*4 + V] (FreeCAD convention).
-      - subsurfaces: the trimmed sub-shapes (only truthy shapes).
-      - sub_legs:    detailed grid lines for the subdivided view.
-    With no edges on either axis returns ([], [], []).
+    Returns (subgrids, subgrid_weights, subsurfaces, sub_legs):
+      - subgrids:        flat 16-pole arrays, one per cell;
+                         poles[U][V] == flat[U*4 + V] (FreeCAD convention).
+      - subgrid_weights: the matching flat 16-weight arrays (#107). The
+                         cell is a RATIONAL net whenever the patch is:
+                         an arc edge makes the base surface rational, so
+                         a pole-only cell is not the cell — the unit-weight
+                         cubic through the same 4 poles is a different
+                         curve (0.39 mm out at the middle of a 90 deg arc,
+                         R=10), which is exactly what a blend fed `[1.0]*4`
+                         drew. Same shape and order as `subgrids`.
+      - subsurfaces:     the trimmed sub-shapes (only truthy shapes).
+      - sub_legs:        detailed grid lines for the subdivided view.
+    With no edges on either axis returns ([], [], [], []).
     """
     subgrids = []
+    subgrid_weights = []
     subsurfaces = []
     sub_legs = []
     if not (axis_splits(*u_pair) or axis_splits(*v_pair)):
-        return subgrids, subsurfaces, sub_legs
+        return subgrids, subgrid_weights, subsurfaces, sub_legs
     shapes = []
     for u0, u1 in build_intervals(*u_pair):
         for v0, v1 in build_intervals(*v_pair):
             seg = base_surface.copy()
             seg.segment(u0, u1, v0, v1)
             seg_poles = seg.getPoles()
+            seg_weights = seg.getWeights()
             flat = []
+            flat_weights = []
             for r in range(4):
                 for c in range(4):
                     flat.append(seg_poles[r][c])
+                    flat_weights.append(float(seg_weights[r][c]))
             subgrids.append(flat)
+            subgrid_weights.append(flat_weights)
             sub_shape = seg.toShape()
             if sub_shape:
                 shapes.append(sub_shape)
             sub_legs.extend(AN.drawGrid(flat, 4))
-    return subgrids, shapes, sub_legs
+    return subgrids, subgrid_weights, shapes, sub_legs
 
 
 # ---- blend band / shared-edge selection --------------------------------
