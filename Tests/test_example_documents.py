@@ -112,6 +112,14 @@ def _type_names(counter):
                       for code, n in sorted(counter.items())) or "none"
 
 
+# The demo's own constraint total, the census's sanity floor (#108): 393 on
+# its 29 sketches, measured offline from `Document.xml` and cross-checked
+# live (`sum(len(o.Constraints) for o in demo.Objects if sketch)`).  A
+# census that silently read the wrong thing would otherwise compare empty to
+# empty and pass.
+DEMO01_CONSTRAINTS = 393
+
+
 def fcstd_sketch_census(path):
     """{sketch name: {"constraints": [type code, ...],
                       "external": [(object name, sub-element), ...]}}
@@ -119,32 +127,36 @@ def fcstd_sketch_census(path):
     Read OFFLINE from the document's own `Document.xml` (zipfile +
     ElementTree), like `demo01_sketch_names` -- no FreeCAD, and no
     dependency on what the other side of the comparison happens to
-    contain.  The external-geometry list is flattened to one (object,
-    sub-element) pair per link entry: the demo stores a multi-sub link as
-    ONE `Link obj="..." sub="Edge12"/>` per sub-element anyway, but a
-    re-added link is written one Link at a time, so flattening is what
-    makes the two documents comparable.
+    contain.  A sketch is recognised by carrying the `Constraints`
+    property, and ONLY the occurrence that carries the properties is read:
+    a document lists every object twice, once as a stub under `<Objects>`
+    (no properties at all) and once with its data under `<ObjectData>`.
+    Reading the stubs instead would report every sketch as having zero
+    constraints on BOTH sides, i.e. compare empty to empty and go green --
+    which is why the demo's total is also asserted (see
+    `DEMO01_CONSTRAINTS`).  The external-geometry list is flattened to one
+    (object, sub-element) pair per link entry, so a multi-sub link in the
+    demo and the per-sub links a re-added one is written as compare equal.
     """
     with zipfile.ZipFile(path) as z:
         xml = z.read("Document.xml").decode("utf-8", "replace")
     root = ET.fromstring(xml)
     census = {}
     for obj in root.iter("Object"):
-        name = obj.get("name")
-        if not name or not name.startswith("Sketch"):
-            continue
         props = dict((p.get("name"), p)
                      for p in obj.findall("Properties/Property"))
         constr = props.get("Constraints")
-        codes = [c.get("Type") for c in constr.findall(
-            "ConstraintList/Constrain")] if constr is not None else []
+        if constr is None:
+            continue  # not a sketch, or the `<Objects>` stub of one
+        codes = [c.get("Type")
+                 for c in constr.findall("ConstraintList/Constrain")]
         ext = props.get("ExternalGeometry")
         links = []
         if ext is not None:
             for link in ext.findall("LinkSubList/Link"):
                 for sub in (link.get("sub") or "").split(","):
                     links.append((link.get("obj"), sub))
-        census[name] = {"constraints": codes, "external": links}
+        census[obj.get("name")] = {"constraints": codes, "external": links}
     return census
 
 # Documented build targets -- kept in lock-step with the examples/ README.
@@ -371,6 +383,12 @@ def test_demo01_subset_carries_the_demos_constraints(doc):
     fixture = fcstd_sketch_census(path)
     demo_names = demo01_sketch_names()
     demo_total = sum(len(demo[n]["constraints"]) for n in demo_names)
+    if demo_total != DEMO01_CONSTRAINTS:
+        return {"pass": False, "checks": [],
+                "errors": ["the census of %s reads %d constraints, expected "
+                           "%d -- the census itself is wrong, so nothing "
+                           "below would mean anything"
+                           % (DEMO01, demo_total, DEMO01_CONSTRAINTS)]}
     kept_total = sum(len(fixture.get(n, {}).get("constraints", []))
                      for n in demo_names)
     lost_total = 0
@@ -392,8 +410,15 @@ def test_demo01_subset_carries_the_demos_constraints(doc):
             errors.append(
                 "%s: fixture external geometry %s, the demo's is %s"
                 % (name, got_ext, want_ext))
-    checks.append("demo: %d constraints on %d sketches; fixture: %d kept "
-                  "(%d missing), %d sketches"
+    # A fixture sketch with no construction at all is the defect itself, in
+    # whatever sketch it turns up -- the demo's own sketches all carry
+    # constraints, and so do the four half-rib supplements (2 each).
+    empty = sorted(n for n, v in fixture.items() if not v["constraints"])
+    if empty:
+        errors.append("fixture sketches with no constraints at all: %s"
+                      % empty)
+    checks.append("demo: %d constraints on %d sketches; fixture: %d of them "
+                  "kept (%d missing) across %d sketches"
                   % (demo_total, len(demo_names), kept_total, lost_total,
                      len(fixture)))
     return {"pass": not errors, "errors": errors, "checks": checks}
@@ -422,18 +447,21 @@ def test_demo01_subset_sketch_lines_are_wired_not_loose(doc):
         return {"pass": False, "errors": ["missing %s" % path],
                 "checks": []}
     fixture = fcstd_sketch_census(path)
-    for name, want in (
-            ("Sketch015", Counter({"1": 6})),
-            ("Sketch016", Counter({"1": 6})),
-            ("Sketch020", Counter({"1": 6})),
-            ("Sketch032", Counter({"1": 4, "13": 1})),
-            ("Sketch031", Counter({"1": 9, "2": 1, "3": 2, "9": 1,
-                                    "11": 1}))):
+    # (sketch, the constraint counts the symptom is made of: the joints
+    # between its lines, and the attachments onto the neighbour's edge)
+    for name, want in (("Sketch015", (("1", 6),)),
+                       ("Sketch016", (("1", 6),)),
+                       ("Sketch020", (("1", 6),)),
+                       ("Sketch031", (("1", 9),)),
+                       ("Sketch032", (("1", 4), ("13", 1)))):
         got = Counter(fixture.get(name, {}).get("constraints", []))
         checks.append("%s: %s" % (name, _type_names(got)))
-        if got != want:
-            errors.append("%s: fixture has %s, expected %s"
-                          % (name, _type_names(got), _type_names(want)))
+        for code, n in want:
+            if got[code] != n:
+                errors.append(
+                    "%s: fixture has %d %s, expected %d (full: %s)"
+                    % (name, got[code], CONSTRAINT_TYPE_NAMES.get(code, code),
+                       n, _type_names(got)))
     for name, target, subs in (("Sketch015", "Sketch014",
                                 ("Edge12", "Edge11", "Edge10")),
                                ("Sketch032", "Sketch030", ("Edge3",)),
