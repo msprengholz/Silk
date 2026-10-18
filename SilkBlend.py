@@ -615,6 +615,10 @@ def _guarded_execute(fp):
         return
     proxy._in_execute = True
     try:
+        # #95: the toggle is structural, so every execute path guarantees
+        # it -- a blend restored from a file written before it existed is
+        # editable the moment it recomputes, not only after a reopen.
+        ensure_grid_toggle(fp)
         run_blend(fp)
     finally:
         proxy._in_execute = False
@@ -941,6 +945,7 @@ class BlendStrip:
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs", "blend grid poles").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "Outputs", "blend grid weights").Weights
         obj.addProperty("Part::PropertyGeometryList", "Legs", "Outputs", "grid segments").Legs
+        ensure_grid_toggle(obj)
         obj.addProperty("App::PropertyString", "object_type", "", "").object_type = "BlendStrip"
         obj.setEditorMode("object_type", 1)
         obj.Proxy = self
@@ -984,6 +989,17 @@ class BlendStrip:
         _on_changed(fp, prop)
 
     def onDocumentRestored(self, obj):
+        # #95: a blend saved before the grid toggle existed comes back
+        # without it (__init__ does not run on restore), so the toggle is
+        # ADDED here -- the owner's already-built document gains a working
+        # ShowGrid without a single object being recreated. And the
+        # restored view mode is migrated off `Shaded` (an unpickable face
+        # is a defect on a strip, not a preference -- see
+        # migrate_shaded_display); this is the LAST hook of the restore,
+        # by which time the ViewObject and its stored DisplayMode are both
+        # in place.
+        ensure_grid_toggle(obj)
+        migrate_shaded_display(obj)
         self._install_delete_watcher(obj)
 
     def onDelete(self, fp):
@@ -1012,6 +1028,7 @@ class Blend(BlendStrip):
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs", "blend grid poles").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "Outputs", "blend grid weights").Weights
         obj.addProperty("Part::PropertyGeometryList", "Legs", "Outputs", "grid segments").Legs
+        ensure_grid_toggle(obj)
         obj.addProperty("App::PropertyString", "object_type", "", "").object_type = "Blend"
         obj.setEditorMode("object_type", 1)
         obj.Proxy = self
@@ -1040,6 +1057,53 @@ class Blend(BlendStrip):
         return _on_delete(fp)
 
 
+# ---- the control-grid toggle (#95) ---------------------------------------
+#
+# `ShowGrid` is a DATA property on the object, exactly as it is on
+# SilkPatch: the view provider draws the control grid as a Coin node
+# (SilkMachinery.set_grid_display) and honours the property. Blend and
+# CornerBlend used to READ it through `getattr(obj, "ShowGrid", True)`
+# without ever adding it, so the fallback always won and the grid could
+# never be hidden -- the owner's "feature parity" gap (#95).
+
+def ensure_grid_toggle(obj):
+    """Ensure `obj` carries the `ShowGrid` toggle (#95).
+
+    The `ensure_hidden_idxs_property` pattern (#82): __init__ does not
+    run on restore, so an object saved before the property existed has to
+    be GIVEN it on the restore path -- otherwise every Blend in the
+    owner's already-built document keeps the read-only fallback and there
+    is still no toggle. Idempotent, and also called on execute so no path
+    reaches the view provider without it."""
+    if not hasattr(obj, "ShowGrid"):
+        obj.addProperty("App::PropertyBool", "ShowGrid", "Display",
+                        "show the control grid").ShowGrid = True
+
+
+def migrate_shaded_display(obj):
+    """Migrate a restored Blend / CornerBlend off `Shaded` (#95, #96).
+
+    `Shaded` is a FUNCTIONAL defect on these two types, not a preference:
+    a Shaded Part face puts no edge in the pick buffer at all, so the
+    strip's boundary edges -- the whole reason the Surface workbench's
+    Filling panel can consume a ring -- cannot be selected
+    (docs/research/silk-fill-picking.md). #96 draws NEW blends Flat Lines
+    for exactly that reason; a document built before it still carries the
+    unpickable mode, which is why the owner cannot select their strips'
+    edges. Restore fixes it. Narrow on purpose: only these two types, and
+    only away from `Shaded`."""
+    vobj = getattr(obj, "ViewObject", None)
+    if vobj is None:
+        return False                    # headless: nothing to migrate
+    try:
+        if vobj.DisplayMode != "Shaded":
+            return False
+        vobj.DisplayMode = "Flat Lines"
+    except Exception:
+        return False
+    return True
+
+
 class BlendStripViewProvider:
     def __init__(self, vobj):
         vobj.Proxy = self
@@ -1057,9 +1121,10 @@ class BlendStripViewProvider:
 
         The grid is no longer part of Shape (run_blend keeps only the
         surface); the view provider draws it from the stored `Legs`, in the
-        blend's own LineColor / LineWidth. A Blend has no grid toggle, so
-        the grid stays drawn -- exactly the visibility it had inside Shape.
-        Headless (no ViewObject) is a silent no-op."""
+        blend's own LineColor / LineWidth, and ShowGrid shows/hides the
+        node (#95 -- the toggle Blend and BlendStrip both carry now, so
+        the grid can be hidden exactly as a patch's can). Headless (no
+        ViewObject) is a silent no-op."""
         if obj is None or vobj is None:
             return
         set_grid_display(self, vobj, list(getattr(obj, "Legs", None) or []),
@@ -1068,7 +1133,7 @@ class BlendStripViewProvider:
                          getattr(vobj, "LineWidth", None))
 
     def updateData(self, obj, prop):
-        if prop in ("Legs", "Shape"):
+        if prop in ("Legs", "Shape", "ShowGrid"):
             self._refresh_grid(obj, getattr(self, "ViewObject", None))
         return True
 

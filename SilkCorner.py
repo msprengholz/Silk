@@ -36,7 +36,8 @@ from FreeCAD import Gui
 import Part
 import ArachNURBS as AN
 
-from SilkBlend import band_cells, side_and_end, seam_direction, BLEND_TYPES
+from SilkBlend import band_cells, side_and_end, seam_direction, BLEND_TYPES, \
+    ensure_grid_toggle, migrate_shaded_display
 from SilkMachinery import (build_intervals, split_pair, corner_ring,
     corner_grid, orient_junction_row, corner_ring_3,
     control_grid64_3_1, reverse_grid_rows, set_grid_display)
@@ -328,11 +329,22 @@ class CornerBlend:
                         "corner grid weights").Weights
         obj.addProperty("Part::PropertyGeometryList", "Legs", "Outputs",
                         "grid segments").Legs
+        ensure_grid_toggle(obj)
         obj.addProperty("App::PropertyString", "object_type", "",
                         "").object_type = "CornerBlend"
         obj.setEditorMode("object_type", 1)
         obj.Proxy = self
         self._in_execute = False
+
+    def onDocumentRestored(self, obj):
+        # #95: same two restore fixes as a Blend, for the same reasons --
+        # a corner saved before the grid toggle existed has no ShowGrid
+        # (__init__ does not run on restore), and `Shaded` leaves the
+        # corner's boundary edges unpickable, which is a defect on a
+        # surface the Filling panel is meant to consume, not a
+        # preference.
+        ensure_grid_toggle(obj)
+        migrate_shaded_display(obj)
 
     def onChanged(self, fp, prop):
         if prop in ("Strips", "tolerance"):
@@ -343,6 +355,10 @@ class CornerBlend:
     def execute(self, fp):
         if 'Restore' in fp.State:
             return  # preserve stored poles across save/restore
+        # #95: the toggle is structural -- every execute path guarantees
+        # it, so a corner restored from an older file is editable the
+        # moment it recomputes rather than only after a reopen.
+        ensure_grid_toggle(fp)
         if not list(getattr(fp, "Strips", []) or []):
             return
         if getattr(self, "_in_execute", False):
@@ -475,9 +491,10 @@ class CornerBlendViewProvider:
 
         The grid is no longer part of Shape (execute keeps only the
         surface); the view provider draws it from the stored `Legs`, in the
-        corner's own LineColor / LineWidth. A CornerBlend has no grid
-        toggle, so the grid stays drawn -- exactly the visibility it had
-        inside Shape. Headless (no ViewObject) is a silent no-op."""
+        corner's own LineColor / LineWidth, and ShowGrid shows/hides the
+        node (#95 -- the toggle a CornerBlend carries now, so the grid can
+        be hidden exactly as a patch's can). Headless (no ViewObject) is a
+        silent no-op."""
         if obj is None or vobj is None:
             return
         set_grid_display(self, vobj, list(getattr(obj, "Legs", None) or []),
@@ -486,7 +503,7 @@ class CornerBlendViewProvider:
                          getattr(vobj, "LineWidth", None))
 
     def updateData(self, obj, prop):
-        if prop in ("Legs", "Shape"):
+        if prop in ("Legs", "Shape", "ShowGrid"):
             self._refresh_grid(obj, getattr(self, "ViewObject", None))
         return True
 
