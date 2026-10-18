@@ -287,44 +287,45 @@ def _silk_owner(value, names):
     if its owner is. Instances matter: a SilkEdge.Edge proxy carries no
     __module__ of its own, and those proxies are what kept whole old
     generations of SilkEdge alive.
+
+    #78 + #105: the probes are ordered so the one that cannot raise comes
+    first. `type(value).__module__` is an attribute of a type object;
+    `value.__module__` is an attribute access on the value ITSELF, and an
+    object of a CLOSED document refuses exactly that -- `ReferenceError:
+    Cannot access attribute '__module__' of deleted object` under 1.1.3,
+    `RuntimeError: Cannot access attribute '__class__' of deleted object`
+    in the build that filed #105, where the `isinstance` above raised
+    because its fallback asks the value for `__class__`. Those bindings
+    accumulate because the RPC namespace is persistent by design, and one
+    of them made every `run_all.py` invocation report "FreeCAD reported an
+    error" -- 0 tests run, no diagnosis. Same mistake as the SilkBlend
+    delete-watcher (#80); three occurrences, three places.
+
+    Nothing is swallowed here: an access that raises is proof the value is
+    dead, and _is_stale turns that proof into "drop it".
     """
     if isinstance(value, types.ModuleType):
         return value.__name__ if value.__name__ in names else None
-    # #78: `getattr(x, "__module__", None)` does NOT swallow ReferenceError
-    # -- the default only covers AttributeError. A namespace binding that
-    # still points at an object of a CLOSED document raises
-    # ReferenceError here, and because the RPC namespace is persistent by
-    # design those bindings accumulate. One of them then made every single
-    # `run_all.py` invocation fail with
-    #   ReferenceError: Cannot access attribute '__module__' of deleted object
-    # and report "FreeCAD reported an error" with no tests run at all --
-    # a failure that disguises itself as a broken FreeCAD. Same mistake as
-    # the SilkBlend delete-watcher (#80); two occurrences, two places.
-    #
-    # A dead binding cannot own a live module, so it is not stale in any
-    # sense we can act on: returning None (not stale) is the honest answer
-    # and leaves the sweeper free to drop it by name later.
-    try:
-        for cand in (value, type(value)):
-            name = getattr(cand, "__module__", None)
-            if name in names:
-                return name
-        owner = getattr(value, "__self__", None)
-        if owner is not None:
-            name = type(owner).__module__
-            if name in names:
-                return name
-    except ReferenceError:
-        return None
+    for cand in (type(value), value):
+        name = getattr(cand, "__module__", None)
+        if name in names:
+            return name
+    owner = getattr(value, "__self__", None)
+    if owner is not None:
+        name = type(owner).__module__
+        if name in names:
+            return name
     return None
 
 
 def _is_stale(value, names, depth=0):
-    """True when *value* demonstrably belongs to a superseded generation.
+    """True when *value* must go: it belongs to a superseded generation, or
+    it cannot be inspected at all.
 
-    Positive evidence only -- anything we cannot prove stale is left
-    alone. A value is stale when the module that defines it is still
-    registered but is a different object than the one that defined it:
+    Evidence, not guesswork, is what removes a binding an agent set
+    deliberately. A value is stale when the module that defines it is
+    still registered but is a different object than the one that defined
+    it:
 
     * a module object that sys.modules no longer names,
     * a function/class the live module does not bind (identically),
@@ -332,20 +333,37 @@ def _is_stale(value, names, depth=0):
 
     Containers (list/tuple/set) are stale when any element is, which is
     how the namespace's old `edges` / `funcs` / `panels` bindings go.
+
+    The one case that is not evidence is an INSPECTION FAILURE -- and
+    #105 is that experience. `isinstance` and `getattr` are what a sweep
+    is made of, and an object of a CLOSED document answers both with an
+    exception whose class is a FreeCAD detail (ReferenceError in 1.1.3,
+    RuntimeError in the build that filed #105). Such a value cannot be a
+    live Silk binding, so it is stale by definition; and converting the
+    failure here, rather than enumerating the classes that may be raised,
+    is what keeps the sweep -- and with it the reload -- unable to die on
+    a value it exists to remove.
     """
     if depth > 3:
         return False
+    try:
+        return _proven_stale(value, names, depth)
+    except Exception:
+        return True
+
+
+def _proven_stale(value, names, depth):
+    """_is_stale's evidence: may raise while inspecting *value*."""
     if isinstance(value, (str, bytes, bytearray, int, float, bool, complex,
                           type(None))):
         return False
     if isinstance(value, dict):
         return False
     if isinstance(value, (list, tuple, set, frozenset)):
-        try:
-            items = list(value)[:20000]
-        except Exception:
-            return False
-        return any(_is_stale(item, names, depth + 1) for item in items)
+        # Iteration can refuse too (a closed document's own Objects list):
+        # the raise reaches _is_stale's guard and the binding goes.
+        return any(_is_stale(item, names, depth + 1)
+                   for item in list(value)[:20000])
     name = _silk_owner(value, names)
     if name is None:
         return False
@@ -392,10 +410,13 @@ def clear_stale_namespace(namespace, mod_dir=None, extra_prefixes=()):
             hit = any(key.startswith(p) for p in extra_prefixes) or _is_stale(
                 namespace.get(key), names
             )
-        except ReferenceError:
-            # The binding points into a dead document. We cannot prove what
-            # it was, but we can prove it is useless: a deleted object can
-            # never be a live Silk module. Drop it rather than fail the run.
+        except Exception:
+            # The binding cannot be inspected (an object of a closed
+            # document, whose exception class is a FreeCAD detail -- #78
+            # caught ReferenceError, #105 met RuntimeError from the same
+            # access). We cannot prove what it was, but we can prove it is
+            # useless: a deleted object can never be a live Silk module.
+            # Drop it rather than fail the run, whatever it raised.
             hit = True
         if hit:
             del namespace[key]
@@ -457,7 +478,16 @@ def ensure_fresh(force=False, namespace=None, mod_dir=None, pid=None,
     reload_, reason = needs_reload(current, previous, force)
     cleared = []
     if namespace is not None and not keep_namespace:
-        cleared = clear_stale_namespace(namespace, mod_dir)
+        try:
+            cleared = clear_stale_namespace(namespace, mod_dir)
+        except Exception as exc:
+            # #105's rule at the call site: the sweep can never fail the
+            # reload. The reload is how one recovers from the state that
+            # broke the sweep, so a failure escaping here takes the
+            # recovery with it -- and run_all.py reports that as 0 tests
+            # run, with no diagnosis.
+            print("[leak] stale-binding sweep failed (%s: %s) -- continuing"
+                  % (type(exc).__name__, exc))
     removed = []
     if reload_:
         removed = purge_mod_modules(mod_dir)
