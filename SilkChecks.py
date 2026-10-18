@@ -43,8 +43,10 @@ Corner blends (CB1-CB4, #28; the fill is the subgrid chain since #91):
       3-valent corner has three ring strips and covers three sides
       (the fourth is the derived triangular member's)
   CB2 interior fill: all 36 poles match the legacy subgrid chain
-      (SubGrid33_2Grid64 x4 -> ControlGrid66_4Sub) fed the same canonical
-      grids (1e-6)
+      (SubGrid33_2Grid64 x4 -> ControlGrid66_4Sub) fed canonical grids
+      the oracle canonicalizes ITSELF (#120) -- the ring order, the
+      junction-end rows and the across-seam columns are the oracle's own
+      mirror, so a wrong canonical grid moves one side only (1e-6)
   CB3 corner surface valid + no self-intersection + normal field coherent
   CB4 full 36-pole match against a provided reference (optional)
 
@@ -54,10 +56,12 @@ weights are only required to be positive.
 
 MIRROR, DO NOT IMPORT: several helpers here deliberately re-derive the
 object code's tables (_detect_seam, _pinned_seam, _oracle_band_cells,
-_oracle_side_and_end, _corner_cells) instead of importing them. An
-oracle that calls the function under test proves nothing — a bug in
-that function would satisfy the check. Every mirror says so where it
-is defined.
+_oracle_side_and_end, _oracle_corner_cells, _oracle_corner_ring,
+_oracle_shared_corner, _oracle_orient_ring_columns) instead of importing
+them. An oracle that calls the function under test proves nothing — a
+bug in that function would satisfy the check. Every mirror says so where
+it is defined, and #120 closed the last two places that broke the rule
+(CB1's refusal message and CB2's canonical grids).
 """
 
 import FreeCAD
@@ -1113,6 +1117,296 @@ def _check_blend(blend, pa, pb, reference_poles, edge=None):
     return results
 
 
+def _oracle_share_patch(a, b):
+    """True when two strips touch one and the same Patch object.
+
+    Mirror of SilkMachinery._share_patch, re-derived HERE (see the module
+    docstring): adjacency in a corner ring is patch-object IDENTITY, and
+    the oracle must not read the code under test's answer to build the
+    ring it checks that code's output against."""
+    return any(x is not None and (x is getattr(b, "PatchA", None)
+                                  or x is getattr(b, "PatchB", None))
+               for x in (getattr(a, "PatchA", None),
+                         getattr(a, "PatchB", None)))
+
+
+def _oracle_shared_patch(a, b):
+    """The ONE Patch object two ring strips both touch, or None when they
+    touch none or two (an ambiguous pair). Mirror of
+    SilkCorner._shared_patch, for the reason _oracle_share_patch is."""
+    common = [x for x in (getattr(a, "PatchA", None),
+                          getattr(a, "PatchB", None))
+              if x is not None and (x is getattr(b, "PatchA", None)
+                                    or x is getattr(b, "PatchB", None))]
+    return common[0] if len(common) == 1 else None
+
+
+def _oracle_doc_index(o):
+    """The object's own position in its document's object list, else 0.
+
+    Mirror of SilkMachinery._doc_index: the ring's START is the strip
+    earliest in the document, so the oracle has to know the same order to
+    derive the same canonical ring (`_oracle_corner_ring`)."""
+    doc = getattr(o, "Document", None)
+    if doc is None:
+        return 0
+    for k, oo in enumerate(list(doc.Objects)):
+        if oo is o:
+            return k
+    return 0
+
+
+def _oracle_corner_ring(strips):
+    """The four ring strips in the cyclic order the corner chain is fed
+    them: `ordered[k]` and `ordered[k+1]` share a patch.
+
+    Mirror of SilkMachinery.corner_ring, re-derived HERE (see the module
+    docstring): the ring ORDER is part of the canonical feed CB2's
+    reference chain is built from, so reading it from the code under test
+    would let a wrong start move both sides together and cancel out.
+    Written from the documented ring instead -- two strips are neighbours
+    when they both touch one patch object, the start is the strip earliest
+    in the document and its neighbour later in document order, and the
+    four must form one cycle in which every strip has exactly two
+    neighbours.
+
+    Returns (ordered, None) or (None, reason)."""
+    strips = list(strips)
+    if len(strips) != 4:
+        return None, ("a corner ring is exactly 4 blends (got %d)"
+                      % len(strips))
+    for i, s in enumerate(strips):
+        if any(s is t for t in strips[:i]):
+            return None, ("%s is in the ring twice"
+                          % (getattr(s, "Name", None) or s))
+    adj = {i: set() for i in range(4)}
+    for i in range(4):
+        for j in range(i + 1, 4):
+            if _oracle_share_patch(strips[i], strips[j]):
+                adj[i].add(j)
+                adj[j].add(i)
+    for i in range(4):
+        if len(adj[i]) != 2:
+            return None, ("%s shares a patch with %d of the other blends; "
+                          "four blends ring a junction only when each one "
+                          "meets exactly two of the others"
+                          % (getattr(strips[i], "Name", None) or i,
+                             len(adj[i])))
+    start = min(range(4), key=lambda i: _oracle_doc_index(strips[i]))
+    nxt = min(adj[start], key=lambda i: _oracle_doc_index(strips[i]))
+    order = [start, nxt]
+    while len(order) < 4:
+        step = [k for k in adj[order[-1]] if k not in order]
+        if len(step) != 1:
+            return None, "the four blends do not form a single ring"
+        order.append(step[0])
+    if order[0] not in adj[order[-1]]:
+        return None, "the four blends do not form a single ring"
+    return [strips[i] for i in order], None
+
+
+# The flat corner slots of a 24-pole 4x6 grid, in the chain's corner order
+# ([0, 5, 18, 23] = (V0U0, V0U5, V3U0, V3U5)) -- the oracle's own copy of
+# SilkMachinery.CORNER_IDX (MIRROR, DO NOT IMPORT; module docstring).
+_ORACLE_GRID_CORNERS = (0, 5, 18, 23)
+
+# The pairing the subgrid chain reads at a shared corner: slot 3 of one
+# grid (V3,U5) against slot 2 of the next (V3,U0) -- the oracle's own copy
+# of SilkMachinery.CORNER_COMMON (MIRROR, DO NOT IMPORT).
+_ORACLE_RING_PAIRING = (3, 2)
+
+# The chain matches its shared corner at 1e-6 (upstream SubGrid33_2Grid64's
+# default tolerance, CORNER_TOL in SilkCorner), tighter than the strip-side
+# tolerance the junction rows are derived at. The oracle tests its ring feed
+# at the chain's OWN tolerance, so it cannot refuse a feed the chain accepts.
+_ORACLE_GRID_TOL = 1e-6
+
+
+def _oracle_shared_corner(grid_0, grid_1, tol=_ORACLE_GRID_TOL):
+    """(a, b): the corner slot (0..3 of `_ORACLE_GRID_CORNERS`) that two
+    adjacent ring grids share, or (None, reason).
+
+    Mirror of SilkMachinery.pair_common for a ring of FOUR: two strips of
+    a 4-patch ring meet at exactly ONE junction corner, so the rules that
+    let `pair_common` admit the triangular member's collapsed end row do
+    not apply here -- anything but a single coincidence is an
+    inconsistency, not a pairing."""
+    c0 = [grid_0[k] for k in _ORACLE_GRID_CORNERS]
+    c1 = [grid_1[k] for k in _ORACLE_GRID_CORNERS]
+    matches = [(a, b) for a in range(4) for b in range(4)
+               if (c0[a] - c1[b]).Length <= tol]
+    if len(matches) != 1:
+        return None, ("the two grids share %d corners at tolerance %g"
+                      % (len(matches), tol))
+    return matches[0], None
+
+
+def _oracle_ring_reading(grids, tol=_ORACLE_GRID_TOL):
+    """('canonical' | 'mirrored', None) or (None, reason) for a 4-grid ring.
+
+    Mirror of the orientation test SilkMachinery.corner_grid applies before
+    it assembles a ring: every consecutive pair must present its shared
+    corner at the chain's pairing (slot 3 of the first, slot 2 of the
+    second), or at the mirror of it for a ring whose stored strip order
+    runs the other way round. Anything else is not a consistently oriented
+    ring and the chain cannot consume it."""
+    pairs = []
+    for i in range(4):
+        pr, why = _oracle_shared_corner(grids[i][0], grids[(i + 1) % 4][0],
+                                        tol)
+        if pr is None:
+            return None, ("strip %d and strip %d: %s"
+                          % (i, (i + 1) % 4, why))
+        pairs.append(pr)
+    if all(pr == _ORACLE_RING_PAIRING for pr in pairs):
+        return "canonical", None
+    if all(pr == tuple(reversed(_ORACLE_RING_PAIRING)) for pr in pairs):
+        return "mirrored", None
+    return None, ("the four strips are not a consistently oriented ring "
+                  "(shared corners %r)" % (pairs,))
+
+
+def _oracle_orient_ring_columns(grids, ordered):
+    """Mirror of SilkCorner._orient_ring_columns: reverse the 6 columns
+    (U -> 5 - U) of every strip that owns the ring's shared patch as its
+    PatchA.
+
+    The 6-pole axis of a strip runs from its PatchA side to its PatchB
+    side, so which patch lands at column 0 is whichever the user handed
+    `create_blend` FIRST -- arbitrary, and the same surface either way
+    round. A ring whose strips are not a directed cycle therefore cannot
+    present its shared corners at one fixed slot pair until those columns
+    are flipped; the flip is a reparameterization of the across-seam axis,
+    not a geometry change."""
+    n = len(grids)
+    out = []
+    for i, (poles, weights) in enumerate(grids):
+        nxt = _oracle_shared_patch(ordered[i], ordered[(i + 1) % n])
+        if nxt is not None and getattr(ordered[i], "PatchA", None) is nxt:
+            poles = [poles[r * 6 + (5 - c)]
+                     for r in range(4) for c in range(6)]
+            weights = [weights[r * 6 + (5 - c)]
+                       for r in range(4) for c in range(6)]
+        out.append((poles, weights))
+    return out
+
+
+def _oracle_strip_junction_row(s, strips, tol):
+    """(li, why): the row (0 or 3) of strip `s`'s flat `V*6+U` blend grid
+    that sits at the ring's junction, or (None, reason).
+
+    Mirror of SilkCorner.corner_inputs' per-strip derivation (#120), and
+    the strip's side is read off the STRIP (#83), the way
+    `_oracle_side_and_end` already does: a unified Blend pins its Edge, so
+    a patch pair sharing two seams cannot collapse to one side. The
+    junction row is the row the patch's corner CELL sits against -- the
+    corner cell is the signed end of the axis the OTHER seam runs along,
+    and the band cell is the seam's own, so the row is 3 when the corner
+    cell lies above the band cell. The two patches must agree (mirrored
+    when the seam is reversed): that is the twisted-input refusal."""
+    pa = getattr(s, "PatchA", None)
+    pb = getattr(s, "PatchB", None)
+    if pa is None or pb is None:
+        return None, ("blend %s has no patches"
+                      % (getattr(s, "Name", None) or s))
+    e_a, ss_a = _oracle_side_and_end(s, pa, tol)
+    e_b, ss_b = _oracle_side_and_end(s, pb, tol)
+    if not e_a or not e_b:
+        return None, ("blend %s: no shared edge between %s and %s"
+                      % (getattr(s, "Name", None) or s, pa.Name, pb.Name))
+    # The two patches can parameterize the shared seam in the same
+    # direction (identity) or opposite (reversed); a reversed seam names
+    # the SAME junction at the MIRRORED row of the patch's seam-parallel
+    # axis, so the two are compared ACROSS that reflection.
+    identity = _oracle_seam_identity(s, tol)
+    bca = _oracle_band_cells(pa, e_a, ss_a)
+    bcb = _oracle_band_cells(pb, e_b, ss_b)
+    if len(bca) != 1 or len(bcb) != 1:
+        return None, ("blend %s: its band must cover exactly 1 cell per side "
+                      "(got %d/%d)"
+                      % (getattr(s, "Name", None) or s, len(bca), len(bcb)))
+    li_map = {}
+    for pth, e, bc in ((pa, e_a, bca), (pb, e_b, bcb)):
+        nu = len(_oracle_intervals(*_oracle_axis(pth, "U")))
+        nv = len(_oracle_intervals(*_oracle_axis(pth, "V")))
+        iu_c = iv_c = None
+        for t in strips:
+            te, tss = _oracle_side_and_end(t, pth, tol)
+            if not te:
+                continue
+            if te[0] == "U":
+                iv_c = nv - 1 if te[1] == "1" else 0
+            else:
+                iu_c = nu - 1 if te[1] == "1" else 0
+        if iu_c is None or iv_c is None:
+            return None, ("blend %s: patch %s: no corner cell at the "
+                          "junction (the strips on it do not close one)"
+                          % (getattr(s, "Name", None) or s, pth.Name))
+        iu_b, iv_b = divmod(bc[0], nv)
+        if e[0] == "U":
+            li_map[pth.Name] = 3 if iu_c > iu_b else 0
+        else:
+            li_map[pth.Name] = 3 if iv_c > iv_b else 0
+    if li_map[pa.Name] != (3 - li_map[pb.Name] if identity is False
+                           else li_map[pb.Name]):
+        return None, ("blend %s: its two patches disagree about which end "
+                      "is the junction (twisted input)"
+                      % (getattr(s, "Name", None) or s))
+    return li_map[pa.Name], None
+
+
+def _oracle_canonical_corner_grids(strips, tol=0.01):
+    """The ring's four 24-pole grids in the exact form the subgrid chain
+    consumes them: ring order, every strip's junction-end row at V = 3,
+    and the across-seam columns normalized so the ring presents each
+    shared corner at the pairing the chain reads.
+
+    MIRROR of SilkCorner.corner_inputs, re-derived HERE (#120), for the
+    reason the module docstring gives: CB2 builds its reference chain
+    from these grids, and asking `corner_inputs` for them meant the same
+    derivation had just fed the object under test. Both sides then moved
+    together, so a wrong canonical grid -- a wrong ring start, a wrong
+    junction row, a wrong column direction -- was invisible: the
+    reference reproduced the defect instead of exposing it. (`SilkChecks`
+    already mirrors `band_cells` for exactly this reason; this is that
+    rule applied to the corner's canonical feed.)
+
+    Returns (grids, None) or (None, reason): `grids` is a list of
+    (poles24, weights24) in ring order."""
+    ordered, why = _oracle_corner_ring(strips)
+    if ordered is None:
+        return None, why
+    base = []
+    for s in ordered:
+        li, why = _oracle_strip_junction_row(s, list(strips), tol)
+        if li is None:
+            return None, why
+        poles = list(getattr(s, "Poles", None) or [])
+        weights = list(getattr(s, "Weights", None) or [])
+        if len(poles) != 24 or len(weights) != 24:
+            return None, ("blend %s: expected a 24-pole grid, got %d poles "
+                          "/ %d weights"
+                          % (getattr(s, "Name", None) or s, len(poles),
+                             len(weights)))
+        if li != 3:
+            # The chain's fixed index convention: junction-end row at V = 3.
+            poles = [poles[(3 - v) * 6 + u]
+                     for v in range(4) for u in range(6)]
+            weights = [weights[(3 - v) * 6 + u]
+                       for v in range(4) for u in range(6)]
+        base.append((poles, weights))
+    # The ring as stored, then with its columns normalized -- `corner_grid`
+    # tries the stored orientation first so a ring that already assembles
+    # keeps its exact poles, and the oracle tries the same two candidates in
+    # the same order for the same reason.
+    why = None
+    for cand in (base, _oracle_orient_ring_columns(base, ordered)):
+        reading, why = _oracle_ring_reading(cand)
+        if reading is not None:
+            return cand, None
+    return None, why
+
+
 def _corner_reference_rows(strips, tol=0.01):
     """Independently derive each ring strip's corner-end row — the
     6-pole edge of the strip's blend surface at the corner-cell side.
@@ -1122,64 +1416,21 @@ def _corner_reference_rows(strips, tol=0.01):
     touched by exactly two of them.
 
     Mirrors SilkCorner's derivation from the patches' splits and band
-    cells (not from the corner blend itself). Returns (rows,
-    corner_cells) or (None, None) on any inconsistency.
+    cells (not from the corner blend itself). Returns (rows, None) or
+    (None, reason) -- the reason names the strip that broke the ring, so
+    CB1 can say WHY (#120; the ring resolver is no longer asked).
     """
     rows = []
-    corner_cells = {}
     for s in strips:
-        pa, pb = s.PatchA, s.PatchB
-        if pa is None or pb is None:
-            return None, None
-        # #83: the mirror of SilkCorner.corner_inputs -- the strip's side is
-        # read off the STRIP (a unified Blend pins its Edge), so a pair
-        # sharing two seams cannot collapse to one side here either.
-        e_a, ss_a = _oracle_side_and_end(s, pa, tol)
-        e_b, ss_b = _oracle_side_and_end(s, pb, tol)
-        if not e_a or not e_b:
-            return None, None
-        # The two patches can parameterize the shared seam in the same
-        # direction (identity) or opposite (reversed); a reversed seam names
-        # the SAME junction at the MIRRORED row of the patch's seam-parallel
-        # axis. Compared across that reflection (mirrors SilkCorner).
-        identity = _oracle_seam_identity(s, tol)
-        bca = _oracle_band_cells(pa, e_a, ss_a)
-        bcb = _oracle_band_cells(pb, e_b, ss_b)
-        if len(bca) != 1 or len(bcb) != 1:
-            return None, None
-        li_map = {}
-        for pth, e, bc in ((pa, e_a, bca), (pb, e_b, bcb)):
-            nu = len(_oracle_intervals(*_oracle_axis(pth, "U")))
-            nv = len(_oracle_intervals(*_oracle_axis(pth, "V")))
-            iu_c = iv_c = None
-            for t in strips:
-                other = t.PatchB if t.PatchA is pth else t.PatchA
-                if other is None:
-                    continue
-                te, tss = _oracle_side_and_end(t, pth, tol)
-                if not te:
-                    continue
-                if te[0] == "U":
-                    iv_c = nv - 1 if te[1] == "1" else 0
-                else:
-                    iu_c = nu - 1 if te[1] == "1" else 0
-            if iu_c is None or iv_c is None:
-                return None, None
-            iu_b, iv_b = divmod(bc[0], nv)
-            if e[0] == "U":
-                li_map[pth.Name] = 3 if iu_c > iu_b else 0
-            else:
-                li_map[pth.Name] = 3 if iv_c > iv_b else 0
-            corner_cells[pth.Name] = (pth, iu_c, iv_c, nu, nv)
-        if li_map[pa.Name] != (3 - li_map[pb.Name] if identity is False
-                               else li_map[pb.Name]):
-            return None, None
-        poles = s.Poles or []
+        li, why = _oracle_strip_junction_row(s, list(strips), tol)
+        if li is None:
+            return None, why
+        poles = list(getattr(s, "Poles", None) or [])
         if len(poles) != 24:
-            return None, None
-        li = li_map[pa.Name]
-        rows.append(list(poles[li * 6: li * 6 + 6]))
-    return rows, corner_cells
+            return None, ("blend %s: expected a 24-pole grid, got %d"
+                          % (getattr(s, "Name", None) or s, len(poles)))
+        rows.append(poles[li * 6: li * 6 + 6])
+    return rows, None
 
 
 def _check_corner_blend(cb, strips, reference_poles):
@@ -1202,17 +1453,13 @@ def _check_corner_blend(cb, strips, reference_poles):
                         st, len(poles), len(weights),
                         "ok" if ok else "bad")))
 
-    rows, _ = _corner_reference_rows(
+    rows, why = _corner_reference_rows(
         strips, tol=getattr(cb, "tolerance", 0.01))
     if rows is None:
-        # Ask the ring resolver WHY, so the refusal NAMES the strip (or
-        # patch) that broke the ring instead of reporting a bare miss.
-        try:
-            from SilkCorner import corner_inputs, CORNER_DEFAULT_TOL
-            _g, _c, why = corner_inputs(
-                list(strips), getattr(cb, "tolerance", CORNER_DEFAULT_TOL))
-        except Exception as exc:            # never raise out of the oracle
-            why = "the ring resolver raised %r" % (exc,)
+        # The refusal NAMES the strip (or patch) that broke the ring --
+        # the oracle's OWN reason, not the ring resolver's (#120: the
+        # resolver is the code under test, and asking it to explain a
+        # verdict the oracle has already reached proves nothing).
         why = why or "could not derive corner-end rows from the strips"
         results.append(("CB1_c0_boundary", False,
                         "could not derive corner-end rows: %s" % why))
@@ -1252,13 +1499,15 @@ def _check_corner_blend(cb, strips, reference_poles):
     # CB2: interior fill -- all 36 poles must match the legacy subgrid
     # chain (SubGrid33_2Grid64 x4 -> ControlGrid66_4Sub) fed the SAME
     # canonical grids (#91). The legacy classes are the ground-truth
-    # oracle; our machinery is required to match them pole for pole.
+    # oracle; our machinery is required to match them pole for pole. The
+    # grids themselves are the oracle's OWN mirror of the canonicalization
+    # (`_oracle_canonical_corner_grids`, #120): were they read back from
+    # `corner_inputs`, a wrong ring order / junction row / column
+    # direction would move both sides together and this check could not
+    # see it.
     try:
         import ArachNURBS as AN
-        from SilkCorner import corner_inputs, CORNER_DEFAULT_TOL
         doc = cb.Document
-        grids, _cells, why = corner_inputs(
-            list(strips), getattr(cb, "tolerance", CORNER_DEFAULT_TOL))
         if len(strips) == 3:
             # A 3-valent ring has NO legacy reference to match: the legacy
             # SubGrid33_2Grid64 cannot assemble it (the triangular member's
@@ -1275,51 +1524,59 @@ def _check_corner_blend(cb, strips, reference_poles):
                             "subgrid chain cannot assemble its collapsed "
                             "member (multiple coincident corners), and the "
                             "shipped cap re-solves those rows on purpose"))
-        elif grids is None:
-            results.append(("CB2_interior_fill", False,
-                            "could not derive corner grids: %s" % why))
         else:
-            carriers, subs, grid = [], [], None
-            ref_poles = []
-            try:
-                for p, w in grids:
-                    c = doc.addObject("Part::FeaturePython", "_cb_ref_poly")
-                    c.addProperty("App::PropertyVectorList", "Poles",
-                                  "Internal", "p").Poles
-                    c.addProperty("App::PropertyFloatList", "Weights",
-                                  "Internal", "w").Weights
-                    c.Poles = p
-                    c.Weights = w
-                    carriers.append(c)
-                for i in range(4):
-                    sg = doc.addObject("Part::FeaturePython", "_cb_ref_sub")
-                    AN.SubGrid33_2Grid64(sg, carriers[i],
-                                         carriers[(i + 1) % 4])
-                    sg.recompute()
-                    subs.append(sg)
-                grid = doc.addObject("Part::FeaturePython", "_cb_ref_grid")
-                AN.ControlGrid66_4Sub(grid, *subs)
-                grid.recompute()
-                ref_poles = list(grid.Poles) if hasattr(grid, "Poles") else []
-            finally:
-                # temp reference objects must not survive a failed build;
-                # cleanup runs before the error result below is returned
-                for o in ([grid] if grid is not None else []) + subs + carriers:
-                    if o is not None and doc.getObject(o.Name) is not None:
-                        try:
-                            doc.removeObject(o.Name)
-                        except Exception:
-                            pass
-            if len(ref_poles) != 36:
+            grids, why = _oracle_canonical_corner_grids(
+                list(strips), getattr(cb, "tolerance", 0.01))
+            if grids is None:
                 results.append(("CB2_interior_fill", False,
-                                "reference chain produced %d poles"
-                                % len(ref_poles)))
+                                "could not derive corner grids: %s" % why))
             else:
-                cb2_dev = max((p - r).Length
-                              for p, r in zip(poles, ref_poles))
-                results.append(("CB2_interior_fill", cb2_dev <= TOL,
-                                "max deviation from reference chain %.3e"
-                                % cb2_dev))
+                carriers, subs, grid = [], [], None
+                ref_poles = []
+                try:
+                    for p, w in grids:
+                        c = doc.addObject("Part::FeaturePython",
+                                          "_cb_ref_poly")
+                        c.addProperty("App::PropertyVectorList", "Poles",
+                                      "Internal", "p").Poles
+                        c.addProperty("App::PropertyFloatList", "Weights",
+                                      "Internal", "w").Weights
+                        c.Poles = p
+                        c.Weights = w
+                        carriers.append(c)
+                    for i in range(4):
+                        sg = doc.addObject("Part::FeaturePython",
+                                           "_cb_ref_sub")
+                        AN.SubGrid33_2Grid64(sg, carriers[i],
+                                             carriers[(i + 1) % 4])
+                        sg.recompute()
+                        subs.append(sg)
+                    grid = doc.addObject("Part::FeaturePython",
+                                         "_cb_ref_grid")
+                    AN.ControlGrid66_4Sub(grid, *subs)
+                    grid.recompute()
+                    ref_poles = (list(grid.Poles)
+                                 if hasattr(grid, "Poles") else [])
+                finally:
+                    # temp reference objects must not survive a failed
+                    # build; cleanup runs before the error result below
+                    for o in (([grid] if grid is not None else [])
+                              + subs + carriers):
+                        if o is not None and doc.getObject(o.Name) is not None:
+                            try:
+                                doc.removeObject(o.Name)
+                            except Exception:
+                                pass
+                if len(ref_poles) != 36:
+                    results.append(("CB2_interior_fill", False,
+                                    "reference chain produced %d poles"
+                                    % len(ref_poles)))
+                else:
+                    cb2_dev = max((p - r).Length
+                                  for p, r in zip(poles, ref_poles))
+                    results.append(("CB2_interior_fill", cb2_dev <= TOL,
+                                    "max deviation from reference chain "
+                                    "%.3e" % cb2_dev))
     except Exception as e2:
         results.append(("CB2_interior_fill", False,
                         "CB2 check error: %r" % e2))
@@ -1369,10 +1626,10 @@ def check_corner_blend(cb, strip0=None, strip1=None, strip2=None,
     """Corner blend oracle (CB1-CB4). Accepts the ring's strips either as
     separate arguments or (as the only argument) as a list.
 
-    Three strips is a 3-valent hard corner -- `corner_inputs` derives the
-    triangular 4th member, so CB2's reference chain still runs over four
-    grids for the 4-valent case; a 3-valent ring has no legacy reference
-    at all and CB2 says so rather than going green or red (see CB2). CB1
+    Three strips is a 3-valent hard corner -- the corner OBJECT derives
+    its triangular 4th member, and CB2 has no legacy reference for such a
+    ring, so it says so rather than going green or red (see CB2);
+    the 4-valent ring is the case CB2's reference chain runs on. CB1
     then matches the ring strips' junction rows, which are three of the
     corner's four boundary sides (the fourth is the member's).
 
