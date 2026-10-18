@@ -45,6 +45,8 @@ class BoundarySpline:
                         "the permanent internal FreeCAD name for this object").internalName = obj.Name
         obj.setEditorMode("internalName", 1)
         obj.Proxy = self
+        if getattr(obj, "ViewObject", None) is not None:
+            BoundarySplineViewProvider(obj.ViewObject)
 
     def onDocumentRestored(self, obj):
         obj.recompute()
@@ -104,6 +106,44 @@ class BoundarySpline:
             fp.Shape = Part.Shape(fp.Legs)
 
 
+class BoundarySplineViewProvider:
+    """Tree provider for the BoundarySpline object.
+
+    Ticket #11: the spline PARENTS the sketch that drives it, so the model
+    tree reads spline -> sketch. The idiom is `EdgeViewProvider.claimChildren`
+    (#52), reused rather than re-invented: FreeCAD renders tree nesting
+    through the view provider, the datas-level `Sketch` link is untouched,
+    and a sketch no spline points at stays at top level.
+
+    `claimChildren` reads the live link, so it survives a reload with the
+    rest of the view provider (`__getstate__` / `__setstate__` are what let
+    FreeCAD rebuild it).
+    """
+
+    def __init__(self, vobj):
+        vobj.Proxy = self
+
+    def getIcon(self):
+        return iconPath
+
+    def attach(self, vobj):
+        self.ViewObject = vobj
+        self.Object = vobj.Object
+
+    def claimChildren(self):
+        sketch = getattr(self.Object, "Sketch", None)
+        return [sketch] if sketch is not None else []
+
+    def updateData(self, obj, prop):
+        return True
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        return None
+
+
 class CreateBoundarySpline:
     """GUI command — selected sketch → BoundarySpline."""
 
@@ -122,7 +162,6 @@ class CreateBoundarySpline:
             if obj.TypeId == "Sketcher::SketchObject":
                 bs = doc.addObject("Part::FeaturePython", "BoundarySpline")
                 BoundarySpline(bs, obj)
-                bs.ViewObject.Proxy = 0
                 bs.ViewObject.LineWidth = 2.00
                 bs.ViewObject.LineColor = (0.00, 1.00, 0.00)
                 bs.ViewObject.PointSize = 4.00
