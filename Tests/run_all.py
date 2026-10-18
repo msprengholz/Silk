@@ -27,6 +27,17 @@ Reload control (#72):
     python3 Tests/run_all.py --rss-warn 1024    RSS warning threshold in MB
                                                (default 2048)
 
+Tiers: by DEFAULT this runs the FAST tier -- the guards, the ops/oracle
+stage tests, the acceptance gate and the cheap unit tests, about a minute.
+The end-to-end rebuilds, GUI click-throughs, panel drives and measurement
+sweeps are marked `MANUAL = True` and are NOT in it. Add them back with:
+    python3 Tests/run_all.py --manual           fast tier + manual tier
+    python3 Tests/run_all.py --manual <filter>  only matching manual tests
+    python3 Tests/run_all.py --timings          print the per-module table
+(a module named by a filter or by --changed always runs, even if MANUAL.)
+Tests/test_manual_tier.py pins the split and asserts the manual modules stay
+importable, so a module moved to the manual tier cannot be lost silently.
+
 Deadline control (Tests/watchdog.py owns the mechanics):
     SILK_RUN_CEILING=300        wall-clock backstop for the RPC dispatch
                                 in seconds (default 1740)
@@ -94,7 +105,7 @@ sys.path.insert(0, %r)
 os.environ["SILK_PROGRESS_FILE"] = %r
 
 def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir,
-              test_modules=None):
+              test_modules=None, include_manual=False):
     \"\"\"Everything in one function, so nothing this run binds survives it.
 
     The execute_code namespace is persistent by design, and a name left
@@ -128,7 +139,7 @@ def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir,
     import Tests.mcp_harness as _mh
     _mh.PROGRESS_FILE = os.environ["SILK_PROGRESS_FILE"]
     from Tests.mcp_harness import run_tests
-    funcs = suite.collect_tests(test_filter, test_modules)
+    funcs = suite.collect_tests(test_filter, test_modules, include_manual)
     if funcs:
         run_tests(*funcs, close_docs=close_docs)
     else:
@@ -170,7 +181,7 @@ def _silk_run(force_reload, keep_namespace, test_filter, close_docs, save_dir,
               "after %%.1f MB (delta %%.1f MB)"
               %% (os.getpid(), rss_before, rss_after, rss_after - rss_before))
 
-_silk_run(%s, %s, %r, %s, %r, %r)
+_silk_run(%s, %s, %r, %s, %r, %r, %s)
 """
 
 
@@ -194,7 +205,8 @@ def _save_inspect_docs(save_dir):
     return saved
 
 
-def _run_in_process(inspect, save_dir, test_filter, test_modules=None):
+def _run_in_process(inspect, save_dir, test_filter, test_modules=None,
+                    include_manual=False, timings=False):
     """Inside a FreeCAD process (freecad startup-script mode)."""
     import Tests.silk_reload as silk_reload
     rss_before = silk_reload.rss_mb()
@@ -205,7 +217,7 @@ def _run_in_process(inspect, save_dir, test_filter, test_modules=None):
         print("Warning: could not activate Silk workbench: " + str(e))
     from Tests import suite
     from Tests.mcp_harness import run_tests
-    funcs = suite.collect_tests(test_filter, test_modules)
+    funcs = suite.collect_tests(test_filter, test_modules, include_manual)
     if not funcs:
         print("No tests match %r / %r in %s"
               % (test_filter, test_modules, os.path.join(_SILK_DIR, "Tests")))
@@ -213,6 +225,8 @@ def _run_in_process(inspect, save_dir, test_filter, test_modules=None):
         return 1
     print("Running {} Silk tests (in-process runner)".format(len(funcs)))
     summary = run_tests(*funcs, close_docs=not (inspect or save_dir))
+    if timings:
+        _print_module_timings(summary)
     if save_dir:
         _save_inspect_docs(save_dir)
     # #79: deliberately NOT capping the Report View on this path. This
@@ -251,8 +265,46 @@ from Tests.watchdog import (  # noqa: E402
     report_timeout, wait_for_call,
 )
 
+
+def _module_timings(summary):
+    """[(module, seconds, tests)] from a run summary, slowest first.
+
+    The harness records the module on every timing entry (its NAME only,
+    never the module object), so this needs no second mapping and cannot
+    pin a module generation (#72).
+    """
+    agg = {}
+    for t in summary.get("timings") or []:
+        mod = t.get("module") or "?"
+        rec = agg.setdefault(mod, [0.0, 0])
+        rec[0] += t["seconds"]
+        rec[1] += 1
+    return [(m, s, n) for m, (s, n) in agg.items()]
+
+
+def _print_module_timings(summary):
+    """The opt-in per-module timing table (run_all.py --timings).
+
+    Preserved raw output (the measurement rule): this is the report that
+    decides which modules belong in the fast tier, and it is printed in
+    full, not a top-N guess.
+    """
+    rows = sorted(_module_timings(summary), key=lambda r: -r[1])
+    if not rows:
+        print("[timings] no timing data in the summary")
+        return
+    total = sum(s for _, s, _ in rows)
+    ntests = sum(n for _, _, n in rows)
+    print("\n[timings] per-module, %.1fs of test time across %d tests, "
+          "%d modules" % (total, ntests, len(rows)))
+    print("   %8s %6s %7s  %s" % ("seconds", "tests", "avg", "module"))
+    for mod, secs, n in rows:
+        print("   %8.2f %6d %7.2f  %s" % (secs, n, secs / n, mod))
+
+
 def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
-                 keep_namespace=False, test_modules=None):
+                 keep_namespace=False, test_modules=None,
+                 include_manual=False, timings_report=False):
     """Attach to a running FreeCAD GUI through its XML-RPC server."""
     import http.client
     import json
@@ -306,6 +358,10 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
         print("--force-reload: reimporting Silk modules even if unchanged.")
     if keep_namespace:
         print("--keep-namespace: leaving stale RPC namespace bindings alone.")
+    if include_manual:
+        print("--manual: the manual tier is included (fast + manual).")
+    if timings_report:
+        print("--timings: a full per-module timing table will be printed.")
     _wd = _Watchdog()
     _wd.start()
     try:
@@ -318,7 +374,7 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
                 # The %r slots, in order: _SILK_DIR (top of _REMOTE_CODE),
                 # the client's progress file (top of _REMOTE_CODE), then
                 # _silk_run's signature (force, keep_ns, test_filter,
-                # close_docs, save_dir, test_modules). Getting this wrong
+                # close_docs, save_dir, test_modules, include_manual). Getting this wrong
                 # passes test_modules in save_dir's slot, which does not
                 # crash -- it just runs the whole suite, which is the
                 # worst possible failure for a speed flag.
@@ -326,7 +382,8 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
                                 str(bool(force_reload)),
                                 str(bool(keep_namespace)), test_filter,
                                 str(not (inspect or save_dir)), save_dir,
-                                list(test_modules) if test_modules else None),
+                                list(test_modules) if test_modules else None,
+                                str(bool(include_manual))),
                 _call_timeout,
             ),
             watchdog=_wd,
@@ -400,6 +457,8 @@ def _run_via_rpc(port, inspect, save_dir, test_filter, force_reload=False,
                 print("   %6.2fs  %s" % (t["seconds"], t["name"]))
             print("   -> these %d are %.0f%% of the run"
                   % (len(top), sum(t["seconds"] for t in top) / total_s * 100))
+    if timings_report:
+        _print_module_timings(summary)
     if inspect or save_dir:
         for line in out.splitlines():
             if "[inspect]" in line or "[saved]" in line or (line.startswith("  - ") and ("_mcp_test_" in line or "_inspect" in line)):
@@ -480,6 +539,14 @@ def main():
     force_reload = "--force-reload" in sys.argv
     keep_namespace = "--keep-namespace" in sys.argv
     save_dir = _INSPECT_SAVE_DIR if save else None
+    # The DEFAULT run is the FAST tier (~1 min). --manual (alias --all)
+    # adds the manual tier back -- the end-to-end rebuilds, GUI
+    # click-throughs, panel drives and measurement sweeps that made the
+    # old default run ~11 minutes. Tests/test_manual_tier.py names the
+    # split and asserts the manual modules stay reachable. --timings
+    # prints the full per-module table a tier decision has to be based on.
+    include_manual = ("--manual" in sys.argv) or ("--all" in sys.argv)
+    timings_report = "--timings" in sys.argv
 
     # --changed [ref]: run only the test modules a changed file can break
     # (#72). The full suite is ~6.5 minutes and most edits cannot touch
@@ -518,10 +585,12 @@ def main():
     except ImportError:
         pass
     else:
-        return _run_in_process(inspect, save_dir, test_filter, test_modules)
+        return _run_in_process(inspect, save_dir, test_filter, test_modules,
+                               include_manual, timings_report)
     port = int(os.environ.get("SILK_RPC_PORT", "9875"))
     return _run_via_rpc(port, inspect, save_dir, test_filter, force_reload,
-                        keep_namespace, test_modules)
+                        keep_namespace, test_modules, include_manual,
+                        timings_report)
 
 
 # NOTE: called unconditionally -- FreeCAD executes startup scripts with

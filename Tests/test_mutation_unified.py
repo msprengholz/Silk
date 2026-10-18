@@ -57,6 +57,13 @@ with a both-curves guard (strictly crash-only change); the (0.1, no band)
 cone-pair sweep below is the red->green regression for it.
 """
 
+# --- manual tier ------------------------------------------------------
+# This module's subject is an end-to-end rebuild / GUI drive /
+# measurement sweep, so it is NOT in the default (fast) tier. Run it
+# with `python3 Tests/run_all.py --manual` (or by name as a filter);
+# Tests/test_manual_tier.py asserts it stays importable. See suite.py.
+MANUAL = True
+
 import functools
 import os
 

@@ -31,6 +31,13 @@ ground truth keep running unchanged).
 No continuity label is asserted anywhere in this module.
 """
 
+# --- manual tier ------------------------------------------------------
+# This module's subject is an end-to-end rebuild / GUI drive /
+# measurement sweep, so it is NOT in the default (fast) tier. Run it
+# with `python3 Tests/run_all.py --manual` (or by name as a filter);
+# Tests/test_manual_tier.py asserts it stays importable. See suite.py.
+MANUAL = True
+
 import itertools
 import os
 
