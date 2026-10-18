@@ -477,6 +477,46 @@ def corner_fill_boundary(strips, tol=None):
     return (links, faces), None
 
 
+class _BoundaryLink:
+    """One `(object, "EdgeN")` fill boundary link, shaped so
+    `SilkMachinery.loop_order` can order it (#66/#68).
+
+    `loop_order` reads a candidate's two endpoints from `Poles`; a fill
+    boundary link is a SUB-SHAPE of an object (that is what
+    `Surface::Filling.BoundaryEdges` takes), so the two curve endpoints are
+    what it gets. One adapter, so the ordering rule and its refusal
+    diagnosis are Silk's own, not a second implementation of them.
+    """
+
+    def __init__(self, obj, subname):
+        self.obj = obj
+        self.subname = subname
+        self.Name = "%s.%s" % (obj.Name, subname)
+        self.Label = self.Name
+        edge = obj.Shape.getElement(subname)
+        self.Poles = [edge.valueAt(edge.FirstParameter),
+                      edge.valueAt(edge.LastParameter)]
+
+
+def fill_boundary_loop(links, tol=None):
+    """((ordered links, None)) or (None, reason) -- `links` as ONE closed
+    loop of boundary edges.
+
+    The fill's boundary is ordered BY CONNECTIVITY, never by click order:
+    `SilkMachinery.loop_order` owns that rule and the #68 "a loop corner
+    meets exactly 2" proof behind it, so a boundary whose edges branch,
+    pinch, do not close, or form two loops is refused with the same named
+    diagnosis a Patch gives -- and a boundary that is already cyclic comes
+    back exactly as it arrived.
+    """
+    links = list(links or [])
+    order, problem = loop_order(
+        [_BoundaryLink(o, s) for o, s in links], tol)
+    if order is None:
+        return None, problem
+    return [(link.obj, link.subname) for link in order], None
+
+
 def corner_fill_problem(fill, links):
     """None when `fill` is a sound fill of `links`, else the reason.
 
@@ -495,6 +535,101 @@ def corner_fill_problem(fill, links):
             return ("it misses %s.%s by %.4g mm"
                     % (obj.Name, subname, distance))
     return None
+
+
+def _order_problem(order):
+    """The named reason an order cannot be built, or None.
+
+    `BoundaryOrder` is FreeCAD's 0/1/2 and nothing else: >= 3 is refused by
+    FreeCAD itself ("BRepFill : The continuity is not G0 G1 or G2"), so the
+    honest answer is to refuse it here, before an object exists.
+    """
+    if order in CORNER_FILL_ORDERS:
+        return None
+    return ("the corner fill order must be 0 (C0), 1 (G1) or 2 (G2) -- "
+            "got %r" % (order,))
+
+
+def _build_fill(links, faces, order, name):
+    """The shared build-and-validate tail of both fill entry points.
+
+    (object, None) or (None, reason). The created object is FreeCAD's own,
+    not a Silk one. A fill that produced no face, is invalid, or misses its
+    own boundary is REMOVED again before returning, so an invalid fill is
+    never parked in the tree reading `State=Up-to-date` (#80/#83).
+    """
+    doc = FreeCAD.ActiveDocument
+    try:
+        obj = doc.addObject("Surface::Filling", name)
+    except Exception as exc:
+        # The Surface module is FreeCAD's, not ours: a build without it can
+        # still run every other Silk path, so this refuses by name like any
+        # other unusable input rather than raising.
+        return None, ("this FreeCAD provides no Surface::Filling object "
+                      "type (%s)" % (exc,))
+    obj.BoundaryEdges = links
+    obj.BoundaryFaces = faces
+    obj.BoundaryOrder = [order] * len(links)
+    doc.recompute()
+    problem = corner_fill_problem(obj, links)
+    if problem is not None:
+        doc.removeObject(obj.Name)
+        doc.recompute()
+        return None, problem
+    return obj, None
+
+
+def create_fill(links, faces=None, order=1, name="Surface"):
+    """Create ONE `Surface::Filling` over an EXPLICIT hole boundary (#96).
+
+    `links` is the boundary as `[(object, "EdgeN"), ...]` -- the sub-shapes
+    `Surface::Filling.BoundaryEdges` takes -- in ANY order: the loop is
+    wired by connectivity (`fill_boundary_loop`), never by click order.
+    `faces` is the matching per-edge support, defaulting to `Face1` (the
+    sub-shape owner's own surface); one face per edge is required. `order`
+    is the fill's own continuity order (0 = C0, 1 = G1, 2 = G2).
+
+    Everything that can be checked is checked BEFORE anything is
+    constructed: an order outside 0/1/2, or a boundary that is not ONE
+    closed loop -- branched, pinched, open, over-constrained with a surplus
+    edge -- is refused by name and leaves NO object in the tree. The build
+    is then validated by the C0 boundary residual (`corner_fill_problem`),
+    and a fill that misses its own boundary is removed again.
+
+    The corner's own collector is `corner_fill_boundary` (ring strips ->
+    this same wiring), used by `create_corner_fill`.
+    """
+    if links and not isinstance(links[0], (list, tuple)):
+        links = [links]     # one bare (object, "EdgeN") link
+    links = [(o, s) for o, s in list(links or []) if o is not None and s]
+    problem = _order_problem(order)
+    if problem is not None:
+        FreeCAD.Console.PrintError(
+            "Silk: %s. Nothing was created.\n" % problem)
+        return None
+    ordered, problem = fill_boundary_loop(links)
+    if ordered is None:
+        FreeCAD.Console.PrintError(
+            "Silk: cannot build the fill over these %d boundary edges -- "
+            "%s. Nothing was created.\n" % (len(links), problem))
+        return None
+    faces = ["Face1"] * len(ordered) if faces is None else list(faces)
+    if len(faces) != len(ordered):
+        FreeCAD.Console.PrintError(
+            "Silk: the fill needs one support face per boundary edge (%d "
+            "edges, %d faces). Nothing was created.\n"
+            % (len(ordered), len(faces)))
+        return None
+    obj, problem = _build_fill(ordered, faces, order, name)
+    if obj is None:
+        FreeCAD.Console.PrintError(
+            "Silk: the surface fill over %d boundary edges did not build -- "
+            "%s. Nothing was left in the tree.\n" % (len(ordered), problem))
+        return None
+    FreeCAD.Console.PrintMessage(
+        "Silk: surface fill %s created over %d boundary edges (order %d)\n"
+        % (obj.Name, len(ordered), order))
+    return obj
 
 
 def create_corner_fill(*strips, order=1, name="Surface"):
@@ -521,7 +656,6 @@ def create_corner_fill(*strips, order=1, name="Surface"):
     or split bookkeeping and no Silk view provider. GUI-free -- the command
     and the task panel wrap it in their own transaction.
     """
-    doc = FreeCAD.ActiveDocument
     if len(strips) == 1 and isinstance(strips[0], (list, tuple)):
         strips = list(strips[0])
     strips = [s for s in (strips or []) if s is not None]
@@ -530,10 +664,10 @@ def create_corner_fill(*strips, order=1, name="Surface"):
             "Silk: a corner fill needs the ring's 3 or 4 blend strips around "
             "one junction (got %d). Nothing was created.\n" % len(strips))
         return None
-    if order not in CORNER_FILL_ORDERS:
+    bad_order = _order_problem(order)
+    if bad_order is not None:
         FreeCAD.Console.PrintError(
-            "Silk: the corner fill order must be 0 (C0), 1 (G1) or 2 (G2) -- "
-            "got %r. Nothing was created.\n" % (order,))
+            "Silk: %s. Nothing was created.\n" % bad_order)
         return None
     boundary, why = corner_fill_boundary(strips)
     if boundary is None:
@@ -542,24 +676,8 @@ def create_corner_fill(*strips, order=1, name="Surface"):
             "Nothing was created.\n" % (len(strips), why))
         return None
     links, faces = boundary
-    try:
-        obj = doc.addObject("Surface::Filling", name)
-    except Exception as exc:
-        # The Surface module is FreeCAD's, not ours: a build without it can
-        # still run every other Silk path, so this refuses by name like any
-        # other unusable input rather than raising.
-        FreeCAD.Console.PrintError(
-            "Silk: this FreeCAD provides no Surface::Filling object type "
-            "(%s). Nothing was created.\n" % (exc,))
-        return None
-    obj.BoundaryEdges = links
-    obj.BoundaryFaces = faces
-    obj.BoundaryOrder = [order] * len(links)
-    doc.recompute()
-    problem = corner_fill_problem(obj, links)
-    if problem is not None:
-        doc.removeObject(obj.Name)
-        doc.recompute()
+    obj, problem = _build_fill(links, faces, order, name)
+    if obj is None:
         FreeCAD.Console.PrintError(
             "Silk: the surface fill over %s did not build -- %s. Nothing was "
             "left in the tree.\n"

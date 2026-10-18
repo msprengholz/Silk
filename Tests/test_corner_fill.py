@@ -20,7 +20,11 @@ What is pinned here:
   3. an unusable selection is REFUSED BY NAME, before anything is
      constructed, leaving no object at all -- the #80/#83 lesson (an invalid
      object parked in the tree reads `State=Up-to-date`);
-  4. one undo step per command run, like every other Silk command.
+  4. one undo step per command run, like every other Silk command;
+  5. the component behind the command takes an EXPLICIT hole boundary as
+     well as the ring strips (`create_fill`), orders that boundary by
+     connectivity -- never by click order -- and refuses a boundary that is
+     not ONE closed loop before anything is constructed.
 
 Run: python3 Tests/run_all.py corner_fill
 """
@@ -170,6 +174,177 @@ def test_corner_fill_refuses_a_selection_that_is_not_a_ring(doc):
         check(any(m.startswith("Silk:") for m in cap.errors),
               "%s: the refusal is not a named console error: %r"
               % (label, cap.errors), errors)
+    return {"pass": not errors, "checks": checks, "errors": errors}
+
+
+def _boundary_names(fill):
+    """The fill's boundary wiring as [(obj name, "EdgeN"), ...]."""
+    return [(o.Name, list(s)[0]) for o, s in (fill.BoundaryEdges or [])]
+
+
+def _same_cyclic_order(a, b):
+    """True when `a` and `b` are the same closed loop: equal up to a
+    rotation, in either direction."""
+    n = len(a)
+    if n != len(b):
+        return False
+    for r in range(n):
+        rolled = a[r:] + a[:r]
+        if rolled == b or list(reversed(rolled)) == b:
+            return True
+    return False
+
+
+def test_fill_from_an_explicit_boundary_is_ordered_by_connectivity(doc):
+    """`create_fill` takes the hole boundary DIRECTLY -- `[(object,
+    "EdgeN"), ...]`, the wiring `Surface::Filling` wants -- in any order,
+    and wires the loop by connectivity: two scrambled inputs build the SAME
+    cyclic wire, and the wire is genuinely cyclic (each edge shares a corner
+    with the next)."""
+    errors, checks = [], []
+    import Tests.corner_model as cm
+    import SilkWorkflowOps as OPS
+
+    cm.build_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIPS]
+    boundary, why = OPS.corner_fill_boundary(strips)
+    check(boundary is not None,
+          "the ring's boundary did not resolve: %s" % why, errors)
+    if boundary is None:
+        return {"pass": not errors, "checks": checks, "errors": errors}
+    links, _faces = boundary
+
+    scrambled = [[links[2], links[0], links[3], links[1]],
+                 [links[3], links[2], links[1], links[0]]]
+    fills = []
+    for order_in in scrambled:
+        fill = OPS.create_fill(order_in)
+        check(fill is not None,
+              "create_fill refused the boundary in click order %r"
+              % ([s for _o, s in order_in],), errors)
+        if fill is None:
+            continue
+        fills.append(fill)
+        residual = [round(fill.Shape.distToShape(
+            o.Shape.getElement(list(s)[0]))[0], 9)
+            for o, s in fill.BoundaryEdges]
+        checks.append("faces: %d, valid: %s, residual: %r"
+                      % (len(fill.Shape.Faces), bool(fill.Shape.isValid()),
+                         residual))
+        check(len(fill.Shape.Faces) == 1 and fill.Shape.isValid(),
+              "the explicit-boundary fill is not one valid face", errors)
+        check(max(residual) == 0.0,
+              "the fill does not contain its own boundary: %r" % (residual,),
+              errors)
+
+    if len(fills) == 2:
+        first, second = _boundary_names(fills[0]), _boundary_names(fills[1])
+        checks.append("click order A wired %r" % (first,))
+        checks.append("click order B wired %r" % (second,))
+        check(_same_cyclic_order(first, second),
+              "the wire is not the same cyclic order for both click orders: "
+              "%r vs %r" % (first, second), errors)
+        # ...and it really is a loop: consecutive links share a corner.
+        ends = []
+        for o, s in fills[0].BoundaryEdges:
+            e = o.Shape.getElement(list(s)[0])
+            ends.append((e.valueAt(e.FirstParameter),
+                         e.valueAt(e.LastParameter)))
+        closed = all(
+            min((ends[k][1] - ends[(k + 1) % len(ends)][0]).Length,
+                (ends[k][1] - ends[(k + 1) % len(ends)][1]).Length) < 1e-6
+            for k in range(len(ends)))
+        check(closed, "the wired boundary does not chain corner to corner: %r"
+              % (ends,), errors)
+    return {"pass": not errors, "checks": checks, "errors": errors}
+
+
+def test_fill_refuses_a_boundary_that_is_not_one_closed_loop(doc):
+    """An explicit boundary that is not ONE closed loop -- an open chain, or
+    the ring plus a surplus edge (over-constrained) -- is refused BY NAME
+    before anything is constructed, and no object is left in the tree."""
+    errors, checks = [], []
+    import Tests.corner_model as cm
+    import SilkWorkflowOps as OPS
+
+    cm.build_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIPS]
+    links, _faces = OPS.corner_fill_boundary(strips)[0]
+    b12 = doc.getObject("B12")
+    junction = [s for o, s in links if o is b12][0]
+    surplus = None
+    for i in range(1, len(b12.Shape.Edges) + 1):
+        cand = "Edge%d" % i
+        if cand != junction:
+            surplus = (b12, cand)
+            break
+    check(surplus is not None, "no surplus edge on B12 to over-constrain with",
+          errors)
+
+    for label, boundary in (("an open chain (3 of the ring's 4 edges)",
+                             links[:3]),
+                            ("the ring plus a surplus edge",
+                             list(links) + [surplus])):
+        before = set(o.Name for o in doc.Objects)
+        with _Capture() as cap:
+            result = OPS.create_fill(boundary)
+        doc.recompute()
+        created = sorted(set(o.Name for o in doc.Objects) - before)
+        checks.append("%s: console: %s"
+                      % (label, " | ".join(m.strip() for m in cap.errors)[:200]))
+        checks.append("%s: created: %r" % (label, created))
+        check(result is None, "%s was accepted: %r" % (label, result), errors)
+        check(not created, "%s created %r" % (label, created), errors)
+        check(not _fills(doc),
+              "%s left a Surface::Filling behind" % label, errors)
+        check(any(m.startswith("Silk:") for m in cap.errors),
+              "%s: the refusal is not a named console error: %r"
+              % (label, cap.errors), errors)
+    return {"pass": not errors, "checks": checks, "errors": errors}
+
+
+def test_fill_works_on_a_general_hole_not_just_a_corner(doc):
+    """The component is not corner-shaped: the SAME entry point fills a
+    plain rectangular hole -- one Patch's own four boundary edges, each
+    supported by the patch's own face -- from a scrambled edge list.  The
+    probe's raw-patch feed was over-constrained and invalid (#91/#96); a
+    whole boundary loop is the general case that is not."""
+    errors, checks = [], []
+    import Tests.corner_model as cm
+    import SilkWorkflowOps as OPS
+
+    model = cm.build_corner_model(doc)
+    patch = model["patches"]["Patch001"]
+    names = ["Edge%d" % i for i in range(1, len(patch.Shape.Edges) + 1)]
+    checks.append("patch boundary edges: %r" % (names,))
+    check(len(names) == 4, "expected a 4-edge patch boundary, got %r"
+          % (names,), errors)
+    if len(names) != 4:
+        return {"pass": not errors, "checks": checks, "errors": errors}
+
+    boundary = [(patch, n) for n in (names[2], names[0], names[3], names[1])]
+    fill = OPS.create_fill(boundary)
+    check(fill is not None, "create_fill refused a plain patch boundary",
+          errors)
+    if fill is None:
+        return {"pass": not errors, "checks": checks, "errors": errors}
+
+    residual = [round(fill.Shape.distToShape(
+        patch.Shape.getElement(list(s)[0]))[0], 9)
+        for _o, s in fill.BoundaryEdges]
+    checks.append("faces: %d, valid: %s, residual: %r"
+                  % (len(fill.Shape.Faces), bool(fill.Shape.isValid()),
+                     residual))
+    check(len(fill.Shape.Faces) == 1,
+          "expected 1 face, got %d" % len(fill.Shape.Faces), errors)
+    check(fill.Shape.isValid(), "the general-hole fill is not a valid shape",
+          errors)
+    check(max(residual) == 0.0,
+          "the fill does not contain its own boundary: %r" % (residual,),
+          errors)
+    check(all(o is patch for o, _s in fill.BoundaryEdges),
+          "the fill is not linked to the patch that owns the boundary: %r"
+          % ([(o.Name, s) for o, s in fill.BoundaryEdges],), errors)
     return {"pass": not errors, "checks": checks, "errors": errors}
 
 

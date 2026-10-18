@@ -188,3 +188,43 @@ surface … a stepping stone"*. With the fill path merely deferred rather than
 adopted, that member remains **our final surface** unless the owner judges a
 fill better on a real model — which is exactly the judgement #96 now exists to
 enable.
+
+## Measurement update (#96: the fill component, tested)
+
+The interactive path is not the only half of #96 that shipped. The wiring is
+now **one ops-level component with two collectors**, in `SilkWorkflowOps`:
+
+* `corner_fill_boundary(strips)` — the corner's collector (the ring strips →
+  the junction rows, `SilkCorner.corner_inputs`'s own ring contract).
+* `create_fill(links, faces=None, order=1)` — an **explicit hole boundary**,
+  `[(object, "EdgeN"), ...]` plus one support face per edge, in any order.
+* `create_corner_fill(*strips, order=1)` — the command's entry (ring strips),
+  unchanged for callers.
+
+Both entry points share one build-and-validate tail (`_build_fill`): the
+boundary loop is ordered **by connectivity, never click order**
+(`fill_boundary_loop` reuses `SilkMachinery.loop_order`, so the #66/#68
+"a loop corner meets exactly 2" proof and its named refusal are Silk's own,
+not a second implementation), the order is checked against FreeCAD's 0/1/2
+before anything is constructed, and the build is validated by the **C0
+boundary residual** (`corner_fill_problem`, `distToShape` <= 1e-3 mm) — an
+invalid or boundary-missing fill is removed again rather than parked in the
+tree reading `State=Up-to-date` (#80/#83).
+
+Pinned in `Tests/test_corner_fill.py` (`run_all.py corner_fill`, 7/7):
+
+* the ring path still builds one valid face with residual 0.0 mm, one order
+  per edge, one undo step, and refuses a non-ring selection by name;
+* two scrambled explicit boundaries build the **same cyclic wire** (a
+  rotation/reversal of each other) — the wiring is the geometry's, not the
+  click order's;
+* an open chain and an over-constrained boundary (the ring plus a surplus
+  edge) are refused **by name** with nothing left in the tree;
+* a **general hole** — one Patch's own four boundary edges, supported by the
+  patch's own `Face1` — fills to one valid face, residual 0.0 mm. That is
+  the probe's "single-patch rectangular-hole control", and it is what makes
+  the component general rather than corner-shaped.
+
+The automated 3-sided + 4-sided corner fill remains **not built** (#96's ask
+item 2 is later, by the ticket's own text) and the foreign-object caveat above
+is unchanged: the fill is opt-in and outside Silk's band/split machinery.
