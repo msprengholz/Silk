@@ -179,12 +179,66 @@ def _assemble_square_ring(base, ordered):
     return None, why
 
 
-def _tri_ring_member(base_grids, ordered, patches, corner_cells):
+def _resolve_member_pin(pin, patches):
+    """(patch, corner) for a triangular-member pin, or (None, reason).
+
+    `pin` is `(patch or its Name, corner index)` -- which ring patch's
+    grid corner the triangular 4th member must be built at (#117). Both
+    halves are validated here so the refusal can name what it could not
+    honour: a pin that names a patch outside THIS ring, or a corner
+    outside 0..3, is refused before any candidate is tried."""
+    ref, corner = pin
+    name = getattr(ref, "Name", None) or str(ref)
+    target = None
+    for p in patches:
+        if p is ref or p.Name == name:
+            target = p
+            break
+    if target is None:
+        return None, ("the member pin names patch %s, which is not part of "
+                      "this ring (%s)"
+                      % (name, ", ".join(p.Name for p in patches)))
+    try:
+        corner = int(corner)
+    except (TypeError, ValueError):
+        return None, ("the member pin's corner index %r is not an integer"
+                      % (corner,))
+    if not 0 <= corner <= 3:
+        return None, ("the member pin's corner index %d is outside 0..3"
+                      % corner)
+    return (target, corner), None
+
+
+def _tri_ring_member(base_grids, ordered, patches, corner_cells,
+                     pinned=None):
     """The first 4-grid ring `corner_grid` accepts for a 3-valent corner:
     `base_grids` (the three strips) plus the triangular 4th member built
     from a patch's ring corner CELL -- never the full 4x4 base net, whose
     corners are the patch vertices -- across every corner index and
-    reversal. Returns the 4-grid ring or None."""
+    reversal. Returns the 4-grid ring or None.
+
+    `pinned` is a resolved `(patch, corner)` from `_resolve_member_pin`:
+    when set, ONLY that candidate is tried (both reversal states, as the
+    search does) and no other patch or corner is considered, so the
+    member lands exactly where the user asked or the caller refuses. When
+    None the automatic search above runs unchanged."""
+    if pinned is not None:
+        pth, corner = pinned
+        poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
+        if poles_c is None:
+            return None
+        for rev in (False, True):
+            mp, mw = control_grid64_3_1(poles_c, weights_c, corner)
+            if mp is None:
+                continue
+            if rev:
+                mp, mw = reverse_grid_rows(mp, mw)
+            member = (list(mp), list(mw))
+            cand = _member_ring(base_grids, ordered, pth, member)
+            p36, _w, _why = corner_grid(cand, CORNER_TOL)
+            if p36 is not None:
+                return cand
+        return None
     for pth in patches:
         poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
         if poles_c is None:
@@ -204,12 +258,20 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells):
     return None
 
 
-def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
+def corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
     """The four strips' 24-pole grids in ring order, each with its
     junction-end row at V = 3, plus the corner cell of each patch.
 
     Returns (grids, corner_cells, None) or (None, None, reason). Every
     refusal names the strip (or patch) that caused it.
+
+    `pin` is an optional `(patch or its Name, corner index)` naming which
+    ring patch's grid corner the TRIANGULAR 4th member is built at -- the
+    placement upstream's `ControlGrid64_3_1Grid44` recipe leaves to the
+    user (#117). None (the default) runs the automatic search unchanged,
+    so a corner nobody has pinned is byte-identical. When set, the search
+    may only use that candidate and refuses by name otherwise, and a pin
+    on a 4-valent ring (which has no triangular member) is refused too.
     """
     strips = list(strips)
     is_tri = (len(strips) == 3)
@@ -283,35 +345,70 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL):
         # runs once as stored -- the documented rings assemble there --
         # and, only if that cannot, once with the ring's columns
         # normalized.
+        pinned, pin_why = ((None, None) if pin is None
+                           else _resolve_member_pin(pin, patches))
+        if pin is not None and pinned is None:
+            return None, None, pin_why
         ring = None
         for base_grids in (list(grids),
                            _orient_ring_columns(grids, ordered)):
             ring = _tri_ring_member(base_grids, ordered, patches,
-                                    corner_cells)
+                                    corner_cells, pinned)
             if ring is not None:
                 break
         if ring is None:
+            if pinned is not None:
+                return None, None, ("could not build the triangular 4th "
+                                    "member at the pinned corner %s[%d]"
+                                    % (pinned[0].Name, pinned[1]))
             return None, None, "could not build triangular 4th member"
         grids = ring
     else:
+        if pin is not None:
+            return None, None, ("the triangular-member pin applies only to "
+                                "a 3-valent corner; this ring has 4 strips")
         grids, why = _assemble_square_ring(grids, ordered)
         if grids is None:
             return None, None, why
     return grids, corner_cells, None
 
 
-def corner_from_strips(strips, tol=CORNER_DEFAULT_TOL):
+def corner_from_strips(strips, tol=CORNER_DEFAULT_TOL, pin=None):
     """The full corner: four strips -> (poles36, weights36, corner_cells).
+
+    `pin` is `corner_inputs`' optional triangular-member placement (#117);
+    None runs the automatic search.
 
     Returns (p36, w36, corner_cells, None) or (None, None, None, reason).
     """
-    grids, corner_cells, why = corner_inputs(strips, tol)
+    grids, corner_cells, why = corner_inputs(strips, tol, pin)
     if grids is None:
         return None, None, None, why
     p36, w36, why = corner_grid(grids, CORNER_TOL)
     if p36 is None:
         return None, None, None, why
     return p36, w36, corner_cells, None
+
+
+def ensure_member_pin(obj):
+    """#117: the triangular-member placement properties, added once.
+
+    `MemberPatch` names the ring patch whose grid corner the triangular
+    4th member is pinned to (empty = the automatic search) and
+    `MemberCorner` its grid corner index 0..3. An empty pin IS the old
+    behaviour, so a corner saved before #117 -- which has neither
+    property (`__init__` does not run on restore) -- keeps building
+    exactly as before the moment this runs, and its placement becomes
+    selectable without a rebuild."""
+    if not hasattr(obj, "MemberPatch"):
+        obj.addProperty("App::PropertyLink", "MemberPatch", "Inputs",
+                        "ring patch whose grid corner the triangular 4th "
+                        "member is pinned to (3-valent corners only; empty "
+                        "= automatic search)")
+    if not hasattr(obj, "MemberCorner"):
+        obj.addProperty("App::PropertyInteger", "MemberCorner", "Inputs",
+                        "grid corner index (0..3) of the pinned triangular "
+                        "4th member").MemberCorner = 0
 
 
 class CornerBlend:
@@ -323,6 +420,12 @@ class CornerBlend:
                         ).Strips = list(strips)
         obj.addProperty("App::PropertyFloat", "tolerance", "Inputs",
                         "corner matching tolerance").tolerance = CORNER_DEFAULT_TOL
+        # #117: the triangular 4th member's placement. The search picks
+        # the first patch/corner that assembles; MemberPatch names the
+        # ring patch whose grid corner the member is PINNED to (empty =
+        # today's automatic search) and MemberCorner its grid corner index
+        # 0..3. Both are inert until MemberPatch is set.
+        ensure_member_pin(obj)
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs",
                         "corner grid poles (6x6)").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "Outputs",
@@ -345,9 +448,10 @@ class CornerBlend:
         # preference.
         ensure_grid_toggle(obj)
         migrate_shaded_display(obj)
+        ensure_member_pin(obj)
 
     def onChanged(self, fp, prop):
-        if prop in ("Strips", "tolerance"):
+        if prop in ("Strips", "tolerance", "MemberPatch", "MemberCorner"):
             if 'Restore' not in fp.State and list(getattr(fp, "Strips", []) or []):
                 fp.touch()
                 fp.recompute()
@@ -417,8 +521,11 @@ class CornerBlend:
     # ---- execution --------------------------------------------------
 
     def _do_execute(self, fp):
+        member_patch = getattr(fp, "MemberPatch", None)
+        pin = (None if member_patch is None
+               else (member_patch, int(getattr(fp, "MemberCorner", 0))))
         p36, w36, corner_cells, why = corner_from_strips(
-            list(fp.Strips), fp.tolerance)
+            list(fp.Strips), fp.tolerance, pin)
         if p36 is None:
             self._refuse(fp, why)
             return

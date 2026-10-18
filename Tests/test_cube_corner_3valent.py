@@ -54,7 +54,7 @@ import Tests.continuity_analytic as CA
 import Tests.continuity_calibration as CAL
 import Tests.g2_oracle as G
 import Tests.silk_nurbs as SN
-from SilkMachinery import corner_ring_3
+from SilkMachinery import corner_grid, corner_ring_3
 from SilkWorkflowOps import create_corner_blend
 
 STRIP_NAMES = ("B_AB", "B_BC", "B_CA")
@@ -636,6 +636,163 @@ def test_3valent_cube_corner_non_ring_refused(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+#117: the pin's fixture contract, measured here before the tests were
+# written -- which candidates assemble on the cube-corner ring:
+#
+#     PatchA[0]  assembles   <- the automatic search's pick (ring order)
+#     PatchB[0]  assembles
+#     PatchC[0]  assembles
+#     every [1] [2] [3]      refused: "could not build the triangular 4th
+#                            member at the pinned corner <Patch>[<c>]"
+#
+# Pinning PatchB[0] instead of PatchA[0] moves the member: the two
+# assembled 6x6 nets differ by max|dPole| 1.414214e-01 mm.
+PATCHES_AT_CORNER_0 = ("PatchA", "PatchB", "PatchC")
+
+
+def test_3valent_member_pin_is_opt_in_and_changes_nothing_when_unset(doc):
+    """#117: the pin is opt-in. A freshly created corner carries
+    `MemberPatch = None` / `MemberCorner = 0`, and its 36 poles are
+    byte-identical (`max|dPole|` 0.000e+00) to the unpinned derivation --
+    so every corner built before the property existed keeps its geometry,
+    and the automatic search is still what an unset pin gets."""
+    import SilkCorner
+
+    errors, checks = [], []
+    ccm.build_cube_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIP_NAMES]
+    cb = create_corner_blend(*strips)
+    if cb is None:
+        return {"pass": False, "errors": ["no corner blend created"],
+                "checks": []}
+    if cb.MemberPatch is not None or int(cb.MemberCorner) != 0:
+        errors.append("a fresh corner is pinned: MemberPatch=%r "
+                      "MemberCorner=%r" % (cb.MemberPatch, cb.MemberCorner))
+    else:
+        checks.append("fresh corner carries the pin UNSET "
+                      "(MemberPatch=None, MemberCorner=0)")
+
+    grids, _cells, why = SilkCorner.corner_inputs(strips)
+    if grids is None:
+        errors.append("corner_inputs refused the fixture: %s" % why)
+        return {"pass": False, "errors": errors, "checks": checks}
+    p36, _w36, why = corner_grid(grids, SilkCorner.CORNER_TOL)
+    if p36 is None:
+        errors.append("corner_grid refused the fixture: %s" % why)
+        return {"pass": False, "errors": errors, "checks": checks}
+    dev = max((a - b).Length for a, b in zip(cb.Poles, p36))
+    checks.append("unset build vs the unpinned derivation: max|dPole| "
+                  "%.3e mm over %d poles" % (dev, len(p36)))
+    if len(cb.Poles) != 36 or len(p36) != 36 or dev != 0.0:
+        errors.append("the unset build is not the unpinned derivation: "
+                      "%d/%d poles, max|dPole| %.3e mm"
+                      % (len(cb.Poles), len(p36), dev))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_3valent_member_pin_moves_the_member_to_the_named_corner(doc):
+    """#117: setting the pin builds the triangular 4th member at the named
+    ring patch's grid corner. On this fixture the automatic search takes
+    the ring's first patch (PatchA, corner 0); pinning PatchB[0] -- set on
+    the object exactly as the data tab would -- moves the member, and a
+    pin that was IGNORED would leave the poles equal to the automatic
+    build, so the difference is asserted, not just the build."""
+    import SilkCorner
+
+    errors, checks = [], []
+    ccm.build_cube_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIP_NAMES]
+    patch_b = doc.getObject("PatchB")
+    cb = create_corner_blend(*strips)
+    if cb is None:
+        return {"pass": False, "errors": ["no corner blend created"],
+                "checks": []}
+    auto = list(cb.Poles)
+    if len(auto) != 36:
+        return {"pass": False,
+                "errors": ["the automatic build has %d poles" % len(auto)],
+                "checks": []}
+    checks.append("automatic (unset pin) build: 36 poles, member at the "
+                  "first assembling candidate PatchA[0]")
+
+    grids, _cells, why = SilkCorner.corner_inputs(strips, pin=(patch_b, 0))
+    if grids is None:
+        return {"pass": False,
+                "errors": ["corner_inputs refused the pin: %s" % why],
+                "checks": checks}
+    want, _w36, why = corner_grid(grids, SilkCorner.CORNER_TOL)
+    if want is None:
+        return {"pass": False,
+                "errors": ["corner_grid refused the pinned ring: %s" % why],
+                "checks": checks}
+
+    cb.MemberPatch = patch_b      # the data-tab path; onChanged recomputes
+    cb.MemberCorner = 0
+    doc.recompute()
+    db = max((a - b).Length for a, b in zip(cb.Poles, auto))
+    dw = max((a - b).Length for a, b in zip(cb.Poles, want))
+    faces = len(cb.Shape.Faces) if cb.Shape is not None else 0
+    checks.append("pinned PatchB[0]: %d poles, %d face(s), "
+                  "max|dPole| vs the automatic build %.3e mm (must be != 0), "
+                  "vs the pinned derivation %.3e mm"
+                  % (len(cb.Poles), faces, db, dw))
+    if getattr(cb.MemberPatch, "Name", None) != "PatchB" \
+            or int(cb.MemberCorner) != 0:
+        errors.append("the pin did not stick: MemberPatch=%r MemberCorner=%r"
+                      % (cb.MemberPatch, cb.MemberCorner))
+    if len(cb.Poles) != 36 or faces < 1:
+        errors.append("the pinned build is not a 36-pole surface: %d poles, "
+                      "%d faces" % (len(cb.Poles), faces))
+    if db <= 1e-3:
+        errors.append("the pin was IGNORED: pinned poles are the automatic "
+                      "ones (max|dPole| %.3e mm)" % db)
+    if dw != 0.0:
+        errors.append("the pinned build is not the pinned derivation: "
+                      "max|dPole| %.3e mm" % dw)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_3valent_member_pin_refuses_an_unassemblable_corner(doc):
+    """#117: a pin no member can be assembled at is refused BY NAME and
+    creates nothing (the #80/#83 lesson). Only corner index 0 assembles
+    on each fixture patch, so PatchA[1] is unassemblable; a corner outside
+    0..3 and a patch outside the ring are refused the same way. The ops
+    path computes the corner before it constructs anything, so the tree is
+    untouched (`created: []`)."""
+    import SilkCorner
+
+    errors, checks = [], []
+    ccm.build_cube_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIP_NAMES]
+    patch_a = doc.getObject("PatchA")
+
+    for label, bad, must_name in (
+            ("an unassemblable corner", (patch_a, 1), "PatchA[1]"),
+            ("a corner outside 0..3", (patch_a, 7), "0..3"),
+            ("a patch outside the ring", ("NoSuchPatch", 0),
+             "NoSuchPatch")):
+        grids, _cells, why = SilkCorner.corner_inputs(strips, pin=bad)
+        if grids is not None or not why or must_name not in why:
+            errors.append("%s was not refused by name: grids=%r why=%r"
+                          % (label, grids, why))
+        else:
+            checks.append("%s: refused by name: %s" % (label, why))
+
+    before = _corner_names(doc)
+    with _CaptureConsole() as cap:
+        made = create_corner_blend(*strips, pin=(patch_a, 1))
+    after = _corner_names(doc)
+    msg = "".join(cap.errors).strip()
+    if made is not None or after != before or "PatchA[1]" not in msg:
+        errors.append("the ops pin refusal created something: made=%s "
+                      "corners %s -> %s, message %r"
+                      % (made, before, after, cap.errors))
+    else:
+        checks.append("ops refusal: created: %s -- message names the "
+                      "pinned corner: %s" % (after, msg))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_cube_corner_fixture_is_oracle_green,
     test_3valent_cube_corner_builds_green,
@@ -644,4 +801,7 @@ ALL_TESTS = [
     test_3valent_cap_smoothing_is_side_agnostic,
     test_3valent_cube_corner_seam_measurement,
     test_3valent_cube_corner_non_ring_refused,
+    test_3valent_member_pin_is_opt_in_and_changes_nothing_when_unset,
+    test_3valent_member_pin_moves_the_member_to_the_named_corner,
+    test_3valent_member_pin_refuses_an_unassemblable_corner,
 ]

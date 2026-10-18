@@ -312,16 +312,20 @@ def _existing_corner_blend(doc, strips):
     return None
 
 
-def create_corner_blend(*strips, name="CornerBlend"):
+def create_corner_blend(*strips, name="CornerBlend", pin=None):
     """Create the CornerBlend filling the junction where 3 or 4 blend
     strips meet (#28; rebuilt on the subgrid chain in #91).
 
     `strips` are the ring Blend strips, in any order (or one list): three
     where three patches meet (the triangular 4th member is built
     invisibly), four where four do.
+    `pin` is the optional triangular-member placement (#117):
+    `(ring patch, corner index 0..3)`, the corner the member must be
+    built at; None leaves the automatic search in charge.
     The ring resolver orders them; the corner geometry is computed
     BEFORE anything is constructed, so a selection that is not a ring
-    around one shared junction is refused by name and leaves NO
+    around one shared junction -- or a pin no member can be assembled at
+    -- is refused by name and leaves NO
     object in the tree (the #80/#83 "invalid + Up-to-date" lesson: never
     park a dead object in the document). A junction that already has a
     corner returns that existing CornerBlend -- an idempotent no-op.
@@ -343,7 +347,7 @@ def create_corner_blend(*strips, name="CornerBlend"):
             "Nothing was created.\n"
             % (len(strips), "" if len(strips) == 1 else "s"))
         return None
-    grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL)
+    grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL, pin)
     if grids is None:
         FreeCAD.Console.PrintError(
             "Silk: cannot create a corner blend from these %d blends -- %s. "
@@ -369,6 +373,12 @@ def create_corner_blend(*strips, name="CornerBlend"):
     obj.ViewObject.DisplayMode = "Flat Lines"
     obj.ViewObject.ShapeColor = (1.00, 0.67, 0.00)
     obj.ViewObject.Transparency = 30
+    if pin is not None:
+        # #117: the pin rides the object as the same two properties the
+        # data tab edits; setting them recomputes (onChanged), so the
+        # last doc.recompute() below is the no-op confirmation.
+        obj.MemberPatch = pin[0]
+        obj.MemberCorner = int(pin[1])
     doc.recompute()
     return obj
 

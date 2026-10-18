@@ -494,6 +494,37 @@ def test_check_corner_blend_refuses_wrong_input_shapes_by_name(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_corner_blend_member_pin_is_refused_on_a_4_valent_ring(doc):
+    """#117: the pin places the TRIANGULAR 4th member, which a 4-valent
+    ring does not have (its fourth member is a real strip). A pin on such
+    a ring is refused by name and creates nothing rather than being
+    silently ignored."""
+    errors, checks = [], []
+    cm.build_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIP_NAMES]
+    patch = strips[0].PatchA
+    grids, _cells, why = corner_inputs(strips, pin=(patch, 0))
+    if grids is not None or not why or "3-valent" not in why:
+        errors.append("corner_inputs did not refuse a 4-valent pin by "
+                      "name: grids=%r why=%r" % (grids, why))
+    else:
+        checks.append("corner_inputs refuses it by name: %s" % why)
+    before = [o.Name for o in doc.Objects
+              if getattr(o, "object_type", "") == "CornerBlend"]
+    with _CaptureConsole() as cap:
+        made = create_corner_blend(*strips, pin=(patch, 0))
+    after = [o.Name for o in doc.Objects
+             if getattr(o, "object_type", "") == "CornerBlend"]
+    if made is not None or after != before or not "".join(cap.errors).strip():
+        errors.append("the 4-valent pin refusal created something: made=%s "
+                      "corners %s -> %s, message %r"
+                      % (made, before, after, cap.errors))
+    else:
+        checks.append("ops refusal: created: %s -- %s"
+                      % (after, "".join(cap.errors).strip()))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_corner_blend_builds_green,
     test_corner_blend_pole_parity_with_legacy_chain,
@@ -509,4 +540,5 @@ ALL_TESTS = [
     test_three_strip_ring_is_checkable,
     test_three_strip_ring_negative_boundary_pole,
     test_check_corner_blend_refuses_wrong_input_shapes_by_name,
+    test_corner_blend_member_pin_is_refused_on_a_4_valent_ring,
 ]
