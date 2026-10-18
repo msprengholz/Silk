@@ -38,13 +38,52 @@ one `SubGrid33_2Grid64` cell.
     7.1e-3 /mm on the demo's legacy neighbours; FreeCAD `Surface::Filling`
     order-2 `k_gap` 1.7e-1 vs order-1 8.2e-2 — **not** a per-junction
     reading of these files.
-- **These junctions were not rebuilt**, so no corner object exists to
-  measure: a whole-sketch rebuild through `SilkWorkflowOps` refuses the four
-  ring faces at `create_patch` (their boundaries are half-ribs; see
-  `silk-demo-01-inventory.md` §6 and `Tests/test_demo01_rebuild.py`). Only
-  the Right end cap rebuilds, and it is a face, not a junction.
+- **Nothing was measured ACROSS these junctions** — not on the demo's own
+  sketches and not on the rebuild. Two rebuilds exist, both in
+  `Tests/test_demo01_rebuild.py`, and neither one produced a continuity
+  number:
+  - from the **demo's own 29 sketches**: 12/12 Edges build (pole-identical
+    to the stored `ControlPoly4` objects, max delta 0.0) but the four
+    rib-bounded faces are refused at `create_patch` ("do not close a
+    loop", naming the outer cross-section edge that meets only 0 of the
+    other 3), so there are 0 seams, 0 blends and 0 corners to measure;
+  - from the **fixture** (the same 29 sketches plus four documented
+    half-rib supplements, `Resources/Test_files/examples/
+    SketchOnly_Demo01Subset.FCStd`): 12 Edges → 5 Patches → 8 Blends →
+    4 CornerBlends, oracle-green, and the demo's own stored grid order
+    fills the same four junctions with the same 36 poles (max dev <=
+    4e-13). Those corners exist — but the numbers #97/#100 quote are the
+    **stored demo junctions'**, not this build's, and no `g2_oracle` run
+    has been pointed at either.
+  The demo-side instrument (`Tests/g2_demo_corner.py`) is MANUAL and reads
+  the *stored* `CubicSurface_66`/`CubicSurface_64` objects, so a rebuild
+  side-by-side is a new measurement, not a rerun of it.
 - `twist_gap` is not reversal-invariant (#101): only non-reversed
   correspondences count as evidence. No `twist_gap` is quoted here because
   nothing was measured.
 - No continuity label is asserted anywhere (the suite guards this:
   `test_no_continuity_threshold_in_suite`).
+
+## Remaining (the ticket narrowed, 2026-10-18)
+
+`#98`'s acceptance items 1, 2 and 4 are done and pinned in the repo: the
+sketch-only fixture with its derived guard (`Tests/test_example_documents.
+py`, `Resources/Test_files/examples/README.md`), this table, and the
+programmatic rebuild (`Tests/test_demo01_rebuild.py`, 3 tests) reaching the
+demo's topology from the fixture. What is **left** is one item:
+
+> Acceptance item 3 — *"Continuity reported with #97's instrument — with its
+error floor — for both the rebuild and the original demo file, side by side,
+using the same instrument."*
+
+It is **not attempted**, so no `k_gap` is quoted for either side here. The
+named blocker: the two sides live in different instruments and documents —
+the demo side is `Tests/g2_demo_corner.py` (MANUAL, opens the 357-object
+demo, and `ArachNURBS` needs a GUI process), the rebuild side needs the same
+instrument pointed at the fixture build's corner-vs-blend seams, and the
+rebuild's neighbours are OUR blends, not the demo's stored grids, so the two
+numbers are not the same quantity. The one input the demo's own 29 sketches
+cannot supply is unchanged and is not part of this item: a Silk `Edge`
+consumes a **whole sketch** (no trim property) while the demo's ring faces
+are bounded by rib **halves**, which is exactly what the fixture's four
+documented supplements stand in for (`silk-demo-01-inventory.md` §6).
