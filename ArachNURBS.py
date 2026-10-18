@@ -1674,7 +1674,6 @@ class SilkPose_3P: # alternative to Attachment/MapMode for Placement - by three 
 
 class ControlPoly4_3L:	# made from a single sketch containing 3 line objects connected end to end
 	def __init__(self, obj , sketch):
-		FreeCAD.Console.PrintMessage("\nControlPoly4_3L class Init\n")
 
 		latest_version = "0.02" # must match in onDocumentRestored()
 		
@@ -1872,7 +1871,6 @@ class ControlPoly4_2N:	# made from 2 node sketches. each node sketch contains on
 		obj.setEditorMode("internalName", 1)
 
 	def __init__(self, obj , sketch0, sketch1):
-		FreeCAD.Console.PrintMessage("\nControlPoly4_2N class Init\n")
 		
 		latest_version = "0.02" # must match in onDocumentRestored()
 		
@@ -2082,7 +2080,6 @@ class ControlPoly4_2P:	# made from 2 pointOnCurve objects
 		obj.setEditorMode("internalName", 1)
 
 	def __init__(self, obj , point0, point1):
-		FreeCAD.Console.PrintMessage("\nControlPoly4_2P class Init\n")
 		latest_version = "0.00" # must match in onDocumentRestored()
 		self.ControlPoly4_2P_Attributes(obj, 
 								  		point0, point1, 
@@ -2186,7 +2183,6 @@ class ControlPoly4_FirstElement:	# made from the first element of a single sketc
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlPoly4_FirstElement class Init\n")
 		obj.addProperty("App::PropertyLink","Sketch","ControlPoly4_FirstElement","reference Sketch").Sketch = sketch
 		obj.addProperty("Part::PropertyGeometryList","Legs","ControlPoly4_FirstElement","control segments").Legs
 		obj.addProperty("App::PropertyVectorList","Poles","ControlPoly4_FirstElement","Poles").Poles
@@ -2398,7 +2394,6 @@ class ControlPoly4_2X4P:# made by composing two existing ControlPoly4s
 		obj.setEditorMode("internalName", 1)
 
 	def __init__(self, obj , poly4_0, poly4_1):
-		FreeCAD.Console.PrintMessage("\nControlPoly4_2X4P class Init\n")
 		
 		latest_version = "0.02" # must match in onDocumentRestored()
 		
@@ -2578,7 +2573,6 @@ class ControlPoly4_GridEdge:	# extract a ControlPoly4 from the edge of a Control
 		obj.setEditorMode("internalName", 1)
 	
 	def __init__(self, obj , grid, edge):
-		FreeCAD.Console.PrintMessage("\nControlPoly4_GridEdge class Init\n")
 
 		latest_version = "0.01" # must match in onDocumentRestored()
 		self.ControlPoly4_GridEdge_Attributes(obj, grid, edge, default_tol, False, latest_version)
@@ -2729,7 +2723,6 @@ class ControlPoly4_GridEdge:	# extract a ControlPoly4 from the edge of a Control
 
 class ControlPoly6_5L:	# made from a single sketch containing 5 line objects connected end to end
 	def __init__(self, obj , sketch):
-		FreeCAD.Console.PrintMessage("\nControlPoly6_5L class Init\n")
 
 		latest_version = "0.01" # must match in onDocumentRestored()
 		
@@ -2881,7 +2874,6 @@ class ControlPoly6_5L:	# made from a single sketch containing 5 line objects con
 
 class ControlPoly6_2N:	# made from 2 node sketches. each node sketch contain 2 lines, and one circle.
 	def __init__(self, obj , sketch0, sketch1):
-		FreeCAD.Console.PrintMessage("\nControlPoly6_2N class Init\n")
 
 		latest_version = "0.01" # must match in onDocumentRestored()
 		
@@ -3128,7 +3120,6 @@ class ControlPoly6_FirstElement:	# made from the first element of a single sketc
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlPoly6_FirstElement class Init\n")
 		obj.addProperty("App::PropertyLink","Sketch","ControlPoly6_FirstElement","reference Sketch").Sketch = sketch
 		obj.addProperty("Part::PropertyGeometryList","Legs","ControlPoly6_FirstElement","control segments").Legs
 		obj.addProperty("App::PropertyVectorList","Poles","ControlPoly6_FirstElement","Poles").Poles
@@ -3323,7 +3314,6 @@ class ControlGrid44_4:	# made from 4 ControlPoly4.
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlGrid44_4 class Init\n")
 		obj.addProperty("App::PropertyLink","Poly0","ControlGrid44_4","control polygon").Poly0 = poly0
 		obj.addProperty("App::PropertyLink","Poly1","ControlGrid44_4","control polygon").Poly1 = poly1
 		obj.addProperty("App::PropertyLink","Poly2","ControlGrid44_4","control polygon").Poly2 = poly2
@@ -3557,7 +3547,6 @@ class ControlGrid44_3:	# made from 3 CubicControlPoly4.
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlGrid44_3 class Init\n")
 		obj.addProperty("App::PropertyLink","Poly0","ControlGrid44_3","control polygon").Poly0 = poly0
 		obj.addProperty("App::PropertyLink","Poly1","ControlGrid44_3","control polygon").Poly1 = poly1
 		obj.addProperty("App::PropertyLink","Poly2","ControlGrid44_3","control polygon").Poly2 = poly2
@@ -3788,7 +3777,6 @@ class ControlGrid44_3_Rotate_OLD:	# made from 3 CubicControlPoly4.
 								# to align towards the degenerate corner.
 	def __init__(self, obj , poly0, poly1, poly2):
 		''' Add the properties '''
-		FreeCAD.Console.PrintMessage("\nControlGrid44_3_Rotate class Init\n")
 		obj.addProperty("App::PropertyLink","Poly0","ControlGrid44_3_Rotate","control polygon").Poly0 = poly0
 		obj.addProperty("App::PropertyLink","Poly1","ControlGrid44_3_Rotate","control polygon").Poly1 = poly1
 		obj.addProperty("App::PropertyLink","Poly2","ControlGrid44_3_Rotate","control polygon").Poly2 = poly2
@@ -3939,7 +3927,6 @@ class ControlGrid44_3_Rotate:	# made from 3 CubicControlPoly4.
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlGrid44_3 class Init\n")
 		obj.addProperty("App::PropertyLink","Poly0","ControlGrid44_3","control polygon").Poly0 = poly0
 		obj.addProperty("App::PropertyLink","Poly1","ControlGrid44_3","control polygon").Poly1 = poly1
 		obj.addProperty("App::PropertyLink","Poly2","ControlGrid44_3","control polygon").Poly2 = poly2
@@ -4250,7 +4237,6 @@ class ControlGrid44_flow: # create a copy of a ControlGrid44 grid whose internal
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlGrid44_flow class Init\n")
 		obj.addProperty("App::PropertyLink","InputGrid","ControlGrid44_flow","input control grid").InputGrid = input_grid
 		obj.addProperty("Part::PropertyGeometryList","Legs","ControlGrid44_flow","control segments").Legs
 		obj.addProperty("App::PropertyVectorList","Poles","ControlGrid44_flow","Poles").Poles
@@ -4689,7 +4675,6 @@ class ControlGrid66_4:	# made from 4 CubicControlPoly6.
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlGrid66_4 class Init\n")
 		obj.addProperty("App::PropertyLink","Poly0","ControlGrid66_4","control polygon").Poly0 = poly0
 		obj.addProperty("App::PropertyLink","Poly1","ControlGrid66_4","control polygon").Poly1 = poly1
 		obj.addProperty("App::PropertyLink","Poly2","ControlGrid66_4","control polygon").Poly2 = poly2
@@ -4985,7 +4970,6 @@ class ControlGrid64_4:	# made from 2 CubicControlPoly6 and 2 CubicControlPoly4.
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlGrid64_4 class Init\n")
 		obj.addProperty("App::PropertyLink","Poly6_0","ControlGrid64_4","control polygon").Poly6_0 = poly6_0
 		obj.addProperty("App::PropertyLink","Poly4_1","ControlGrid64_4","control polygon").Poly4_1 = poly4_1
 		obj.addProperty("App::PropertyLink","Poly6_2","ControlGrid64_4","control polygon").Poly6_2 = poly6_2
@@ -5237,7 +5221,6 @@ class ControlGrid64_4:	# made from 2 CubicControlPoly6 and 2 CubicControlPoly4.
 class ControlGrid64_3:	# made from 2 CubicControlPoly4 and 1 CubicControlPoly6. degenerate grid. NOT IN USE ANYWHERE
 	def __init__(self, obj , poly4_0, poly6_1, poly4_2):
 		''' Add the properties '''
-		FreeCAD.Console.PrintMessage("\nControlGrid64_4 class Init\n")
 		obj.addProperty("App::PropertyLink","Poly4_0","ControlGrid64_3","control polygon").Poly4_0 = poly4_0
 		obj.addProperty("App::PropertyLink","Poly6_1","ControlGrid64_3","control polygon").Poly6_1 = poly6_1
 		obj.addProperty("App::PropertyLink","Poly4_2","ControlGrid64_3","control polygon").Poly4_2 = poly4_2
@@ -5365,7 +5348,6 @@ class CubicCurve_4:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nCubicCurve_4 class Init\n")
 		obj.addProperty("App::PropertyLink","Poly","CubicCurve_4","control polygon").Poly = poly
 		obj.Proxy = self
 		'''
@@ -5474,7 +5456,6 @@ class CubicCurve_6:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nCubicCurve_6 class Init\n")
 		obj.addProperty("App::PropertyLink","Poly","CubicCurve_6","control polygon").Poly = poly
 		obj.Proxy = self
 		'''
@@ -5583,7 +5564,6 @@ class CubicCurve_6:
 class ControlPoly6_Bezier: # not currently used. ControlPoly6_FirstElement gets the correct result already. also, wrong section
 	def __init__(self, obj , cubiccurve4_0):
 		''' Add the properties '''
-		FreeCAD.Console.PrintMessage("\nControlPoly6_Bezier class Init\n")
 		obj.addProperty("App::PropertyLink","Sketch","ControlPoly6_Bezier","reference Bezier Curve").CubicCurve4_0 = cubiccurve4_0
 		obj.addProperty("Part::PropertyGeometryList","Legs","ControlPoly6_Bezier","control segments").Legs
 		obj.addProperty("App::PropertyVectorList","Poles","ControlPoly6_Bezier","Poles").Poles
@@ -5629,7 +5609,6 @@ class ControlPoly6_FilletBezier:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlPoly6_FilletBezier class Init\n")
 		obj.addProperty("App::PropertyLink","CubicCurve4_0","ControlPoly6_FilletBezier","First reference Bezier Curve").CubicCurve4_0 = cubiccurve4_0
 		obj.addProperty("App::PropertyLink","CubicCurve4_1","ControlPoly6_FilletBezier","Second reference Bezier Curve").CubicCurve4_1 = cubiccurve4_1
 		obj.addProperty("App::PropertyFloat","Scale_0","ControlPoly6_FilletBezier","First curve tangent scaling").Scale_0 = 2.0
@@ -5875,7 +5854,6 @@ class Point_onCurve:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nPoint_onCurve class Init\n")
 		obj.addProperty("App::PropertyLink","NL_Curve","Point_onCurve","reference curve").NL_Curve = NL_Curve
 		lower = 0.0
 		upper = 1.0
@@ -6002,7 +5980,6 @@ class ControlPoly4_segment:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlPoly4_segment class Init\n")
 		obj.addProperty("App::PropertyLink","NL_Curve","ControlPoly4_segment","reference Curve").NL_Curve = NL_Curve
 		obj.addProperty("App::PropertyLink","Point_onCurve_0","ControlPoly4_segment","first reference point").Point_onCurve_0 = Point_onCurve_0
 		obj.addProperty("App::PropertyLink","Point_onCurve_1","ControlPoly4_segment","second reference point").Point_onCurve_1 = Point_onCurve_1
@@ -6162,7 +6139,6 @@ class CubicSurface_44:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nCubicSurface_44 class Init\n")
 		obj.addProperty("App::PropertyLink","Grid","CubicSurface_44","control grid").Grid = grid
 		obj.Proxy = self
 		'''
@@ -6321,7 +6297,6 @@ class CubicSurface_66:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nCubicSurface_66 class Init\n")
 		obj.addProperty("App::PropertyLink","Grid","CubicSurface_66","control grid").Grid = grid
 		obj.Proxy = self
 		'''
@@ -6485,7 +6460,6 @@ class CubicSurface_64:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nCubicSurface_64 class Init\n")
 		obj.addProperty("App::PropertyLink","Grid","CubicSurface_64","control grid").Grid = grid
 		obj.Proxy = self
 		'''
@@ -6797,7 +6771,6 @@ class ControlGrid44_EdgeSegment:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlGrid44_EdgeSegment class Init\n")
 		obj.addProperty("App::PropertyLink","NL_Surface","ControlGrid44_EdgeSegment","Base Surface").NL_Surface = NL_Surface
 		obj.addProperty("App::PropertyLink","NL_Curve","ControlGrid44_EdgeSegment","reference Curve").NL_Curve = NL_Curve
 		obj.addProperty("Part::PropertyGeometryList","Legs","ControlGrid44_EdgeSegment","control segments").Legs
@@ -6976,7 +6949,6 @@ class ControlGrid44_2EdgeSegments:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlGrid44_2EdgeSegments class Init\n")
 		obj.addProperty("App::PropertyLink","NL_Surface","ControlGrid44_2EdgeSegments","Base Surface").NL_Surface = NL_Surface
 		obj.addProperty("App::PropertyLink","NL_Curve_a","ControlGrid44_2EdgeSegments","reference Curve a").NL_Curve_a = NL_Curve_a
 		obj.addProperty("App::PropertyLink","NL_Curve_b","ControlGrid44_2EdgeSegments","reference Curve b").NL_Curve_b = NL_Curve_b
@@ -7260,7 +7232,6 @@ class ControlGrid64_2Grid44:  # surfaces not strictly used as input, but this is
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nControlGrid64_2Grid44 class Init\n")
 		obj.addProperty("App::PropertyLink","Grid_0","ControlGrid64_2Grid44","first reference 4X4 grid").Grid_0 = Grid_0
 		obj.addProperty("App::PropertyLink","Grid_1","ControlGrid64_2Grid44","second reference 4X4 grid").Grid_1 = Grid_1
 		obj.addProperty("App::PropertyFloat","scale_tangent_0","ControlGrid64_2Grid44","first grid tangent scale").scale_tangent_0 = 2.0
@@ -7867,7 +7838,6 @@ class SubGrid33_2Grid64:
 		
 		# original attribute set before versioning of classes
 		'''
-		FreeCAD.Console.PrintMessage("\nSubGrid33_2Grid64 class Init\n")
 		obj.addProperty("App::PropertyLink","Grid_0","SubGrid33_2Grid64","first reference 6X4 grid").Grid_0 = Grid_0
 		obj.addProperty("App::PropertyLink","Grid_1","SubGrid33_2Grid64","second reference 6X4 grid").Grid_1 = Grid_1
 		obj.addProperty("App::PropertyFloat","adjust_0","SubGrid33_2Grid64","adjust along Grid_0").adjust_0 = 0
@@ -8077,7 +8047,6 @@ class SubGrid33_2Grid64:
 class ControlGrid66_4Sub:
 	def __init__(self, obj , SubGrid_0, SubGrid_1, SubGrid_2, SubGrid_3):
 		''' Add the properties '''
-		FreeCAD.Console.PrintMessage("\nControlGrid66_4Sub class Init\n")
 		obj.addProperty("App::PropertyLink","SubGrid_0","ControlGrid66_4Sub","first reference 3X3 sub grid").SubGrid_0 = SubGrid_0
 		obj.addProperty("App::PropertyLink","SubGrid_1","ControlGrid66_4Sub","second reference 3X3 sub grid").SubGrid_1 = SubGrid_1
 		obj.addProperty("App::PropertyLink","SubGrid_2","ControlGrid66_4Sub","third reference 3X3 sub grid").SubGrid_2 = SubGrid_2
@@ -8199,7 +8168,6 @@ class ControlGrid66_4Sub:
 class ControlGrid64_3_1Grid44:
 	def __init__(self, obj , ControlGrid44, Corner):
 		''' Add the properties '''
-		FreeCAD.Console.PrintMessage("\nControlGrid64_3_1Grid44 class Init\n")
 		obj.addProperty("App::PropertyLink","ControlGrid44","ControlGrid64_3_1Grid44","Reference Bezier Surface").ControlGrid44 = ControlGrid44
 		obj.addProperty("App::PropertyFloat","Corner","ControlGrid64_3_1Grid44","Corner blending curve").Corner = Corner
 		obj.addProperty("Part::PropertyGeometryList","Legs","ControlGrid64_3_1Grid44","control segments").Legs
@@ -8401,7 +8369,6 @@ class ControlGrid64_3_1Grid44:
 class ControlGrid64_normal:
 	def __init__(self, obj , Grid64, v0_normalize_2, v0_normalize_3, v3_normalize_20, v3_normalize_21):
 		''' Add the properties '''
-		FreeCAD.Console.PrintMessage("\nControlGrid64_normal class Init\n")
 		obj.addProperty("App::PropertyLink","Input_Grid","ControlGrid64_normal","Reference 6X4 Grid").Input_Grid = Grid64
 		obj.addProperty("App::PropertyFloat","v0_normalize_2","ControlGrid64_normal","Normalization factor along v0 edge, third point").v0_normalize_2 = v0_normalize_2
 		obj.addProperty("App::PropertyFloat","v0_normalize_3","ControlGrid64_normal","Normalization factor along v0 edge, fourth point").v0_normalize_3 = v0_normalize_3
@@ -8478,7 +8445,6 @@ class ControlGrid64_normal:
 class ControlGrid64_Surf44:
 	def __init__(self, obj , Input_Surf44, direction_to_raise):
 		''' Add the properties '''
-		FreeCAD.Console.PrintMessage("\nControlGrid64_Surf44 class Init\n")
 		obj.addProperty("App::PropertyLink","Input_Surf44","ControlGrid64_Surf44","Reference 4X4 Surface").Input_Surf44 = Input_Surf44
 		obj.addProperty("App::PropertyString","direction_to_raise","ControlGrid64_Surf44","parameter direction to raise (u or v)").direction_to_raise = direction_to_raise
 		obj.addProperty("Part::PropertyGeometryList","Legs","ControlGrid64_normal","control segments").Legs
@@ -8615,7 +8581,6 @@ class ControlGrid64_Surf44:
 class SubGrid63_2Surf64:
 	def __init__(self, obj , Surf_0, Surf_1):
 		''' Add the properties '''
-		FreeCAD.Console.PrintMessage("\nSubGrid62Tri_2Surf64 class Init\n")
 		obj.addProperty("App::PropertyLink","Surf_0","SubGrid63_2Surf64","first reference 6X4 surface").Surf_0 = Surf_0
 		obj.addProperty("App::PropertyLink","Surf_1","SubGrid63_2Surf64","second reference 6X4 surface").Surf_1 = Surf_1
 		obj.addProperty("Part::PropertyGeometryList","Legs","SubGrid63_2Surf64","control segments").Legs
@@ -8970,7 +8935,6 @@ class SubGrid63_2Surf64:
 class ControlGridNStar66_NSub:
 	def __init__(self, fp , SubList):
 		''' Add the properties '''
-		FreeCAD.Console.PrintMessage("\nControlGridNStar66_NSub class Init\n")
 		fp.addProperty("App::PropertyLinkList","SubList","ControlGridNStar66_NSub","Reference Sub Grids").SubList = SubList
 		fp.addProperty("App::PropertyInteger","N","ControlGridNStar66_NSub","N").N
 		fp.setEditorMode("N", 2)
@@ -9407,7 +9371,6 @@ class StarTrim_CubicNStar:
 class ControlGridNStar66_StarTrim: # quick and dirty test for star center refinement. uses a list of subgrids within the single linked StarTrim, instead of a linklist. 
 	def __init__(self, fp , StarTrim):
 		''' Add the properties '''
-		FreeCAD.Console.PrintMessage("\nControlGridNStar66_StarTrim class Init\n")
 		fp.addProperty("App::PropertyLink","StarTrim","ControlGridNStar66_StarTrim","Reference StarTrim").StarTrim = StarTrim
 		fp.addProperty("App::PropertyInteger","N","ControlGridNStar66_StarTrim","N").N
 		fp.setEditorMode("N", 2)
