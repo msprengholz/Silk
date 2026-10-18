@@ -56,13 +56,27 @@ EXPECTED_MANUAL = {
     "test_oracle_band_cells",
     "test_parametric_rebuild",
     "test_restore_contract",
-    "test_runner_timeout",
     "test_runner_watchdog",
     "test_seam_resolver",
     "test_seam_side",
     "test_silkguide",
     "test_task_panel",
 }
+
+
+# Guards that must NOT be deferred, though they are tests of the runner: a
+# module whose subject is the machinery the tier split itself uses cannot
+# live in the tier that machinery creates. test_runner_timeout.py was
+# deferred by the by-module rule ("the runner's tests are runner tests") and
+# costs ~1.3 s -- it was never deferred for being slow. It then stayed green
+# over the #122 commit that added `include_manual` as the seventh `_silk_run`
+# argument -- the very signature change the split introduced -- and the break
+# only surfaced in a ~12 minute `--manual` run. The tier gate protects the
+# fast run, so the gate's own signature (and run_all/watchdog around it) must
+# be checked BY the fast run. Do not move it back.
+NOT_DEFERRABLE_FAST = (
+    "test_runner_timeout",
+)
 
 
 # Tests that must NEVER leave the default (fast) tier. AGENTS.md names each
@@ -98,6 +112,13 @@ def test_manual_tier_is_exactly_the_expected_set(doc):
     for name in sorted(found - EXPECTED_MANUAL):
         errors.append("%s carries MANUAL but is not in EXPECTED_MANUAL "
                       "(a deferral nobody recorded?)" % name)
+    for name in NOT_DEFERRABLE_FAST:
+        if name in found or name in EXPECTED_MANUAL:
+            errors.append("%s is deferred, but its subject is the runner/tier "
+                          "machinery the fast run depends on -- see the "
+                          "comment on NOT_DEFERRABLE_FAST" % name)
+        else:
+            checks.append("%s is in the fast tier" % name)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 

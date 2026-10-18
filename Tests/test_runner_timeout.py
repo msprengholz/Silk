@@ -34,12 +34,13 @@ injected (``SILK_RUN_CEILING=2`` or ``wait_for_call(ceiling=...)``), and the
 promptness assertions measure the wall clock.
 """
 
-# --- manual tier ------------------------------------------------------
-# This module's subject is an end-to-end rebuild / GUI drive /
-# measurement sweep, so it is NOT in the default (fast) tier. Run it
-# with `python3 Tests/run_all.py --manual` (or by name as a filter);
-# Tests/test_manual_tier.py asserts it stays importable. See suite.py.
-MANUAL = True
+# --- FAST tier, deliberately ------------------------------------------
+# No MANUAL marker: this module's subject is the RUNNER's own plumbing
+# (`run_all.py`'s remote-call signature + `Tests/watchdog`'s deadline
+# mechanics), i.e. exactly the machinery a tier split has to change to
+# exist. Deferring it would hide a broken guard behind the mechanism it
+# guards -- measured cost ~1.3 s, so it was never slow enough to defer.
+# The reason is recorded in Tests/test_manual_tier.py, which pins the set.
 
 import json
 import os
