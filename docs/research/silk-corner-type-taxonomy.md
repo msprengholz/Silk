@@ -4,6 +4,9 @@ Source: read directly from the three demo files' `Document.xml` link graphs (off
 GUI) plus upstream's own class help. Each fact below cites the upstream object that states it.
 The full four-file census (Demos 01/02/03 + `CadDivision_19`) is `docs/research/silk-demo-blend-census.md`.
 
+The user-facing summary of the same ground (vocabulary, supported valences, what the
+maintainer's video does differently) is `docs/corner-blending.md`.
+
 ## The three concretely observed corner families
 
 | Demo | Junctions | Triangle (valence) | Bulk / seam mechanic | Fill object | Corner classification |

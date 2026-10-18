@@ -23,6 +23,8 @@ _Avoid_: subpatch, segment
 
 **Band**:
 The row of subgrid cells on a patch adjacent to its seam, consumed by the patch's blend.
+Its **band width** (the `USplit`/`VSplit` scalar at that seam's end of that axis) is the
+maintainer's video's *setback* -- the same property, and both words are in use.
 _Avoid_: strip, blend band
 
 **Seam**:
@@ -46,8 +48,30 @@ The subgrid cell where the bands of two seams meet at a patch corner; reserved f
 _Avoid_: corner subgrid
 
 **Corner fill**:
-The surface that closes the gap where four bands meet at a four-patch corner.
+The surface that closes the gap where four bands meet at a four-patch corner. FreeCAD's
+`Surface::Filling` over a boundary wire (`Silk_CornerFill`), **not** a `CornerBlend`.
 _Avoid_: corner blend, corner patch
+
+**Corner blend**:
+A `CornerBlend`: the single 6x6 surface closing the junction of three or four patches,
+built from the ring of strip blends (four subgrids). Three- and four-patch junctions only;
+five or more is refused by name -- use a corner fill there.
+_Avoid_: corner surface, corner patch, corner subgrid
+
+**Triangular member**:
+The degenerate grid with a collapsed row (`ControlGrid64_3_1Grid44`) a three-patch corner
+needs to reach the four subgrids its fill machinery demands. Upstream calls it a
+*scaffolding piece*; the collapsed row gives a degenerate-boundary normal on the two seams
+that touch it.
+_Avoid_: triangular patch, fake blend, fourth strip
+
+**Rolling fillet**:
+The maintainer's name for a corner showing **two zones of different fillet size** -- one
+large fillet in one direction, a small one that appears to roll around it. **The author's
+effect, judged by eye**, and we do not claim it: what is measured on our corner is
+*anisotropy* (asymmetric setbacks move its curvature spread 1.04 -> 2.29) and, past a
+threshold, a *saddle* -- and a saddle is not two fillets (`docs/corner-blending.md`).
+_Avoid_: our corner is a rolling fillet (overclaim)
 
 **Restore shim**:
 A class + view provider kept in a module only so an old document that saved
