@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Dedicated Silk_Guide icon (#94): the wizard BUTTON's own icon, so the
+       toolbar no longer shows the workbench icon (Resources/Icons/Silk.svg)
+       twice. Candidate A, chosen and wired: three ascending steps (the
+       panel's three collect-then-confirm stages) with the orange accent
+       marking the step in hand. Palette and light tile follow the #54
+       family (SilkPatch.svg / BlendStrip.svg): light tile, blue geometry,
+       orange accent, deepened strokes so it reads light AND dark. -->
+  <rect width="64" height="64" fill="#eceef1" rx="8" ry="8"/>
+  <rect width="64" height="64" fill="none" stroke="#c9d0d8" stroke-width="1" rx="8" ry="8"/>
+  <path d="M11 51 L11 40 L23 40 L23 29 L35 29 L35 18 L47 18 L47 51 Z"
+        fill="#d7e9fa" stroke="#2f5270" stroke-width="3"
+        stroke-linejoin="round"/>
+  <path d="M11 40 L47 40 M23 29 L47 29" fill="none" stroke="#2f5270"
+        stroke-width="1.5" stroke-dasharray="3 3"/>
+  <circle cx="41" cy="12" r="5" fill="#f6b26b" stroke="#b95a00"
+          stroke-width="1.5"/>
+</svg>

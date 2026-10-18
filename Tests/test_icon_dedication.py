@@ -11,6 +11,11 @@ new contract:
   4. the dedicated icons actually load through QPixmap (how the tree renders
      them) from a foreign working directory.
 
+#94 adds the WORKBENCH BUTTON to the same contract: the `Silk_Guide`
+command's Pixmap (`SilkTaskPanel.iconPath`) is its own file, not the
+workbench icon `Silk.svg` it used to borrow -- two toolbar entries wearing
+the same picture is exactly the defect this file exists to prevent.
+
 This is additive to Tests/test_icon_path_resolution.py (CWD independence) --
 it does not replace that guard.
 
@@ -88,9 +93,24 @@ def test_icon_dedication(doc):
                        and os.path.basename(patch) != os.path.basename(blend),
                        "%s vs %s" % (patch, blend)))
 
+        # 5. (#94) the wizard BUTTON: `Silk_Guide`'s Pixmap is its own icon,
+        #    not the workbench's `Silk.svg`, and it is absolute + loadable.
+        import SilkTaskPanel
+        guide = SilkTaskPanel.iconPath
+        icons["Guide"] = guide
+        out.append("%-7s Pixmap  -> %s" % ("Guide", guide))
+        checks.append(("Guide command Pixmap is an absolute path",
+                       bool(guide) and os.path.isabs(guide), guide))
+        checks.append(("Guide icon file exists under Resources/Icons",
+                       bool(guide) and os.path.isfile(guide), guide))
+        workbench = "Silk.svg"
+        checks.append(("Guide icon is NOT the workbench Silk.svg",
+                       bool(guide)
+                       and os.path.basename(guide) != workbench, guide))
+
         # 4. the dedicated icons load via QPixmap from a foreign cwd
         os.chdir(OTHER_CWD)
-        for label in ("Edge", "Patch", "Blend"):
+        for label in ("Edge", "Patch", "Blend", "Guide"):
             p = icons.get(label)
             if not p:
                 continue

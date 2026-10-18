@@ -114,7 +114,11 @@ from SilkMachinery import patch_side, side_of_edge, build_intervals, \
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
-iconPath = path_Silk_icons + "/Silk.svg"
+# The `Silk_Guide` command's Pixmap (#94). Its OWN icon: it used to be the
+# workbench's `Silk.svg`, so the button that opens the wizard was visually
+# identical to the workbench entry. Absolute, derived from `Silk_dummy.__file__`
+# like every other Silk icon path (#54's relative-path defect).
+iconPath = path_Silk_icons + "/SilkGuide.svg"
 
 
 # ---- section indices (the QToolBox pages, in order) -----------------------
