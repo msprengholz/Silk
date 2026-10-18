@@ -28,6 +28,24 @@ This script LIVES IN Tests/ ON PURPOSE: `Tests/test_module_generation.py`
 pins the count of top-level Mod `.py` files at 57, so a generator at the
 workbench root would break that guard.
 
+CONSTRAINTS ARE COPIED, NOT REBUILT (#108).  The demo's sketches are not
+loose line soup: they are constrained, and 46 of those constraints
+(42 `Coincident`, 4 `PointOnObject`) sit on an EXTERNAL edge -- the
+neighbouring sketch's hoop line, drawn into this sketch as external
+geometry.  `addConstraint` validates a negative geometry index against the
+sketch's OWN external-geometry list (`GeoEnum::RefExt = -3`, then -4, -5 for
+each further external edge; -1/-2 are the H/V axes and always valid), so
+those 46 raised `IndexError: Constraint has invalid indexes` and the old
+`except Exception: pass` swallowed every one of them: the fixture shipped
+with 347 of the demo's 393 constraints, geometry intact, construction gone.
+The copy is therefore three ordered passes -- all sketches' geometry, then
+every sketch's external geometry, then the constraints -- and every failure
+is RAISED, never swallowed.  (`copyObject(src, True)` also carries
+constraints, but it drags the referenced sketches in as extra objects and
+would break the 33-sketch set; batching `addConstraint(list(...))` fails
+exactly like the one-at-a-time path, because the index validation is the
+same.)
+
 Run (no GUI needed -- it only copies sketches, never touches the maths):
 
     freecadcmd Tests/make_demo01_fixture.py
@@ -53,6 +71,10 @@ DEMO01_PATH = os.path.join(SILK_DIR, "Resources", "Demo_files",
 OUT_PATH = os.path.join(SILK_DIR, "Resources", "Test_files", "examples",
                         "SketchOnly_Demo01Subset.FCStd")
 FIXTURE_NAME = "SketchOnly_Demo01Subset"
+
+# The demo's 29 sketches carry 393 constraints (#108); each of the four
+# half-rib supplements is a 3-line sketch with the 2 joints between them.
+EXPECTED_CONSTRAINTS = 393 + 4 * 2
 
 # (source rib sketch, supplement sketch name) -- the four ring ribs.  The
 # supplement sketch is the u in [0.5, 1] half of the source, from the
@@ -114,6 +136,48 @@ def demo_sketch_names(demo):
                   key=lambda s: int(s[6:]))
 
 
+def copy_external_geometry(src, dst, copied):
+    """Re-attach `dst` to the same external geometry `src` sits on.
+
+    `ExternalGeometry` is read-only from Python in FreeCAD 1.1, so the link
+    is re-made with `addExternal`, one call per sub-element.  `addExternal`
+    APPENDS, so the external indices come out in the demo's order: external
+    edge `i` is `GeoEnum::RefExt - i` = -3, -4, -5, ... -- exactly the
+    indices the demo's own constraints address.  Returns how many links were
+    added.
+    """
+    added = 0
+    for obj, subs in src.ExternalGeometry:
+        for sub in subs:
+            dst.addExternal(copied[obj.Name].Name, sub)
+            added += 1
+    return added
+
+
+def copy_constraints(src, dst):
+    """Copy every constraint of `src` onto `dst`; RAISE if one will not go
+    on, naming the constraint and the reason.
+
+    #108: this was `try: dst.addConstraint(c) except Exception: pass`.  The
+    swallow is what let a fixture with 347 of the demo's 393 constraints
+    ship as a valid one, so a failure here is now fatal and says which
+    constraint it was.
+    """
+    failures = []
+    for i, c in enumerate(src.Constraints):
+        try:
+            dst.addConstraint(c)
+        except Exception as exc:
+            failures.append("%s constraint %d (%s): %s: %s"
+                            % (src.Name, i, c.Type, type(exc).__name__, exc))
+    if failures:
+        raise RuntimeError(
+            "%s: %d of %d constraints would not copy:\n  %s"
+            % (src.Name, len(failures), len(src.Constraints),
+               "\n  ".join(failures)))
+
+
+
 def build_fixture(verbose=True):
     """Write the fixture.  Returns (sketch names, geometry digest)."""
     demo = FreeCAD.openDocument(DEMO01_PATH)
@@ -124,6 +188,7 @@ def build_fixture(verbose=True):
                                % len(names))
         doc = FreeCAD.newDocument(FIXTURE_NAME)
         try:
+            copied = {}
             for nm in names:
                 src = demo.getObject(nm)
                 dst = doc.addObject("Sketcher::SketchObject", nm)
@@ -131,18 +196,41 @@ def build_fixture(verbose=True):
                 dst.Placement = src.Placement
                 for g in src.Geometry:
                     dst.addGeometry(g, False)
-                for c in src.Constraints:
-                    try:
-                        dst.addConstraint(c)
-                    except Exception:
-                        pass  # best-effort, as the fixture has always been
+                copied[nm] = dst
                 try:
                     dst.ViewObject.Visibility = True
                 except Exception:
                     pass
+            # `addExternal` PROJECTS the referenced edge onto this sketch's
+            # plane, so the referenced sketch needs a Shape -- a sketch that
+            # has never been recomputed has none ("Failed to project
+            # external geometry ...: null shape").  No constraint exists
+            # yet, so this recompute cannot move a copied geometry.
+            doc.recompute()
+            external = 0
+            for nm in names:
+                external += copy_external_geometry(demo.getObject(nm),
+                                                   copied[nm], copied)
+            constraints = 0
+            for nm in names:
+                copy_constraints(demo.getObject(nm), copied[nm])
+                constraints += len(copied[nm].Constraints)
             for src_name, half_name in HALF_RIBS:
                 add_half_rib(doc, demo.getObject(src_name), half_name)
             doc.recompute()
+            # The demo's own per-sketch counts, checked before the file is
+            # written: a fixture that cannot reproduce the demo's
+            # construction must say so here (#108).
+            for nm in names:
+                want = len(demo.getObject(nm).Constraints)
+                got = len(copied[nm].Constraints)
+                if want != got:
+                    raise RuntimeError("%s: copied %d of the demo's %d "
+                                       "constraints" % (nm, got, want))
+            if verbose:
+                print("demo: %d sketches, %d constraints, %d external "
+                      "geometry links" % (len(names), constraints, external),
+                      flush=True)
             doc.saveAs(OUT_PATH)
         finally:
             FreeCAD.closeDocument(doc.Name)
@@ -178,6 +266,8 @@ def verify_fixture(verbose=True):
         silk = [o.Name for o in doc.Objects
                 if getattr(o, "object_type", None)
                 in ("Edge", "Patch", "Blend", "CornerBlend")]
+        constraints = sum(len(o.Constraints) for o in doc.Objects
+                          if o.TypeId == "Sketcher::SketchObject")
     finally:
         FreeCAD.closeDocument(doc.Name)
     if others:
@@ -187,9 +277,14 @@ def verify_fixture(verbose=True):
     if len(sketches) != 33:
         raise RuntimeError("fixture carries %d sketches, expected 33"
                            % len(sketches))
+    if constraints != EXPECTED_CONSTRAINTS:
+        raise RuntimeError("fixture carries %d constraints, expected %d "
+                           "(the demo's 393 on its 29 sketches + 2 per "
+                           "half-rib supplement)"
+                           % (constraints, EXPECTED_CONSTRAINTS))
     if verbose:
-        print("fixture: %d sketches, 0 non-sketch objects" % len(sketches),
-              flush=True)
+        print("fixture: %d sketches, %d constraints, 0 non-sketch objects"
+              % (len(sketches), constraints), flush=True)
     return sorted(sketches), geometry_digest()
 
 
