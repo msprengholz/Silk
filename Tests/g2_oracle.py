@@ -161,9 +161,13 @@ def measure_seam(surf_a, seam_a, across_a, surf_b, seam_b, across_b, n=21):
         tb_hat = _unit(tb)
 
         na = _unit(da.cross(ta))
-        nb = _unit(db.cross(tb))
-        if na.dot(nb) < 0.0:          # orient both normals to the same side
-            nb = -1.0 * nb
+        nb_raw = _unit(db.cross(tb))
+        # the common side: one sign for the whole seam -- taken from the RAW
+        # normals, because after the flip below na.nb is always positive and
+        # the sign is lost.  Without it a pair whose natural normals oppose
+        # reads twist_gap ~ 2|tau| on a smooth seam (#101).
+        sign_b = 1.0 if na.dot(nb_raw) >= 0.0 else -1.0
+        nb = nb_raw * sign_b
 
         g1 = math.degrees(math.acos(max(-1.0, min(1.0, na.dot(nb)))))
         c0 = (pa - pb).Length
@@ -178,10 +182,12 @@ def measure_seam(surf_a, seam_a, across_a, surf_b, seam_b, across_b, n=21):
             if db_perp.Length > 1e-12 else 0.0
 
         # geodesic torsion: -(dN/ds_along) . e_across, arc-length normalised.
-        # N(t) is the unit normal field along the seam; e_across is the
-        # geometric across direction (taken from A, the same for both sides).
+        # N(t) is the unit normal field along the seam, taken on the common
+        # side (`sign_b`) and differentiated along the CALLER's correspondence
+        # direction (`ttan` from seam_b), which is what makes the gap
+        # reversal-invariant.  e_across is the geometric across direction
+        # (taken from A, the same for both sides).
         e_across = _unit(da_perp)
-        sign_b = 1.0 if na.dot(nb) > 0 else -1.0
         dt2 = 1e-4
         ta_ = max(0.0, t - dt2)
         tb_ = min(1.0, t + dt2)

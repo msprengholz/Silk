@@ -35,13 +35,15 @@ control net exactly, **carrying the weights**, and add the combinatorial
 `solve_uv`'s floor (4.5e-13 mm), every quantity's error floor, a known G1 angle,
 a known curvature jump -- which is also the proof that **`g1_deg` cannot
 establish G2** -- and an independent reflected-3D cross-check. **`k_gap` is the
-G2 evidence.** `twist_gap` carries an orientation caveat: the seam
-correspondence is the caller's, and on a *reversed* seam the geodesic torsion
-enters with a sign flip, so `twist_gap` reads ~2|tau| even where the surface is
-smooth -- visible in #100's raw edge-blend data, where a seam with `k_gap`
-2.1e-6 reads `twist_gap` 5.3e-3. Only non-reversed values count as evidence
-until the metric is made reversal-invariant (#101); `k_gap` is unaffected
-(it is an absolute difference of scalars). No test asserts a continuity label
+G2 evidence.** `twist_gap` is measured in a common frame (#101): the along
+tangent is the caller's correspondence direction and both normals are taken
+on the same side, so the figure is invariant to a reversed seam
+correspondence. Before #101 the frame leaked and a smooth seam read ~2|tau|
+(visible in #100's raw edge-blend data, where a seam with `k_gap` 2.1e-6 read
+`twist_gap` 5.3e-3); `Tests/continuity_calibration.seam_torsion_reversal`
+pins the corrected frame on a seam that carries a known 1 /mm torsion, measured
+both ways. `k_gap` is untouched by that frame (an absolute difference of
+scalars). No test asserts a continuity label
 (`test_no_continuity_threshold_in_suite`); the manual scripts
 (`Tests/g2_demo_corner.py`, `Tests/g2_corner_measurement.py`,
 `Tests/g2_corner_solve.py`, `Tests/g2_edge_blend_probe.py`,

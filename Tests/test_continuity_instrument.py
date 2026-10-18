@@ -157,6 +157,54 @@ def test_error_floor_reported(doc):
     return {"pass": not errs, "errors": errs, "checks": checks}
 
 
+def test_twist_gap_is_reversal_invariant(doc):
+    """`twist_gap` reads the same floor for a matched and a reversed seam.
+
+    Known answer (#101): two halves of z = u*v meet on a seam that is smooth
+    to all orders, so the true twist_gap is 0 -- while the geodesic torsion
+    along it is ~1 /mm, so a metric that read 0 out of blindness is caught by
+    `tau_a_max`.  Measured with the caller's correspondence matched and
+    reversed; BEFORE #101 both readings returned 2|tau| = 2.000000e+00 /mm on
+    both instruments (the natural-axis along-tangent, plus a normal-side sign
+    lost after the alignment flip).
+
+    WHAT THE CORRECTED METRIC PERMITS.  `twist_gap` may now be quoted on a
+    REVERSED seam correspondence as well as a matched one, so every
+    previously quotable non-reversed figure keeps its value and meaning and
+    the figures the #100 correction flagged as orientation-suspect become
+    re-measurable rather than unusable.  It is still not a continuity label:
+    no threshold or `classify()` appears here.
+    """
+    tr = CAL.seam_torsion_reversal(n=41)
+    # 1e-6 /mm: six orders below the 1 /mm torsion the seam carries and six
+    # orders above both instruments' measured floor (<= 1.3e-12 sampled,
+    # 4.4e-16 exact).  Derived from the floor, not from a continuity claim.
+    tol = 1e-6
+    errs = []
+    checks = ["|tau_a| max along the calibration seam = %.4f /mm"
+              % tr["tau_a_max"]]
+    if not tr["tau_a_max"] > 0.5:
+        errs.append("the calibration seam carries no torsion (|tau_a| max "
+                    "%.3e) -- a zero gap would prove nothing"
+                    % tr["tau_a_max"])
+    for label, reading in sorted(tr["readings"].items()):
+        for tag in ("sampled", "analytic"):
+            twist = reading["twist_gap"][tag]
+            k_gap = reading["k_gap"][tag]
+            checks.append("%s %s: twist_gap %.3e /mm, k_gap %.3e /mm"
+                          % (label, tag, twist, k_gap))
+            if not twist < tol:
+                errs.append("%s %s: twist_gap %.3e /mm on a smooth seam "
+                            "(the metric carries the frame, not the "
+                            "correspondence's orientation)"
+                            % (label, tag, twist))
+            if not k_gap < 1e-9:
+                errs.append("%s %s: k_gap %.3e /mm -- the twist frame must "
+                            "not perturb the curvature metric"
+                            % (label, tag, k_gap))
+    return {"pass": not errs, "errors": errs, "checks": checks}
+
+
 def test_manual_measurement_scripts_reachable(doc):
     """The manual corner scripts import, expose main, and carry MANUAL.
 
@@ -216,6 +264,7 @@ ALL_TESTS = [
     test_controlnet_c0_is_exact,
     test_independent_cross_check_order,
     test_error_floor_reported,
+    test_twist_gap_is_reversal_invariant,
     test_manual_measurement_scripts_reachable,
     test_no_continuity_threshold_in_suite,
 ]

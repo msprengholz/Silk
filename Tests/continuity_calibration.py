@@ -23,9 +23,17 @@ WHAT IS MEASURED
      surface B via OCCT `distToShape`, which knows nothing about either
      instrument's basis or solver.  For a G1 seam the deviation grows like
      delta^2 with the across offset delta; for a C0 seam like delta^1.
+  6. `twist_gap`'s frame (#101): ONE C-infinity seam that carries a real
+     geodesic torsion, measured with the caller's correspondence matched and
+     reversed.  The truth is 0 in both readings, and neither instrument may
+     report more -- the defect this pins read 2|tau| (~2 /mm here) on a seam
+     whose curvature gap was 1e-16.
 
 The floor from (2) is the smallest number either instrument can honestly
-report; nothing below it is a measurement.
+report; nothing below it is a measurement.  The parabolic pair of (2) has
+zero torsion along its seam (a cylinder's normal does not turn along the
+axis), so the floor of `twist_gap` is NOT evidence about the torsion frame --
+(6) is, and it carries the positive control.
 """
 
 import math
@@ -91,6 +99,34 @@ def flat_plane():
 
 def _pair_bsplines(sa, sb):
     return sa.to_bspline(), sb.to_bspline()
+
+
+def hpar_surface(mirrored=False, flip_v=False):
+    """z = u*v over (u, v) in [0, 1]^2, as an exact bicubic Bezier patch.
+
+    The hyperbolic paraboloid is a bilinear polynomial, so four control
+    points per axis represent it exactly.  `mirrored=True` puts it on the -u
+    side: (-u, v, -u*v) -- the same surface continued across u = 0, so a
+    mirrored pair meets on a seam that is smooth to all orders.  `flip_v`
+    swaps v -> 1 - v, which reverses the patch's NATURAL along-seam axis
+    without moving the surface: that is one side of a reversed seam
+    correspondence (#101).
+
+    Unlike `parab_surface`, the normal TURNS along the seam: the geodesic
+    torsion at the u = 0 seam is ~1 /mm, so a torsion metric that reads 0
+    here is blind rather than right.
+    """
+    xs = _u_coords()
+    poles = []
+    for iu in range(4):
+        col = []
+        for iv in range(4):
+            x = -xs[iu] if mirrored else xs[iu]
+            y = (1.0 - xs[iv]) if flip_v else xs[iv]
+            col.append(Base.Vector(x, y, x * y))
+        poles.append(col)
+    return SN.NurbsSurface(poles, [[1.0] * 4 for _ in range(4)],
+                           SN.KNOTS_4, SN.KNOTS_4)
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +238,43 @@ def known_curvature_jump(a_curv=1.0, b_curv=3.0, n=41):
             "analytic_g1_deg": exact["g1_deg"],
             "sampled_k_gap": sampled["k_gap"],
             "analytic_k_gap": exact["k_gap"]}
+
+
+# ---------------------------------------------------------------------------
+# (6) known torsion, measured both ways -- the twist metric's frame (#101)
+# ---------------------------------------------------------------------------
+
+def seam_torsion_reversal(n=41):
+    """One C-infinity seam carrying a REAL geodesic torsion, measured with the
+    caller's correspondence matched and reversed.
+
+    Two halves of z = u*v meet at u = 0 on a seam that is smooth to all
+    orders, so the true `twist_gap` is 0.  The seam is not torsion-free: the
+    surface's normal turns along it at ~1 /mm, which is the positive control
+    -- a metric that reported 0 because it is blind would be caught by the
+    reported `tau_a`.
+
+    The reversed reading is the same geometry with B's v axis flipped and the
+    correspondence walked backwards, i.e. exactly the layout
+    `match_boundaries` produces when it reverses one side.  Both readings must
+    land on the same (near-zero) floor; before #101 both read 2|tau| ~ 2 /mm.
+    """
+    a = hpar_surface()
+    out = {"tau_a_max": 0.0, "readings": {}}
+    for label, flip_v in (("matched", False), ("reversed", True)):
+        b = hpar_surface(mirrored=True, flip_v=flip_v)
+        seam_b = (lambda t: (0.0, 1.0 - t)) if flip_v else (lambda t: (0.0, t))
+        ba, bb = _pair_bsplines(a, b)
+        exact = CA.measure_seam(a, lambda t: (0.0, t), "u", b, seam_b,
+                                "u", n=n)
+        sampled = G.measure_seam(ba, lambda t: (0.0, t), "u", bb, seam_b,
+                                 "u", n=n)
+        out["tau_a_max"] = max(out["tau_a_max"],
+                               max(abs(s["tau_a"]) for s in exact["samples"]))
+        out["readings"][label] = {
+            key: {"sampled": sampled[key], "analytic": exact[key]}
+            for key in ("c0", "g1_deg", "k_gap", "twist_gap")}
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +418,15 @@ def main():
           % (cc["g1_slope"], cc["c0_slope"]))
     print("  A-seam to B-face distToShape (G1 pair) = %.3e mm"
           % cc["g1_seam_distToShape"])
-    return {"solve_uv": s, "floor": fl, "cross_check": cc}
+
+    print("== twist frame (#101): one torsion-carrying smooth seam, both ways ==")
+    tr = seam_torsion_reversal()
+    print("  |tau_a| max along the seam = %.4f /mm" % tr["tau_a_max"])
+    for label, reading in tr["readings"].items():
+        print("  %-8s twist_gap  sampled %.3e | analytic %.3e /mm"
+              % (label, reading["twist_gap"]["sampled"],
+                 reading["twist_gap"]["analytic"]))
+    return {"solve_uv": s, "floor": fl, "cross_check": cc, "torsion": tr}
 
 
 if __name__ == "__main__":

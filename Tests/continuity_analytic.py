@@ -21,8 +21,33 @@ G2.  G2 is the `k_gap` claim, and `k_gap` is only as good as the curvature
 formula it comes from -- which is why the instrument carries a calibration
 (`Tests/continuity_calibration.py`) with a known curvature jump.
 
+`twist_gap` IS MEASURED IN A COMMON FRAME (#101).  Geodesic torsion is an
+off-diagonal second-fundamental-form coefficient: its VALUE and its SIGN both
+depend on the tangent-plane frame it is read in.  Two frames are therefore
+fixed here, both from geometry the caller and neither parameterisation can
+flip:
+
+  along     the direction the caller's seam correspondence `t -> (u, v)`
+            actually runs, i.e. `dP/dt`.  A surface whose natural axis runs
+            against that direction (a reversed correspondence) gets its
+            along-derivative re-signed by `_correspondence_along_sign`.
+  normal    the same side for both surfaces, i.e. `Pi_raw x Pi_along`
+            re-signed by the sign that aligns the two raw normals with each
+            other (`orient` below).  Without it, a pair whose natural normals
+            oppose -- the ordinary layout, one patch on each side of a seam --
+            reads `twist_gap ~ 2|tau|` on a perfectly smooth seam.
+
+The across direction is A's, the same vector for both sides, so the two
+torsions are compared like with like.  The result is invariant to reversing
+the correspondence and to the sign of either patch's normal, and
+`Tests/continuity_calibration.py` pins both.  `k_gap` never enters this
+machinery: it is an absolute difference of normal curvatures, and the frame
+work above does not touch it.
+
 DOMAIN.  Analytic surfaces are [0, 1] x [0, 1].  The four boundary edges
-parametrise v (u0/u1) or u (v0/v1); `reverse` walks t -> 1 - t.
+parametrise v (u0/u1) or u (v0/v1); `reverse` walks t -> 1 - t.  A seam runs
+along the axis other than its `across` axis (what `edge_seam` produces); the
+torsion frame uses that axis' correspondence sign.
 """
 
 import math
@@ -56,8 +81,35 @@ def _safe(vec):
     return Base.Vector(vec.x, vec.y, vec.z)
 
 
-def _dN_ds(ders, across, normal):
-    """Exact dN/ds along the seam, N = unit(P_across x P_along)."""
+def _correspondence_along_sign(seam, t, along, step=1e-6):
+    """+1 / -1: does increasing t walk the seam along +`along`'s axis?
+
+    This is the caller's correspondence direction, read in parameter space
+    (exact for the affine maps `edge_seam` produces).  It is what makes
+    `twist_gap` independent of whether a side's natural axis runs with or
+    against the correspondence.
+    """
+    index = 0 if along == "u" else 1
+    lo, hi = max(0.0, t - step), min(1.0, t + step)
+    delta = seam(hi)[index] - seam(lo)[index]
+    if delta > 0.0:
+        return 1.0
+    if delta < 0.0:
+        return -1.0
+    raise ValueError(
+        "seam does not run along the %r axis at t=%.6g; measure_seam needs "
+        "an axis-aligned seam (use edge_seam for boundary edges)"
+        % (along, t))
+
+
+def _dN_ds(ders, across, normal, orient=1.0):
+    """Exact dN/ds along the seam for the normal field `orient * N_raw`.
+
+    `N_raw` = unit(P_across x P_along_natural); `orient` re-signs it onto the
+    common side (`_unit` projection makes `normal`'s own sign irrelevant) and
+    onto the caller's along direction.  The formula is unchanged: the
+    derivative of `orient * N_raw` is `orient * d(N_raw)/ds`.
+    """
     P, Pu, Pv, Puu, Puv, Pvv = ders
     if across == "u":
         # seam at u = const, v varies: dw/dt = Puv x Pv + Pu x Pvv
@@ -73,7 +125,7 @@ def _dN_ds(ders, across, normal):
         return Base.Vector(0, 0, 0)
     dwds = dwdt * (1.0 / ta.Length)
     dNds = (dwds - normal * normal.dot(dwds)) * (1.0 / wlen)
-    return dNds
+    return dNds * orient
 
 
 def measure_seam(surf_a, seam_a, across_a, surf_b, seam_b, across_b, n=21):
@@ -108,9 +160,10 @@ def measure_seam(surf_a, seam_a, across_a, surf_b, seam_b, across_b, n=21):
         tb_hat = _unit(tb)
 
         na = _unit(da.cross(ta))
-        nb = _unit(db.cross(tb))
-        if na.dot(nb) < 0.0:
-            nb = -1.0 * nb
+        nb_raw = _unit(db.cross(tb))
+        # the common side: one sign for the whole seam, from the raw normals
+        orient_b = 1.0 if na.dot(nb_raw) >= 0.0 else -1.0
+        nb = nb_raw * orient_b
 
         c0 = (Pa - Pb).Length
         g1 = math.degrees(math.acos(max(-1.0, min(1.0, na.dot(nb)))))
@@ -123,10 +176,14 @@ def measure_seam(surf_a, seam_a, across_a, surf_b, seam_b, across_b, n=21):
             if db_perp.Length > 1e-12 else 0.0
 
         e_across = _unit(da_perp)
+        sigma_a = _correspondence_along_sign(seam_a, t,
+                                            "v" if across_a == "u" else "u")
+        sigma_b = _correspondence_along_sign(seam_b, t,
+                                            "v" if across_b == "u" else "u")
         tau_a = -_dN_ds((Pa, Pau, Pav, Pauu, Pauuv, Pavv),
-                        across_a, na).dot(e_across)
+                        across_a, na, sigma_a).dot(e_across)
         tau_b = -_dN_ds((Pb, Pbu, Pbv, Pbuu, Pbuuv, Pbvv),
-                        across_b, nb).dot(e_across)
+                        across_b, nb, orient_b * sigma_b).dot(e_across)
 
         out["c0"] = max(out["c0"], c0)
         out["g1_deg"] = max(out["g1_deg"], g1)
@@ -135,6 +192,7 @@ def measure_seam(surf_a, seam_a, across_a, surf_b, seam_b, across_b, n=21):
         out["samples"].append(
             {"t": t, "c0": c0, "g1_deg": g1,
              "k_a": kappa_a, "k_b": kappa_b, "k_gap": abs(kappa_a - kappa_b),
+             "tau_a": tau_a, "tau_b": tau_b,
              "twist_gap": abs(tau_a - tau_b)})
     return out
 

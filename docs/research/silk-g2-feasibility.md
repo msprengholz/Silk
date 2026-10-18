@@ -22,7 +22,9 @@ not the patches' second-order disagreement alone.
 
 **Caveat up front.** `k_gap` only (across-seam normal curvature); no full-G2
 claim. No continuity label is asserted anywhere in this finding or its test.
-`twist_gap` is carried but not solved (and #101's reversal caveat applies).
+`twist_gap` is carried but not solved. It is measured in a common frame since
+#101, so a reversed seam correspondence is quotable too; the figures in this
+finding predate that frame and were not re-measured.
 
 ---
 
@@ -125,7 +127,8 @@ a weighted joint re-solve with soft-coupled C0/G1, which is not this finding.
 
 * **Not full G2.** `k_gap` is the across-seam normal curvature only; the
   second fundamental form's other component (`twist_gap`) was carried, not
-  solved, and #101's reversal caveat applies to it.
+  solved, and is quotable since #101 on a reversed seam correspondence too;
+  this finding's figures predate that frame.
 * **Not a global build.** The demo shares strips between junctions
   (`ControlGrid64_2Grid44002` appears at junctions 1 and 2, etc.), and the
   freed row also changes the strip's **far end** (normal changes of 0–10.9°

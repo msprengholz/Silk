@@ -106,12 +106,17 @@ build" opt-in must not be read as a G2 claim. The stage target stays G1
 (<= 0.5 deg); a G2 target is now supported by measurement only up to the
 neighbours' compatibility.
 
-**Instrument correction (#100).** #97's `twist_gap` figures are
-orientation-suspect and are not evidence: on a *reversed* seam the geodesic
-torsion enters with a sign flip, so `twist_gap` reads ~2|tau| even on a smooth
-seam (a seam with `k_gap` 2.1e-6 reads `twist_gap` 5.3e-3 in #100's raw
-edge-blend data). The G2 verdict above rests on `k_gap` alone, which is
-unaffected. A reversal-invariant torsion metric is #101.
+**Instrument correction (#100), resolved by #101.** #97's `twist_gap` figures
+were orientation-suspect and are not evidence: the metric took its along
+tangent from each surface's natural parameter axis and lost the normal side in
+alignment, so a *reversed* seam correspondence (and, as #101 found, any pair
+whose natural normals oppose) read ~2|tau| on a smooth seam -- a seam with
+`k_gap` 2.1e-6 read `twist_gap` 5.3e-3 in #100's raw edge-blend data, and a
+smooth hyperbolic-paraboloid seam carrying 1 /mm of torsion read 2.000e+00
+both ways. #101 measures it in a common frame (along = the caller's
+correspondence direction, normals on one side) and pins that with a
+known-answer calibration, so `twist_gap` is quotable on reversed seams too.
+The G2 verdict here rests on `k_gap` alone and stands, unaffected throughout.
 
 ## Baseline
 

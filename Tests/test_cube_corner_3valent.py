@@ -454,10 +454,11 @@ def test_3valent_cube_corner_seam_measurement(doc):
         rows, so the degenerate reading stays while the seams' `k_gap`
         in the tight apex band drops from 3.5e+2 /mm (the folded
         upstream net) to ~1e-13 /mm exact / 2.4e-3 /mm sampled;
-      * `twist_gap` depends on the caller's seam correspondence: on a
-        REVERSED seam the geodesic torsion enters with a sign flip, so it
-        can read ~2|tau| even where the surface is smooth (#101). Only
-        non-reversed values count as evidence.
+      * `twist_gap` is reversal-invariant since #101 (the metric reads the
+        seam in a common frame, pinned by
+        `Tests/continuity_calibration.seam_torsion_reversal`), so a reversed
+        seam's value is evidence too. The figures below were not re-measured
+        against the corrected frame.
     """
     ccm.build_cube_corner_model(doc)
     strips = [doc.getObject(n) for n in STRIP_NAMES]

@@ -199,12 +199,18 @@ have proven G2. The 4-junction interior needs no seam test: each
 * `twist_gap` history: `classify` never reads it (unchanged). No G2 label in
   this finding uses it; it is reported as an extra, un-calibrated-in-label
   quantity.
-* **Correction (#100).** The `twist_gap` figures above (up to 4.1e-2 /mm) are
-  orientation-suspect and are **not** evidence: on a *reversed* seam the
-  geodesic torsion enters with a sign flip, so `twist_gap` reads ~2|tau| even
-  where the surface is smooth (a #100 edge-blend seam with `k_gap` 2.1e-6 reads
-  `twist_gap` 5.3e-3). The G2 verdict here rests on `k_gap` alone and stands.
-  The reversal-invariant metric is #101.
+* **Resolved (#101).** The `twist_gap` figures above (up to 4.1e-2 /mm) were
+  measured with the pre-#101 frame and are superseded; they are **not**
+  evidence and are not re-measured here. The defect was wider than the
+  reversal noticed in #100: the metric took its along tangent from each
+  surface's natural axis *and* lost the normal side in alignment, so any seam
+  whose natural normals oppose -- the ordinary one-patch-each-side layout --
+  read ~2|tau| on a smooth seam (a #100 edge-blend seam with `k_gap` 2.1e-6
+  read `twist_gap` 5.3e-3; a smooth hyperbolic-paraboloid seam carrying 1 /mm
+  read 2.000e+00 both ways). #101 measures it in a common frame and pins that
+  with `Tests/continuity_calibration.seam_torsion_reversal`, so `twist_gap`
+  is quotable on a reversed seam correspondence too. The G2 verdict here
+  rests on `k_gap` alone and stands, unaffected throughout.
 * The demo was measured at n = 41 stations; a finer sweep could move the
   0.4757° worst-case marginally, but it is bounded by the exact evaluator, not
   by sampling.

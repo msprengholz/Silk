@@ -241,14 +241,17 @@ that makes a junction compatible.**
 
 ## What could not be established / notes for the ticket owner
 
-* **`twist_gap` is not used as evidence.** `continuity_analytic.measure_seam`
-  takes its along-tangent from the surface's natural parameter axis, so on a
-  seam whose correspondence is reversed (which `match_boundaries` freely
-  chooses) the geodesic torsion enters with a sign flip and `twist_gap` reads
-  ~2|tau| even on a smooth seam. `k_gap` is unaffected; it is the G2 evidence
-  here. A reversal-invariant torsion metric would be needed for full-G2
-  claims. (Both `g2_corner_solve` and `g2_edge_blend_probe` print a `(rev)`
-  flag for this.)
+* **`twist_gap` is not used as evidence here.** Before #101
+  `continuity_analytic.measure_seam` took its along-tangent from the surface's
+  natural parameter axis and lost the normal side in alignment, so a seam
+  whose correspondence is reversed (which `match_boundaries` freely chooses)
+  -- and, as #101 found, any pair whose natural normals oppose -- read ~2|tau|
+  even on a smooth seam. #101 measures it in a common frame and pins that with
+  a known-answer calibration, so `twist_gap` is now quotable on reversed seams
+  as well; the figures in this document were not re-measured with the
+  corrected frame. `k_gap` is unaffected and is the G2 evidence throughout.
+  (Both `g2_corner_solve` and `g2_edge_blend_probe` print a `(rev)` flag for
+  this.)
 * **Full G2 (all of the second fundamental form) was not established for any
   real seam.** `k_gap` is the across-seam normal curvature only — necessary,
   not sufficient. The synthetic solve is exact in `k_gap`; twist there is

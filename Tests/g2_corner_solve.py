@@ -32,14 +32,13 @@ Measured per seam and per feed:
 The metric is #97's calibrated instrument: exact control-net c0/g1/k_gap/
 twist_gap (`Tests/silk_nurbs.py` + `Tests/continuity_analytic.py`).  `k_gap`
 is a single-direction (across-seam) normal-curvature comparison -- necessary,
-not sufficient, for full G2; `twist_gap` is reported alongside, with a caveat:
-`continuity_analytic.measure_seam` takes its along-tangent from the surface's
-natural parameter axis, so on a seam whose correspondence is REVERSED (which
-`match_boundaries` freely chooses) the geodesic torsion enters with a sign
-flip and `twist_gap` reads ~2|tau| even on a perfectly smooth seam.  `k_gap`
-is unaffected (normal curvature does not depend on the along direction).
-This module therefore reports `k_gap` as the G2 evidence and prints a
-`twist_gap` flag whenever the seam was reversed.
+not sufficient, for full G2; `twist_gap` is reported alongside.  Both are
+reversal-invariant since #101: the torsion is read in a common frame (along
+= the caller's correspondence direction, both normals on one side), pinned by
+`Tests/continuity_calibration.seam_torsion_reversal`, and `k_gap` is an
+absolute difference of scalars that no frame enters.  The `(rev)` flag is
+still printed, because the correspondence direction is the caller's and worth
+seeing -- not because a reversed reading is suspect.
 
 WHY THE RELATIONS ARE THESE.  Let the corner's across-first-span Bezier
 control points, walking OUTWARD from the seam, be (b0, b1, b2), and the

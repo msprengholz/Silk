@@ -282,11 +282,11 @@ but that was not measured (from doc `silk-corner-g2.md`, deliverable 5).
 Measurement caveats to carry with any G2 claim: no test asserts a continuity
 label (`test_no_continuity_threshold_in_suite`, AGENTS.md); `k_gap` is
 across-normal curvature only - necessary, not sufficient, for full G2;
-`twist_gap` is orientation-suspect on reversed seams (the geodesic torsion
-enters with a sign flip, so a smooth seam can read `twist_gap ~ 2|tau|`; a seam
-with `k_gap 2.1e-6` reads `twist_gap 5.3e-3`) - only non-reversed values count
-until the metric is made reversal-invariant (#101, AGENTS.md and
-`silk-corner-g2.md` "What could not be established"). FreeCAD's
+`twist_gap` is also measured, in a common frame since #101 (along = the
+caller's correspondence direction, both normals on one side), so it is
+quotable on a reversed seam too; the figures quoted in the docs above predate
+that frame and were not re-measured. `k_gap` is across-normal curvature only -
+necessary, not sufficient, for full G2. FreeCAD's
 `Surface::Filling` at `BoundaryOrder = 2` is **not** the route: `k_gap
 1.665e-1` versus order 1's `8.249e-2` on the same feed (from doc
 `silk-corner-g2.md`, deliverable 1).

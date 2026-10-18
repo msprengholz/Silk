@@ -18,6 +18,13 @@ raw JSONs/scripts: `/tmp/opencode/g2_feasibility/`.
 NOTE FOR INTEGRATION: this module carries the numpy port while the solve
 lives only in `Tests/g2_corner_solve.py` (MANUAL).  When the solve moves into
 `SilkMachinery`, the test should call that instead of the local port.
+
+PRE-#101 TWIST FRAME: `measure_seam` here still carries the old torsion frame
+(the surface's natural along axis; the normal side lost after alignment), so
+its `twist_gap` reads ~2|tau| on any seam whose natural normals oppose.  Its
+`k_gap` -- the quantity every pin in `Tests/test_g2_feasibility.py` is about
+-- is unaffected.  The corrected frame lives in `Tests/continuity_analytic.py`
+and `Tests/g2_oracle.py` (#101); do not quote this port's `twist_gap`.
 """
 
 import math

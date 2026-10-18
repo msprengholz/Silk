@@ -58,9 +58,9 @@ one `SubGrid33_2Grid64` cell.
   The demo-side instrument (`Tests/g2_demo_corner.py`) is MANUAL and reads
   the *stored* `CubicSurface_66`/`CubicSurface_64` objects, so a rebuild
   side-by-side is a new measurement, not a rerun of it.
-- `twist_gap` is not reversal-invariant (#101): only non-reversed
-  correspondences count as evidence. No `twist_gap` is quoted here because
-  nothing was measured.
+- `twist_gap` is reversal-invariant since #101 (the metric reads the seam in a
+  common frame: along = the caller's correspondence direction, normals on one
+  side). No `twist_gap` is quoted here because nothing was measured.
 - No continuity label is asserted anywhere (the suite guards this:
   `test_no_continuity_threshold_in_suite`).
 

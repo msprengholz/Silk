@@ -119,8 +119,8 @@ sampled + exact instruments, floor from `Tests/continuity_calibration.py`):
   which upstream's folded net read at 3.5e+2 /mm, is 2.0e-13 /mm exact / 2.4e-3 /mm sampled after
   the fold fix. The seam opposite the member (corner `v0` / strip `B_BC`) is smooth: exact
   `k_gap` 6.9e-15 /mm, sampled 4.6e-3 /mm (finite-difference bias above the calibrated floor).
-  `twist_gap` is reported but the B_AB seam is a reversed correspondence (#101), so it is not
-  evidence there.
+  `twist_gap` is reported (and, since #101, is reversal-invariant), but no `twist_gap` figure here
+  is evidence for or against continuity.
 - **The fold is gone (ticket-foldfix).** Upstream's subgrid chain extrapolates subgrid interiors
   PAST the member's collapsed row; on this fixture that pushed the cap's member-side interior
   beyond the apex and doubled it over (19/1521 normal-field flips at n=39 on the parity member;
