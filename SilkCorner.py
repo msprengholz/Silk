@@ -46,6 +46,13 @@ import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
 iconPath = path_Silk_icons + "/ControlGrid66_4Sub.svg"
+# The `Silk_CornerFill` command's own Pixmap (#96, owner decision D3: the
+# command joined the visible set, so it now stands BESIDE the corner blend in
+# the toolbar). Its own file, not the corner blend's `ControlGrid66_4Sub.svg`:
+# two adjacent buttons must not wear the same picture (#54/#94, the defect
+# `test_icon_dedication` exists to prevent). Absolute and `Silk_dummy.__file__`
+# derived, like every other Silk icon path (#54).
+corner_fill_icon_path = path_Silk_icons + "/SilkCornerFill.svg"
 
 # The corner blend's own default tolerance for the strip-side / corner-cell
 # derivation (matches the object's `tolerance` property default).
@@ -638,15 +645,19 @@ class CreateCornerFill:
     lives in SilkWorkflowOps.create_corner_fill; this class only reads the
     selection, opens the undo transaction, and reports.
 
-    The created object is FreeCAD's own, so it is not part of the
-    workbench's visible command set (#50): the command is registered and
-    reachable -- `Gui.runCommand("Silk_CornerFill")`, a toolbar of one's
-    own -- but where it appears in the workbench's own menu is a separate
-    decision, and the corner stage's stages themselves are unchanged.
+    The created object is FreeCAD's own, foreign object: it carries no Silk
+    band/split bookkeeping and no Silk view provider, which is why the fill
+    stays an OPT-IN next to the Silk corner rather than becoming the corner
+    default. It is nevertheless part of the workbench's visible command set
+    (#96, owner decision D3): the button sits beside `Silk_CreateCornerBlend`
+    in Silk -> Workflow and the toolbar, so FreeCAD's `Surface::Filling` can
+    be demonstrated and judged next to the Silk corner. The record of the
+    earlier decision (registered but deliberately not visible) is superseded
+    by this one.
     """
 
     def GetResources(self):
-        return {'Pixmap': iconPath, 'MenuText': 'Silk Corner Fill',
+        return {'Pixmap': corner_fill_icon_path, 'MenuText': 'Silk Corner Fill',
                 'ToolTip': 'Fill the corner hole with one FreeCAD '
                            'Surface::Filling over the selected ring blends, '
                            'so the surface can be judged by eye.'}

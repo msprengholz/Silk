@@ -59,9 +59,15 @@ class Silk (Workbench):
 	separate track.
 	"""
 
-	# The workflow commands -- one per process step: Edge -> Patch -> Blend -> Corner Blend
+	# The workflow commands: one per process step -- Edge -> Patch -> Blend ->
+	# Corner Blend -- plus the corner stage's FreeCAD fill (#96, owner
+	# decision D3): `Silk_CornerFill` builds ONE `Surface::Filling` over the
+	# hole the ring strips close, beside the Silk corner, so the foreign
+	# component can be demonstrated and judged. It is not a fifth step --
+	# the corner blend stays the default -- but it is a button the owner can
+	# press instead of running the command by hand.
 	WORKFLOW_COMMANDS = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend",
-	                     "Silk_CreateCornerBlend"]
+	                     "Silk_CreateCornerBlend", "Silk_CornerFill"]
 
 	# The task panel
 	GUIDE_COMMANDS = ["Silk_Guide"]

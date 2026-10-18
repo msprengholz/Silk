@@ -16,6 +16,13 @@ command's Pixmap (`SilkTaskPanel.iconPath`) is its own file, not the
 workbench icon `Silk.svg` it used to borrow -- two toolbar entries wearing
 the same picture is exactly the defect this file exists to prevent.
 
+#96 adds the second pair of adjacent buttons: `Silk_CornerFill` and
+`Silk_CreateCornerBlend` stand next to each other in Silk -> Workflow and in
+the toolbar, so their Pixmaps must differ -- the fill command gets
+`Resources/Icons/SilkCornerFill.svg` rather than sharing the corner blend's
+`ControlGrid66_4Sub.svg`. Two adjacent buttons must not wear the same
+picture (#54/#94).
+
 This is additive to Tests/test_icon_path_resolution.py (CWD independence) --
 it does not replace that guard.
 
@@ -108,9 +115,26 @@ def test_icon_dedication(doc):
                        bool(guide)
                        and os.path.basename(guide) != workbench, guide))
 
+        # 6. (#96) the two adjacent workflow buttons: the corner fill next to
+        #    the corner blend. Sharing a Pixmap here is the same defect as
+        #    the workbench-icon twin above -- two adjacent buttons must not
+        #    wear the same picture (#54/#94).
+        fill = SilkCorner.CreateCornerFill().GetResources().get("Pixmap")
+        blend_cmd = SilkCorner.CreateCornerBlend().GetResources().get("Pixmap")
+        icons["Fill"] = fill
+        out.append("%-7s Pixmap  -> %s" % ("Fill", fill))
+        checks.append(("Corner fill command Pixmap is an absolute path",
+                       bool(fill) and os.path.isabs(fill), fill))
+        checks.append(("Corner fill icon file exists under Resources/Icons",
+                       bool(fill) and os.path.isfile(fill), fill))
+        checks.append(("Corner fill Pixmap is NOT the corner blend's",
+                       bool(fill) and bool(blend_cmd)
+                       and os.path.basename(fill) != os.path.basename(blend_cmd),
+                       "%s vs %s" % (fill, blend_cmd)))
+
         # 4. the dedicated icons load via QPixmap from a foreign cwd
         os.chdir(OTHER_CWD)
-        for label in ("Edge", "Patch", "Blend", "Guide"):
+        for label in ("Edge", "Patch", "Blend", "Guide", "Fill"):
             p = icons.get(label)
             if not p:
                 continue

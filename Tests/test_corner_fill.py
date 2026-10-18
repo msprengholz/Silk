@@ -24,10 +24,16 @@ What is pinned here:
   5. the component behind the command takes an EXPLICIT hole boundary as
      well as the ring strips (`create_fill`), orders that boundary by
      connectivity -- never by click order -- and refuses a boundary that is
-     not ONE closed loop before anything is constructed.
+     not ONE closed loop before anything is constructed;
+  6. the command is REGISTERED with FreeCAD's command manager and is a
+     member of the workbench's visible set (#96, owner decision D3) -- the
+     button beside the Silk corner -- and its bad-selection refusals are the
+     COMPONENT's own wording, not a second spelling of it.
 
 Run: python3 Tests/run_all.py corner_fill
 """
+import os
+
 import FreeCAD
 from FreeCAD import Gui
 
@@ -368,4 +374,89 @@ def test_corner_fill_refuses_an_order_it_cannot_build(doc):
     check(not created, "order 3 created %r" % (created,), errors)
     check(any("order" in m for m in cap.errors),
           "the refusal does not name the order: %r" % (cap.errors,), errors)
+    return {"pass": not errors, "checks": checks, "errors": errors}
+
+
+def test_corner_fill_command_is_registered_and_refuses_a_bad_selection(doc):
+    """#96 (D3): `Silk_CornerFill` is a real registered Gui command --
+    `Gui.listCommands()` holds it and FreeCAD builds a QAction for it, the
+    public check `test_initgui_commands` makes for the whole visible set --
+    and the handler REFUSES a selection that is not a corner-fill boundary
+    BY NAME, in the COMPONENT's own wording, leaving nothing in the tree.
+
+    Deliberately silent on WHERE the button sits: menu/toolbar layout is
+    `test_initgui_commands`' contract. What is pinned here is that the command
+    exists for FreeCAD and that a bad selection is refused cleanly.
+    """
+    errors, checks = [], []
+    import Tests.corner_model as cm
+    from SilkCorner import CreateCornerFill
+
+    # 1. registered: what the command manager holds, and the button FreeCAD
+    #    would build for it. `getAction()` does NOT build on demand (measured;
+    #    see test_initgui_commands), so a session whose workbench toolbar
+    #    predates this command has no action to read yet -- the session-
+    #    independent proof is the command's own resources.
+    check("Silk_CornerFill" in set(Gui.listCommands()),
+          "Silk_CornerFill is not in Gui.listCommands() -- not registered",
+          errors)
+    command = Gui.Command.get("Silk_CornerFill")
+    check(command is not None,
+          "Gui.Command.get('Silk_CornerFill') is None", errors)
+    resources = CreateCornerFill().GetResources()
+    check(str(resources.get("MenuText", "")).strip() != "",
+          "Silk_CornerFill has no MenuText to label a button with: %r"
+          % (resources,), errors)
+    pixmap = resources.get("Pixmap")
+    check(bool(pixmap) and os.path.isabs(pixmap) and os.path.isfile(pixmap),
+          "Silk_CornerFill's Pixmap is not an existing absolute icon: %r"
+          % (pixmap,), errors)
+    actions = (command.getAction() or []) if command is not None else []
+    if actions:
+        names = [a.objectName() for a in actions]
+        check(all(n == "Silk_CornerFill" for n in names),
+              "the QAction(s) carry %r" % (names,), errors)
+        check(actions[0].text().strip() != "",
+              "the Silk_CornerFill QAction has an empty label", errors)
+        checks.append("Silk_CornerFill registered; QAction label %r"
+                      % actions[0].text())
+    else:
+        checks.append("Silk_CornerFill registered; no QAction in this "
+                      "session (its toolbar predates the name), button "
+                      "resources %r" % (resources.get("MenuText"),))
+
+    # 2. every unusable selection is refused by name, nothing is created
+    cm.build_corner_model(doc)
+    patch = doc.getObject("Patch44")
+    strips = [doc.getObject(n) for n in STRIPS]
+    counted = "needs the ring's 3 or 4 blend strips"
+    cases = [("no selection", (), counted),
+             ("a patch instead of the strips", (patch,), counted),
+             ("one strip", (strips[0],), counted),
+             ("two strips", (strips[0], strips[1]), counted),
+             ("three strips that do not ring a junction",
+              (strips[0], strips[1], strips[3]),
+              "cannot build the corner fill over these 3 blends")]
+    for label, objs, wording in cases:
+        before = set(o.Name for o in doc.Objects)
+        _select(*objs)
+        with _Capture() as cap:
+            CreateCornerFill().Activated()
+        doc.recompute()
+        created = sorted(set(o.Name for o in doc.Objects) - before)
+        named = [m for m in cap.errors if wording in m]
+        checks.append("%s: %s"
+                      % (label, " | ".join(m.strip()
+                                           for m in cap.errors)[:200]))
+        check(named,
+              "%s: no refusal carrying the component's own wording %r; got %r"
+              % (label, wording, cap.errors), errors)
+        check(all(m.startswith("Silk:") for m in named),
+              "%s: the refusal is not a named console error: %r"
+              % (label, named), errors)
+        check(not created,
+              "%s: the refused command still created %r" % (label, created),
+              errors)
+        check(not _fills(doc),
+              "%s: a Surface::Filling survived the refusal" % label, errors)
     return {"pass": not errors, "checks": checks, "errors": errors}

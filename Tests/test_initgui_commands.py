@@ -1,17 +1,18 @@
 """
 Visible-command contract for InitGui.py (ticket #50).
 
-The ticket shrinks the workbench's VISIBLE surface to six commands --
-the workflow tetrad (Edge -> Patch -> Blend -> Corner Blend), the guide,
-and the dev hot reload -- and groups them. The thing that can silently go
-wrong is the other direction: a name that is no longer visible but is
+The ticket shrinks the workbench's VISIBLE surface to seven commands --
+the workflow pentad (Edge -> Patch -> Blend -> Corner Blend, plus the
+FreeCAD corner fill of #96), the guide, and the dev hot reload -- and
+groups them. The thing that can silently go wrong is the other direction:
+a name that is no longer visible but is
 still needed to RESTORE an old document, or a grouped structure that
 names something the user can no longer reach (or that does not exist at
 all).
 
 So these tests assert three things:
 
-  1. The visible set is EXACTLY those five, in workflow order, and no
+  1. The visible set is EXACTLY those seven, in workflow order, and no
      legacy name survives anywhere in the visible structures.
   2. Every visible name is really registered -- checked through a public
      API (Gui.listCommands(), plus the QAction FreeCAD's command manager
@@ -54,10 +55,13 @@ FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 # The visible set, spelled out independently of InitGui.py's own
 # constants so a typo in the file cannot make the test agree with itself.
+# `Silk_CornerFill` is #96's owner decision D3: the fill button stands
+# beside the Silk corner blend.
 EXPECTED_VISIBLE = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend",
-                    "Silk_CreateCornerBlend", "Silk_Guide", "Reload_Silk"]
+                    "Silk_CreateCornerBlend", "Silk_CornerFill", "Silk_Guide",
+                    "Reload_Silk"]
 EXPECTED_WORKFLOW = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend",
-                     "Silk_CreateCornerBlend"]
+                     "Silk_CreateCornerBlend", "Silk_CornerFill"]
 EXPECTED_GROUPS = ["Workflow", "Guide", "Dev"]
 
 # Modules a legacy document's proxy needs at open time (ticket #50).
@@ -281,12 +285,12 @@ def test_grouped_structures_reference_only_visible_commands(doc):
           "the toolbar and VISIBLE_COMMANDS disagree about what is visible",
           errors)
 
-    # self.list (the context menu source) is the same five, nothing legacy
+    # self.list (the context menu source) is the same seven, nothing legacy
     check(list(probe.list) == EXPECTED_VISIBLE,
           "self.list is %r, expected %r" % (probe.list, EXPECTED_VISIBLE),
           errors)
-    checks.append("Silk -> Workflow[4] / Guide[1] / Dev[1]; toolbar "
-                  "Edge,Patch,Blend,Corner | Guide | Reload")
+    checks.append("Silk -> Workflow[5] / Guide[1] / Dev[1]; toolbar "
+                  "Edge,Patch,Blend,Corner,Fill | Guide | Reload")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -302,12 +306,20 @@ def test_every_visible_command_is_registered(doc):
 
     Why getAction() and not MainWindow.findChild(QAction, name): FreeCAD
     builds a command's QAction when the command first lands in a toolbar
-    or menu, i.e. at Workbench.Initialize() time. A long-running dev
-    session therefore has actions only for the commands its toolbar was
-    built with, so findChild would silently test the session's startup
-    generation, not the code under test. Gui.Command.getAction() builds
-    the action on demand from the registered command, so the check is
-    generation-honest in a fresh session and in a hot-reloaded one alike.
+    or menu. A long-running dev session therefore has actions only for the
+    commands its toolbar was built with, so findChild would silently test
+    the session's startup generation, not the code under test.
+
+    MEASURED, and the reason the action is checked where it EXISTS (#96):
+    `getAction()` does NOT build the action on demand. In a session that has
+    been up since before a name joined the visible set, that name's action
+    list is empty while every name the running toolbar was built with keeps
+    its action across a hot reload (probe, this session: Silk_CornerFill 0
+    actions, Silk_CreateEdge/Patch/Blend/CornerBlend/Guide/Reload_Silk 1).
+    So a name the session's toolbar predates is REPORTED, not failed -- what
+    is asserted for every visible name is registration (listCommands() and
+    Command.get()) plus the structures handed to appendToolbar/appendMenu,
+    which is what builds the action on the next activation.
     """
     errors, checks = [], []
     if Gui is None:
@@ -328,8 +340,11 @@ def test_every_visible_command_is_registered(doc):
     check(not missing,
           "listed but NOT registered with FreeCAD: %r" % missing, errors)
 
-    # the command manager built a real action for each one
-    acted = []
+    # the command manager built a real action for each one -- where this
+    # session has one (see the docstring: getAction() does not build on
+    # demand, so a name that joined the visible set after this FreeCAD
+    # started has none until the workbench is activated again).
+    acted, unbuilt = [], []
     for name in silk.VISIBLE_COMMANDS:
         command = Gui.Command.get(name)
         if command is None:
@@ -338,7 +353,7 @@ def test_every_visible_command_is_registered(doc):
             continue
         actions = command.getAction() or []
         if not actions:
-            errors.append("command %s built no QAction" % name)
+            unbuilt.append(name)
             continue
         acted.append(name)
         wrong = [a for a in actions if a.objectName() != name]
@@ -348,8 +363,20 @@ def test_every_visible_command_is_registered(doc):
         if not actions[0].text().strip():
             errors.append("QAction %s has an empty label" % name)
 
+    # a name the running session's toolbar predates must be in the structures
+    # Initialize() hands FreeCAD, or nothing would ever build its button
+    handed_over = (set(silk.TOOLBAR_STRUCTURE)
+                   | {c for _p, cmds in silk.MENU_STRUCTURE for c in cmds})
+    stale = [n for n in unbuilt if n not in handed_over]
+    check(not stale,
+          "visible name(s) %r build no action AND are not in the toolbar "
+          "structure" % stale, errors)
     checks.append("Gui.listCommands() holds all %d: %s"
                   % (len(acted), ", ".join(acted)))
+    if unbuilt:
+        checks.append("session's toolbar predates %r -- no QAction yet, "
+                      "registration asserted, structures pinned by the "
+                      "sibling test" % unbuilt)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 

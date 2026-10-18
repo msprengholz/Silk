@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Dedicated `Silk_CornerFill` icon (#96, owner decision D3: the command
+       joins the visible set). Its OWN file, NOT the corner blend's
+       `ControlGrid66_4Sub.svg`: the two commands now stand next to each other
+       in the toolbar, and two adjacent buttons must not wear the same picture
+       (#54/#94; that twin is the defect test_icon_dedication exists to
+       prevent).
+       Palette follows the #54 light family (SilkPatch.svg / BlendStrip.svg /
+       SilkGuide.svg): light tile, blue geometry, orange accent, deepened
+       strokes, so it reads on light AND dark themes.
+       Picture: the four strips that meet at a corner (pale blue quadrants;
+       the cross gap between them is the hole) with ONE Surface::Filling patch
+       laid over the hole in the accent colour: the foreign object the
+       command demonstrates. -->
+  <rect width="64" height="64" fill="#eceef1" rx="8" ry="8"/>
+  <rect width="64" height="64" fill="none" stroke="#c9d0d8" stroke-width="1" rx="8" ry="8"/>
+  <!-- the four corner patches: the cross gap between them is the hole -->
+  <g fill="#d7e9fa" stroke="#2f5270" stroke-width="2">
+    <rect x="9" y="9" width="17" height="17" rx="1.5"/>
+    <rect x="38" y="9" width="17" height="17" rx="1.5"/>
+    <rect x="9" y="38" width="17" height="17" rx="1.5"/>
+    <rect x="38" y="38" width="17" height="17" rx="1.5"/>
+  </g>
+  <!-- ONE patch over the hole (the orange accent: the fill being judged) -->
+  <path d="M24 24 C29 21 35 21 40 23 C43 28 43 34 41 40 C35 43 29 43 23 40 C20 35 21 29 24 24 Z"
+        fill="#f9d6a9" stroke="#b95a00" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M25 30 C30 28 34 28 39 30 M25 35 C30 33 34 33 39 35"
+        fill="none" stroke="#b95a00" stroke-width="1.2" stroke-dasharray="2.5 2.5"/>
+</svg>
