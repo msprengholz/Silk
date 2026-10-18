@@ -680,11 +680,18 @@ def test_runner_flags_and_filter_reach_the_remote_call(doc):
               % code[code.find("_silk_run"):code.find("_silk_run") + 120],
               errors)
         check("_inspect" in code, "--save did not pass the save dir", errors)
-        check(code.rstrip().endswith("None)"),
-              "test_modules slot is not None for a plain filter run: %r"
+        # The two trailing slots, in order: test_modules (no --changed, so
+        # None -- a filter must not smuggle a module list in) and
+        # include_manual (no --manual, so False -- a filter must not widen
+        # the tier either, #122). Both are pinned by position because a
+        # leaked flag VALUE landing in them is silent: the run merely
+        # executes the wrong set.
+        check(code.rstrip().endswith("None, False)"),
+              "the trailing slots after save_dir must be test_modules=None, "
+              "include_manual=False for a plain filter run: %r"
               % code[-60:], errors)
         checks.append("remote call carries force/keep/filter/close_docs/"
-                      "save_dir correctly")
+                      "save_dir/test_modules/include_manual correctly")
     _cleanup_scratch()
     return _ok(checks, errors)
 
