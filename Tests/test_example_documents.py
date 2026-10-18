@@ -47,6 +47,20 @@ geometry each sketch is attached to.
 
 A test takes one document argument (the harness's fresh scratch doc);
 the example files are opened, inspected and closed inside it.
+
+THE 3-VALENT HARD CORNER (the owner's own case).  `SketchOnly_CornerCube
+.FCStd` is the fixture for three surfaces meeting at one corner -- the
+junction shape the owner's own model has everywhere. It is pinned twice
+more than the others:
+
+  * `test_cornercube_fixture_is_reproducible_from_its_generator` compares the
+    committed file against `Tests/make_cornercube_fixture.py`'s declared
+    placements and boundary lines, so the binary fixture cannot drift from
+    the script that produces it;
+  * `test_cornercube_fixture_carries_its_documented_constraints` reads the
+    fixture's own `Document.xml` and pins the per-sketch constraint COUNT
+    (#108: a count, not a name). The hand-made examples carry none -- the
+    README says so -- and the count keeps that claim honest.
 """
 
 import FreeCAD
@@ -59,6 +73,11 @@ from collections import Counter
 
 from Tests.demo01_fixture_model import HALF_RIB_SUPPLEMENT, close_fresh, \
     open_fresh
+# The "new fixture" generator (#56/#108 retrofit): `SketchOnly_CornerCube
+# .FCStd` is the 3-valent hard-corner click-through fixture, and its
+# generator declares the sketch placements and boundary lines the committed
+# file must carry. Imported, not copied, so the two cannot disagree.
+import Tests.make_cornercube_fixture as CORNERCUBE_GENERATOR
 
 # Thread-safety is irrelevant: RPC runs on the GUI thread. The examples
 # directory is on the well-known path shared by every launcher.
@@ -186,8 +205,9 @@ EXPECTED = {
             "SK_Seam_X", "SK_Seam_Y", "SK_Seam_Z",
             "SK_F1_OuterA", "SK_F1_OuterB", "SK_F2_OuterA", "SK_F2_OuterB",
             "SK_F3_OuterA", "SK_F3_OuterB"],
-        "target": "9 sketches -> 9 Edges -> 3 corner Patches, "
-                  "3 blendable seams (X/Y/Z)",
+        "target": "9 sketches -> 9 Edges -> 3 Patches -> 3 Blends -> "
+                  "1 CornerBlend (the 3-valent hard corner)",
+        "generator": "Tests/make_cornercube_fixture.py",
     },
     "SketchOnly_Demo01Subset.FCStd": {
         # #98 review: NOT hand-written -- derived from the demo itself at
@@ -349,6 +369,95 @@ def test_example_cornercube(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_cornercube_fixture_is_reproducible_from_its_generator(doc):
+    """`SketchOnly_CornerCube.FCStd` is GENERATED, not hand-saved: every one
+    of its nine sketches carries exactly the placement and the three boundary
+    lines `Tests/make_cornercube_fixture.py` declares for it (compared in
+    WORLD space, so the quaternion's sign does not matter). A fixture edited
+    in the Sketcher after generation therefore fails here instead of drifting
+    away from the script that claims to produce it.
+
+    This is the CornerCube half of the #108 contract: the Demo 01 guard one
+    level up (the demo's own `Document.xml`) pins a fixture whose source is
+    another document; this pins a fixture whose source is a data table.
+    """
+    errors, checks = [], []
+    path = os.path.join(EXAMPLES_DIR, "SketchOnly_CornerCube.FCStd")
+    if not os.path.exists(path):
+        return {"pass": False, "errors": ["missing %s" % path],
+                "checks": []}
+    generator = CORNERCUBE_GENERATOR
+    source, tmpdir = open_fresh(path)
+    try:
+        names = sorted(o.Name for o in source.Objects
+                       if o.TypeId == "Sketcher::SketchObject")
+        want = sorted(generator.sketch_names())
+        if names != want:
+            errors.append("%s carries sketches %s, the generator declares "
+                          "%s" % (os.path.basename(path), names, want))
+            return {"pass": False, "errors": errors, "checks": checks}
+        checks.append("%d sketches == the generator's declared set"
+                      % len(names))
+        worst = 0.0
+        for name in want:
+            obj = source.getObject(name)
+            place = obj.Placement
+            got = [(place.multVec(g.StartPoint), place.multVec(g.EndPoint))
+                   for g in obj.Geometry
+                   if g.TypeId == "Part::GeomLineSegment"]
+            expected = generator.declared_world_segments(name)
+            if len(got) != len(expected):
+                errors.append("%s: the fixture has %d boundary line(s), the "
+                              "generator declares %d"
+                              % (name, len(got), len(expected)))
+                continue
+            for (a, b), (ea, eb) in zip(got, expected):
+                for p, q in ((a, ea), (b, eb)):
+                    delta = (p - q).Length
+                    worst = max(worst, delta)
+                    if delta > 1e-6:
+                        errors.append(
+                            "%s: boundary point %s, the generator declares "
+                            "%s (%.3e mm off)" % (name, p, q, delta))
+        checks.append("placement + boundary lines match the generator "
+                      "(worst %.3e mm)" % worst)
+        return {"pass": not errors, "errors": errors, "checks": checks}
+    finally:
+        close_fresh(source, tmpdir)
+
+
+def test_cornercube_fixture_carries_its_documented_constraints(doc):
+    """The CornerCube fixture's sketch construction, read OFFLINE from its
+    own `Document.xml` (`fcstd_sketch_census`) and compared per sketch
+    against the documented count, not against a list of names (#108).
+
+    There is nothing here to copy: unlike the Demo 01 subset, whose sketches
+    are the demo's own constrained construction, the four hand-made examples
+    are three free-standing line segments each and carry ZERO constraints --
+    measured on all nine sketches here, not assumed. Pinning the count keeps
+    the distinction honest: if a later edit adds a construction (or a
+    generator silently drops one), the number changes and this fails rather
+    than the README's "no constraints" promise quietly becoming false.
+    """
+    errors, checks = [], []
+    path = os.path.join(EXAMPLES_DIR, "SketchOnly_CornerCube.FCStd")
+    if not os.path.exists(path):
+        return {"pass": False, "errors": ["missing %s" % path],
+                "checks": []}
+    census = fcstd_sketch_census(path)
+    per = CORNERCUBE_GENERATOR.EXPECTED_CONSTRAINTS_PER_SKETCH
+    total = 0
+    for name in CORNERCUBE_GENERATOR.sketch_names():
+        got = len(census.get(name, {}).get("constraints", []))
+        total += got
+        if got != per:
+            errors.append("%s: fixture carries %d constraints, the "
+                          "generator documents %d (the hand-made examples "
+                          "carry none)" % (name, got, per))
+    checks.append("%d sketches, %d constraints total (documented %d each)"
+                  % (len(CORNERCUBE_GENERATOR.sketch_names()), total, per))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
 
 def test_example_demo01_subset(doc):
     errors, checks = [], []
@@ -482,6 +591,8 @@ ALL_TESTS = [
     test_example_two_patches,
     test_example_corner4,
     test_example_cornercube,
+    test_cornercube_fixture_is_reproducible_from_its_generator,
+    test_cornercube_fixture_carries_its_documented_constraints,
     test_example_demo01_subset,
     test_demo01_subset_carries_the_demos_constraints,
     test_demo01_subset_sketch_lines_are_wired_not_loose,
