@@ -663,6 +663,233 @@ def create_rolling_corner(strips, patch, leader=ROLLING_LEADER, order=1,
             "leader": float(leader)}
 
 
+# ---- the rolling corner, PATH (A): the 66 chain fed with CUT cells -------
+#
+# WHAT THE MAINTAINER'S OWN FILE SAYS (read offline from
+# upstream/Resources/Tutorial_Files/Silk CopyPasta/
+# Silk_CopyPasta_27_First_Corner_Rolled.FCStd, its Document.xml and its
+# stored nets; see docs/research/silk-rolling-corner-66.md):
+#
+#   ControlGrid66_4Sub_012 -> 4 x SubGrid33_2Grid64, whose ring members
+#   are three blends (ControlGrid64_2Grid44) and one TRIANGULAR MEMBER
+#   (ControlGrid64_3_1Grid44 over the corner patch's corner cell).
+#
+# and, read off the stored cells (their parametric spans against the
+# corner patch's own net), the corner patch is cut at TWO positions per
+# axis: the SETBACK (the band's width, 1/16) and the LEADER (0.25, where
+# the band is cut back from the junction corner).  So:
+#
+#   * the BAND of a seam starts at the LEADER -- the band's cell is
+#     [0, setback] across by [leader, far] along, and the base surface
+#     is CUT there (the file's five new ControlGrid44_2EdgeSegments);
+#   * the CORNER CELL -- the member's cell -- is the region between the
+#     setback and the leader;
+#   * so the corner fill's boundary against each blend is the blend's
+#     CUT EDGE, i.e. it sits AT THE LEADER.
+#
+# IN SILK'S OWN CELL STRUCTURE THE LEADER IS THE PATCH'S NAMED BAND EDGE
+# on the seam-parallel axis: that edge is where the band's own cell
+# starts (the band's along-seam extent begins there) and the patch's
+# base surface is segmented there (the same cut the maintainer's file
+# carries).  This build therefore MOVES that edge -- the cut -- and the
+# corner fill follows it.  Two consequences are reported rather than
+# hidden:
+#
+#   * Silk's patch carries ONE band edge per axis end (#82), and that
+#     edge is at once the setback of the perpendicular seam and the
+#     leader of this one.  Moving the leader therefore also moves that
+#     setback: the two cannot be told apart in Silk's cell structure.
+#     The maintainer's model has TWO edges per axis (the setback and
+#     the leader) and does not have this coupling.
+#   * the corner fill's SHAPE only follows the leader when the leader
+#     is moved on SOME of the ring's seams.  A uniform leader scales
+#     the whole corner and the shape is unchanged -- measured: the
+#     curvature spread is 1.036938 both ways (the subgrid chain's
+#     extrapolation is scale-invariant).
+
+
+def _leader_home(strip, patch, tol=None):
+    """(property name, why) -- the patch property that carries the
+    ROLLING LEADER of this seam: the band edge on the seam-PARALLEL
+    axis, at the junction end.
+
+    That edge IS the maintainer's leader: his band's cells start there,
+    his base surfaces are cut there, and the corner fill's boundary sits
+    on it.  `None` (with the reason) when the seam cannot say which end
+    of which axis carries it."""
+    from SilkBlend import side_and_end, band_edge_prop
+    from SilkMachinery import band_extent, seam_axis_roles
+    tol = getattr(strip, "tolerance", 0.01) if tol is None else tol
+    e, ss = side_and_end(strip, patch, tol)
+    if not e:
+        return None, ("blend %s cannot say which side of %s it takes"
+                      % (strip.Name, patch.Name))
+    along_letter, _band_letter = seam_axis_roles(e)
+    ext = band_extent(patch, e, ss)
+    if ext[0] is None:
+        return None, ext[1]
+    return band_edge_prop(along_letter, ext[2]), None
+
+
+def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
+                              order=1, name="Rolling66", fill_member=True):
+    """PATH (A) -- THE ROLLING CORNER: the corner fill (Silk's own 66)
+    whose boundary sits AT THE LEADER, plus the small triangular surface
+    the maintainer's file carries beside it.
+
+    `strips` are the ring's three (or four) blend strips; `patch` the
+    pinned patch whose corner carries the member.  `leader` is the
+    fraction of the seam curve's own parameter, measured from the
+    junction corner -- the SAME parameter space as `create_split_blend`
+    and `create_rolling_triangle` use.
+
+    `seams` are the strips whose seam is rolled (default: the two the
+    pinned patch carries).  The leader is written into the band edge
+    that carries it -- on BOTH patches of the seam, because the seam's
+    cut is one curve -- and the patches re-cut their base surfaces
+    there.  The ring strips, the corner fill (the 66) and the member
+    are then rebuilt from those cut cells.
+
+    The SMALL TRIANGULAR SURFACE (the maintainer's `CubicSurface_64`
+    over the corner cell) is built as its own object, and -- the owner's
+    spec -- its replacement by a FreeCAD `Surface::Filling` is built
+    through the shipped `create_fill` when `fill_member` is true.
+
+    Returns a dict:
+      {'corner': the CornerBlend, 'member': the small triangular
+       surface, 'member_fill': the FreeCAD filling over it (or None),
+       'leader': the leader, 'rolled': the strips whose seam was rolled}
+    or None when the selection is not a ring around the pinned patch."""
+    from SilkCorner import (CornerBlend, CornerBlendViewProvider,
+                             RollingMemberFace, RollingMemberFaceViewProvider,
+                             corner_inputs, CORNER_DEFAULT_TOL)
+    doc = FreeCAD.ActiveDocument
+    if len(strips) == 1 and isinstance(strips[0], (list, tuple)):
+        strips = list(strips[0])
+    strips = [s for s in (strips or []) if s is not None]
+    if len(strips) not in (3, 4):
+        FreeCAD.Console.PrintError(
+            "Silk: the rolling corner needs the ring's 3 or 4 blend strips "
+            "(got %d). Nothing was created.\n" % len(strips))
+        return None
+    if patch is None:
+        FreeCAD.Console.PrintError(
+            "Silk: the rolling corner needs the pinned patch (the one whose "
+            "corner carries the triangular surface). Nothing was created.\n")
+        return None
+    leader = float(leader)
+    if not 0.0 < leader < 1.0:
+        FreeCAD.Console.PrintError(
+            "Silk: the rolling leader %g is not a position inside the seam "
+            "curve (0, 1). Nothing was created.\n" % leader)
+        return None
+    on_patch = [s for s in strips
+                if getattr(s, "PatchA", None) is patch
+                or getattr(s, "PatchB", None) is patch]
+    roll = [s for s in (seams if seams is not None else on_patch)
+            if s in strips]
+    if not roll:
+        FreeCAD.Console.PrintError(
+            "Silk: the rolling corner has no seam to roll (the selection "
+            "holds no strip of this ring). Nothing was created.\n")
+        return None
+
+    # 1. the CUT: write the leader into the band edge that carries it, on
+    #    both patches of the seam (the seam's cut is one curve).
+    written = []
+    for s in roll:
+        for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
+            if p is None:
+                continue
+            prop, why = _leader_home(s, p)
+            if prop is None:
+                FreeCAD.Console.PrintError(
+                    "Silk: the rolling leader cannot be placed: %s. Nothing "
+                    "was created.\n" % why)
+                return None
+            cur = float(getattr(p, prop, 0.0) or 0.0)
+            if abs(cur - leader) < 1e-12:
+                continue
+            setattr(p, prop, leader)
+            written.append((p.Name, prop, cur, leader))
+    if written:
+        doc.recompute()
+        doc.recompute()
+    for pname, prop, old, new in written:
+        FreeCAD.Console.PrintMessage(
+            "Silk: the rolling leader moved %s.%s from %g to %g (the band's "
+            "corner-side cut; Silk's cell structure ties it to the "
+            "perpendicular seam's setback as well)\n"
+            % (pname, prop, old, new))
+
+    # 2. the corner fill: the 66 chain, fed with the ring's cut cells.
+    grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL)
+    if grids is None:
+        FreeCAD.Console.PrintError(
+            "Silk: the rolling corner cannot be built on these %d blends -- "
+            "%s. Nothing was created.\n" % (len(strips), why))
+        return None
+    existing = _existing_corner_blend(doc, strips)
+    if existing is not None:
+        corner = existing
+    else:
+        if len(strips) == 3:
+            from SilkMachinery import corner_ring_3
+            ordered, _why = corner_ring_3(strips)
+        else:
+            from SilkMachinery import corner_ring
+            ordered, _why = corner_ring(strips)
+        corner = doc.addObject("Part::FeaturePython", name + "Corner")
+        CornerBlend(corner, ordered)
+        CornerBlendViewProvider(corner.ViewObject)
+        corner.ViewObject.LineWidth = 1.50
+        corner.ViewObject.LineColor = (1.00, 0.67, 0.00)
+        corner.ViewObject.PointSize = 4.00
+        corner.ViewObject.DisplayMode = "Flat Lines"
+        corner.ViewObject.ShapeColor = (1.00, 0.67, 0.00)
+        corner.ViewObject.Transparency = 30
+        doc.recompute()
+
+    # 3. the SMALL TRIANGULAR SURFACE beside it (the maintainer's own
+    #    second surface), and the owner's FreeCAD replacement of it.
+    member = doc.addObject("Part::FeaturePython", name + "Member")
+    RollingMemberFace(member, strips, corner)
+    RollingMemberFaceViewProvider(member.ViewObject)
+    member.ViewObject.ShapeColor = (0.20, 0.45, 0.95)
+    member.ViewObject.Transparency = 0
+    doc.recompute()
+    member_fill = None
+    if fill_member and member.Shape and member.Shape.Edges:
+        # The member's collapsed row is a DEGENERATE edge (its two ends
+        # are the apex), so it is not a boundary curve a fill can take:
+        # the fill's boundary is the member's own three real edges (the
+        # two leader lines and the chord across the corner), which DO
+        # close a loop.
+        real = []
+        for i, e in enumerate(member.Shape.Edges):
+            if e.Length <= 1e-9:
+                continue
+            real.append((member, "Edge%d" % (i + 1)))
+        if len(real) >= 3:
+            member_fill = create_fill(real, faces=["Face1"] * len(real),
+                                      order=order, name=name + "MemberFill")
+            if member_fill is None and order != 0:
+                # A G1/G2 fill over a boundary that cannot carry it (a
+                # planar triangle, on the cube-corner fixture) is refused
+                # by FreeCAD itself; the C0 fill is the honest fallback
+                # and still meets the boundary exactly.
+                FreeCAD.Console.PrintMessage(
+                    "Silk: the member face's fill would not build at "
+                    "continuity order %d; falling back to order 0 (C0).\n"
+                    % order)
+                member_fill = create_fill(real, faces=["Face1"] * len(real),
+                                          order=0,
+                                          name=name + "MemberFill")
+    return {"corner": corner, "member": member, "member_fill": member_fill,
+            "leader": leader, "rolled": [s.Name for s in roll],
+            "written": written}
+
+
 # ---- the corner fill (#96) ------------------------------------------------
 #
 # The owner's ask: fill a whole corner with ONE patch and judge it by eye.

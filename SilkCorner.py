@@ -588,6 +588,139 @@ class CornerBlend:
         fp.Shape = surf_shape
 
 
+class RollingMemberFace:
+    """The SMALL TRIANGULAR SURFACE beside the rolling corner (#119, A).
+
+    The maintainer's rolling corner is TWO surfaces: one big quad (Silk's
+    own 66) and, beside it, a SMALLER TRIANGULAR surface -- in his file
+    the `CubicSurface_64` over the ring's triangular member (the corner
+    patch's corner cell, with one row collapsed onto the apex).  The
+    owner's spec: this smaller surface is the one to be replaced with a
+    FreeCAD surface patch.
+
+    This object is that smaller surface.  It re-derives the member from
+    the ring on every execute -- the SAME derivation the corner fill
+    uses (`corner_inputs`, the one place that defines "what corner does
+    this strip set make") -- so the two surfaces cannot disagree about
+    where the member is, and the face follows the corner when it moves.
+
+    Its surface is built from the member's own 24-pole grid through
+    `AN.CubicSurface_64` (never `buildFromPolesMultsKnots`), exactly the
+    way the maintainer's own `CubicSurface_64` over that grid is built.
+    """
+
+    def __init__(self, obj, strips, corner=None):
+        obj.addProperty("App::PropertyLinkList", "Strips", "Inputs",
+                        "the ring's blend strips").Strips = list(strips)
+        obj.addProperty("App::PropertyLink", "Corner", "Inputs",
+                        "the corner fill this face belongs to").Corner = corner
+        obj.addProperty("App::PropertyVectorList", "Poles", "Outputs",
+                        "the triangular member's 24 poles").Poles
+        obj.addProperty("App::PropertyFloatList", "Weights", "Outputs",
+                        "the triangular member's 24 weights").Weights
+        obj.addProperty("Part::PropertyGeometryList", "Legs", "Outputs",
+                        "grid segments").Legs
+        obj.addProperty("App::PropertyString", "object_type", "",
+                        "").object_type = "RollingMemberFace"
+        obj.setEditorMode("object_type", 1)
+        obj.Proxy = self
+        self._in_execute = False
+
+    def onChanged(self, fp, prop):
+        if prop in ("Strips", "Corner"):
+            if 'Restore' not in fp.State and list(getattr(fp, "Strips", []) or []):
+                fp.touch()
+                fp.recompute()
+
+    def execute(self, fp):
+        if 'Restore' in fp.State:
+            return
+        if getattr(self, "_in_execute", False):
+            return
+        self._in_execute = True
+        try:
+            self._do_execute(fp)
+        finally:
+            self._in_execute = False
+
+    def _do_execute(self, fp):
+        grids, _cells, why = corner_inputs(list(fp.Strips))
+        member = member_grid(grids) if grids is not None else None
+        if member is None:
+            FreeCAD.Console.PrintError(
+                "Silk: the rolling member face %s: %s\n"
+                % (fp.Name, why if grids is None else
+                   "this ring carries no triangular member"))
+            fp.Poles = []
+            fp.Weights = []
+            fp.Legs = []
+            fp.Shape = Part.Shape()
+            return
+        poles, weights = member
+        fp.Poles = poles
+        fp.Weights = weights
+        fp.Legs = AN.drawGrid(fp.Poles, 6)
+        doc = fp.Document
+        tmp = None
+        try:
+            tmp = doc.addObject("Part::FeaturePython", "_rmf_surf_tmp")
+            AN.CubicSurface_64(tmp, fp)
+            tmp.recompute()
+            shape = tmp.Shape
+        finally:
+            if tmp is not None and doc.getObject(tmp.Name) is not None:
+                try:
+                    doc.removeObject(tmp.Name)
+                except Exception:
+                    pass
+        if not shape or not hasattr(shape, "Faces") or not shape.Faces:
+            fp.Shape = Part.Shape()
+            return
+        fp.Shape = shape
+
+
+def member_grid(grids):
+    """(poles, weights) of the ring's TRIANGULAR MEMBER, or None.
+
+    The member is the one ring grid with a COLLAPSED end row: six poles
+    on one point (the apex the corner fill pinches at).  That is the
+    only structural difference between it and the three blends, so it is
+    what identifies it -- the same rule `pair_common` reads the
+    degeneracy from."""
+    for grid in (grids or []):
+        poles = grid[0] if isinstance(grid, tuple) else grid
+        weights = grid[1] if isinstance(grid, tuple) else None
+        if not poles or len(poles) != 24:
+            continue
+        for row in range(4):
+            base = poles[row * 6]
+            if all((poles[row * 6 + j] - base).Length <= 1e-9
+                   for j in range(1, 6)):
+                return list(poles), list(weights or [])
+    return None
+
+
+class RollingMemberFaceViewProvider:
+    """The small triangular surface's view provider (no icon of its own:
+    it is a piece of the corner, not a new kind of object)."""
+
+    def __init__(self, vobj):
+        vobj.Proxy = self
+
+    def attach(self, vobj):
+        self.ViewObject = vobj
+        self.Object = vobj.Object
+
+    def updateData(self, obj, prop):
+        return True
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        return None
+
+
 class CornerBlendViewProvider:
     def __init__(self, vobj):
         vobj.Proxy = self
