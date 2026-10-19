@@ -28,7 +28,18 @@ What is pinned here:
   6. the command is REGISTERED with FreeCAD's command manager and is a
      member of the workbench's visible set (#96, owner decision D3) -- the
      button beside the Silk corner -- and its bad-selection refusals are the
-     COMPONENT's own wording, not a second spelling of it.
+     COMPONENT's own wording, not a second spelling of it;
+  7. #121: the shipped oracle measures the fill's TANGENT-PLANE GAP along
+     the boundary -- the instrument the MANUAL probe used, now in the code
+     that judges the fill -- with its ZERO CONTROL read in the same run, so
+     the error floor is a measurement in the suite;
+  8. #121: the requested order is not evidence.  The same boundary built at
+     order 0 (C0) is a SOUND fill that contains its own boundary and passes
+     every C0 test; only the measured gap tells the two orders apart, so
+     the oracle accepts the order-1 fill and refuses the order-0 one;
+  9. #121: the SELECTABLE C0 fallback -- with no fallback selected the
+     refusal stands and nothing is left in the tree; with it selected the
+     fill is built at order 0 and the console says so by name.
 
 Run: python3 Tests/run_all.py corner_fill
 """
@@ -58,6 +69,21 @@ def _select(*objs):
 
 def _fills(doc):
     return [o for o in doc.Objects if o.TypeId == "Surface::Filling"]
+
+
+def _fill_links(fill):
+    """The fill's boundary wiring as [(object, "EdgeN"), ...] -- the shape
+    FreeCAD hands back (`BoundaryEdges` carries a LIST of sub-names)."""
+    out = []
+    for obj, subs in (fill.BoundaryEdges or []):
+        sub = list(subs)[0] if isinstance(subs, (list, tuple)) else subs
+        out.append((obj, sub))
+    return out
+
+
+def _fill_faces(fill):
+    """The fill's support faces, one per boundary edge."""
+    return list(fill.BoundaryFaces or [])
 
 
 def test_corner_fill_builds_from_the_selected_ring(doc):
@@ -466,4 +492,177 @@ def test_corner_fill_command_is_registered_and_refuses_a_bad_selection(doc):
               errors)
         check(not _fills(doc),
               "%s: a Surface::Filling survived the refusal" % label, errors)
+    return {"pass": not errors, "checks": checks, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# #121 -- the shipped oracle's CONTINUITY MEASUREMENT, the ORDER it
+# actually reached, and the SELECTABLE C0 fallback.
+# ---------------------------------------------------------------------------
+
+def test_the_shipped_oracle_measures_the_boundary_normal_gap(doc):
+    """#121: the SHIPPED oracle measures the fill's TANGENT-PLANE GAP along
+    the boundary -- the instrument the MANUAL probe (`Tests/
+    g2_corner_fill_probe.py`) used, now living in the code that judges the
+    fill, so there is ONE implementation and ONE error floor.
+
+    The ZERO CONTROL is read in the same run: the fill's own surface
+    measured against ITSELF, through the same instrument.  That is the
+    floor, as a measurement in the suite and not a number quoted from a
+    doc.  The raw per-edge readings are reported either way.
+    """
+    errors, checks = [], []
+    import Tests.corner_model as cm
+    import SilkWorkflowOps as OPS
+
+    cm.build_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIPS]
+    fill = OPS.create_corner_fill(strips, order=1)
+    check(fill is not None, "the corner fill did not build", errors)
+    if fill is None:
+        return {"pass": not errors, "checks": checks, "errors": errors}
+
+    links = _fill_links(fill)
+    faces = _fill_faces(fill)
+    report = OPS.fill_normal_gap(fill, links, faces)
+    checks.append("boundary normal gap per edge (deg): %r"
+                  % ([(e["label"], e["gap_deg"], e["stations"])
+                      for e in report["per_edge"]],))
+    checks.append("max boundary normal gap: %r deg" % (report["max_gap_deg"],))
+    checks.append("the shipped bar: %.1f deg" % OPS.FILL_NORMAL_GAP_TOL_DEG)
+
+    check(report["measurable"],
+          "the tangent-plane gap could not be measured at all: %r"
+          % (report["reason"],), errors)
+    check(all(e["stations"] > 0 for e in report["per_edge"]),
+          "a boundary edge carried no measurable station: %r"
+          % (report["per_edge"],), errors)
+    check(report["max_gap_deg"] is not None,
+          "no max gap was reported", errors)
+
+    # The ZERO CONTROL: the fill's own surface, measured against itself.
+    edges = fill.Shape.Edges
+    self_links = [(fill, "Edge%d" % (i + 1)) for i in range(len(edges))]
+    zero = OPS.fill_normal_gap(fill, self_links, ["Face1"] * len(edges))
+    checks.append("zero control (the fill against itself): %r deg"
+                  % (zero["max_gap_deg"],))
+    check(zero["measurable"],
+          "the zero control could not be measured: %r" % (zero["reason"],),
+          errors)
+    check(zero["max_gap_deg"] is not None and zero["max_gap_deg"] <= 1e-5,
+          "the instrument does not read 0 on an identical pair: %r"
+          % (zero["max_gap_deg"],), errors)
+    return {"pass": not errors, "checks": checks, "errors": errors}
+
+
+def test_the_oracle_judges_the_order_the_fill_reached(doc):
+    """#121: the REQUESTED order is not evidence.
+
+    The same boundary built at order 0 (C0) is a SOUND fill: it has a
+    face, it is valid, and it contains its own boundary -- it passes every
+    C0 test, which is all the shipped oracle used to ask.  Only the
+    measured tangent-plane gap tells the two orders apart.
+
+    So the shipped oracle, asked for order 1, ACCEPTS the order-1 fill and
+    REFUSES the order-0 one by name -- the order FreeCAD accepted and did
+    not reach.
+    """
+    errors, checks = [], []
+    import Tests.corner_model as cm
+    import SilkWorkflowOps as OPS
+
+    cm.build_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIPS]
+
+    fill1 = OPS.create_corner_fill(strips, order=1, name="OrderOne")
+    check(fill1 is not None, "the order-1 corner fill did not build", errors)
+    fill0 = OPS.create_corner_fill(strips, order=0, name="OrderZero")
+    check(fill0 is not None, "the order-0 corner fill did not build", errors)
+    if fill1 is None or fill0 is None:
+        return {"pass": not errors, "checks": checks, "errors": errors}
+
+    links1, faces1 = _fill_links(fill1), _fill_faces(fill1)
+    links0, faces0 = _fill_links(fill0), _fill_faces(fill0)
+    gap1 = OPS.fill_normal_gap(fill1, links1, faces1)["max_gap_deg"]
+    gap0 = OPS.fill_normal_gap(fill0, links0, faces0)["max_gap_deg"]
+    checks.append("order 1 gap: %r deg; order 0 gap: %r deg" % (gap1, gap0))
+
+    problem1 = OPS.corner_fill_problem(fill1, links1, faces1, order=1)
+    check(problem1 is None,
+          "the shipped oracle refused the order-1 fill: %r" % (problem1,),
+          errors)
+
+    # The order-0 fill, judged as order 1: the order FreeCAD ACCEPTED but
+    # did not reach.
+    problem0 = OPS.corner_fill_problem(fill0, links0, faces0, order=1)
+    checks.append("the order-0 fill judged as order 1: %r" % (problem0,))
+    check(problem0 is not None,
+          "the shipped oracle accepted a C0 fill as an order-1 fill", errors)
+    check(problem0 is not None and "tangent-plane gap" in problem0,
+          "the refusal does not name the measured gap: %r" % (problem0,),
+          errors)
+
+    # ...and the same fill judged as the C0 it is: accepted.
+    check(OPS.corner_fill_problem(fill0, links0, faces0, order=0) is None,
+          "the shipped oracle refused the C0 fill it was asked for", errors)
+
+    # The instrument DISCRIMINATES: the two orders read differently.
+    check(gap1 is not None and gap0 is not None and gap1 < gap0,
+          "the instrument does not tell the two orders apart: %r vs %r"
+          % (gap1, gap0), errors)
+    return {"pass": not errors, "checks": checks, "errors": errors}
+
+
+def test_the_c0_fallback_is_selectable(doc):
+    """#96's third acceptance item, and #121: a SELECTABLE C0 fallback
+    where the requested order is refused.
+
+    With NO fallback selected the refusal stands and nothing is left in the
+    tree (the #80/#83 lesson).  With the fallback selected the fill is
+    built at order 0 and the console says so BY NAME -- a caller is never
+    handed a C0 fill it did not ask for, silently.
+    """
+    errors, checks = [], []
+    import Tests.corner_model as cm
+    import SilkWorkflowOps as OPS
+
+    cm.build_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIPS]
+    links, _faces = OPS.corner_fill_boundary(strips)
+    check(bool(links), "the ring's boundary did not resolve", errors)
+    if not links:
+        return {"pass": not errors, "checks": checks, "errors": errors}
+
+    # 1. no fallback selected: refused, nothing created.
+    before = set(o.Name for o in doc.Objects)
+    with _Capture() as cap:
+        refused = OPS.create_fill(links, order=3)
+    doc.recompute()
+    created = sorted(set(o.Name for o in doc.Objects) - before)
+    checks.append("no fallback: console %s"
+                  % " | ".join(m.strip() for m in cap.errors)[:200])
+    check(refused is None,
+          "order 3 was accepted without a fallback: %r" % (refused,), errors)
+    check(not created, "the refused fill created %r" % (created,), errors)
+
+    # 2. the fallback selected: built at order 0, and said so by name.
+    before = set(o.Name for o in doc.Objects)
+    with _Capture() as cap:
+        fallback = OPS.create_fill(links, order=3, fallback_order=0)
+    doc.recompute()
+    created = sorted(set(o.Name for o in doc.Objects) - before)
+    checks.append("with the fallback: console %s"
+                  % " | ".join(m.strip() for m in cap.messages)[:300])
+    check(fallback is not None, "the selected C0 fallback did not build",
+          errors)
+    if fallback is None:
+        return {"pass": not errors, "checks": checks, "errors": errors}
+    check(len(created) == 1, "the fallback created %r" % (created,), errors)
+    check(list(fallback.BoundaryOrder or []) == [0] * len(links),
+          "the fallback fill is not at order 0: %r"
+          % (list(fallback.BoundaryOrder or []),), errors)
+    check(bool(fallback.Shape.Faces) and fallback.Shape.isValid(),
+          "the fallback fill is not a valid shape", errors)
+    check(any("fallback" in m for m in cap.messages),
+          "the fallback was not reported by name: %r" % (cap.messages,), errors)
     return {"pass": not errors, "checks": checks, "errors": errors}

@@ -15,6 +15,8 @@ all identity-only (adjacency is the shared Edge object, never
 geometric coincidence).
 """
 
+import math
+
 import FreeCAD
 
 from SilkEdge import Edge, EdgeViewProvider, classify_sketches
@@ -918,6 +920,43 @@ CORNER_FILL_ORDERS = (0, 1, 2)
 # second belt behind the validity check.
 FILL_CONTACT_TOL = 1e-3
 
+# The fill's continuity INSTRUMENT: the TANGENT-PLANE GAP ("normal gap")
+# between the fill's own surface and the SUPPORT surface it claims along
+# the boundary -- the one continuity quantity a fill can be judged by here.
+# It is a G1 metric (the two tangent planes agree); it is NOT a G2 one and
+# cannot be: `g1_deg` cannot establish G2 (AGENTS.md, #97).
+#
+# The METHOD is the one the MANUAL probe `Tests/g2_corner_fill_probe.py`
+# used, moved here so that there is exactly ONE implementation of it: the
+# probe imports these two functions. The algorithm is unchanged, so the
+# probe's published readings still stand.
+#
+# ERROR FLOOR. `solve_uv`'s own floor, published by #97's calibration
+# (`Tests/continuity_calibration.py::sample_solve_uv`, at the grid this
+# oracle uses): 4.5e-13 mm of position residual. The shipped test also
+# reads the ZERO CONTROL -- the fill's surface measured against ITSELF --
+# and reports it raw, so the floor is a measurement in the suite and not a
+# number quoted from a doc.
+#
+# MEASURED (FreeCAD 1.1.3 / OCCT 7.9, the `Tests/corner_model.py` fixture
+# -- docs/research/freecad-corner-fill-g2-measurement.md), the strip feed:
+#     order 0 (C0)   1.86 - 4.29 deg   (C0 by design)
+#     order 1 (G1)   0.087 - 0.155 deg
+#     order 2        0.164 - 0.483 deg
+# The bar below sits ABOVE the measured G1/G2 readings and BELOW the
+# measured C0 one, so a fill that came out C0 can never pass a request for
+# G1 -- which is the whole point of measuring the order instead of trusting
+# the requested one.
+FILL_NORMAL_GAP_TOL_DEG = 1.0
+
+# The grid the shipped oracle solves the boundary points with. 30 is the
+# grid #97's calibration measured the 4.5e-13 mm floor at.
+FILL_NORMAL_GAP_GRID = 30
+
+# The stations per boundary edge the gap is read at. 11 is the probe's own
+# sampling (k/10), so the shipped numbers stay comparable with it.
+FILL_NORMAL_GAP_STATIONS = 11
+
 
 def _row_edge_subname(shape, row, tol=1e-6):
     """("EdgeN", None) for the one edge of `shape` a Bezier boundary ROW
@@ -1034,12 +1073,218 @@ def fill_boundary_loop(links, tol=None):
     return [(link.obj, link.subname) for link in order], None
 
 
-def corner_fill_problem(fill, links):
+def solve_uv(surf, point, prange, grid=120):
+    """(u, v, residual) for `point` on `surf`, solved over `prange`.
+
+    Coarse grid to bracket the nearest point, then a damped Newton on the
+    two parameters.  `residual` is |surf.value(u, v) - point| -- the small
+    number the caller wants, and the big number when `point` is not on
+    the surface at all (which is exactly the over-constrained-feed
+    evidence).
+
+    Moved here from `Tests/g2_corner_fill_probe.py` (#121): the fill's
+    continuity is now judged by the SHIPPED oracle, so the instrument
+    lives with the code that uses it and the probe imports it -- one
+    implementation, one floor.  The algorithm is unchanged.
+    """
+    u0, u1, v0, v1 = prange
+    best = None
+    for i in range(grid + 1):
+        u = u0 + (u1 - u0) * i / grid
+        for j in range(grid + 1):
+            v = v0 + (v1 - v0) * j / grid
+            d = (surf.value(u, v) - point).Length
+            if best is None or d < best[0]:
+                best = (d, u, v)
+    u, v = best[1], best[2]
+    for _ in range(80):
+        r = surf.value(u, v) - point
+        if r.Length < 1e-11:
+            break
+        h = 1e-6
+        su = (surf.value(u + h, v) - surf.value(u - h, v)) / (2 * h)
+        sv = (surf.value(u, v + h) - surf.value(u, v - h)) / (2 * h)
+        a, b, c = su.dot(su), su.dot(sv), sv.dot(sv)
+        d, e = su.dot(r), sv.dot(r)
+        det = a * c - b * b
+        if abs(det) < 1e-18:
+            break
+        u -= (c * d - b * e) / det
+        v -= (a * e - b * d) / det
+        u = min(u1, max(u0, u))
+        v = min(v1, max(v0, v))
+    return u, v, (surf.value(u, v) - point).Length
+
+
+def normal_gap_deg(surf_a, ua, va, surf_b, ub, vb):
+    """The angle (deg) between two surfaces' normals at two parameter
+    points.
+
+    The second normal is taken on the SAME SIDE (it is flipped when the
+    raw dot product is negative), so the figure is the tangent-plane gap
+    and never the 180 deg an opposed pair would read.
+    """
+    na = surf_a.normal(ua, va)
+    nb = surf_b.normal(ub, vb)
+    if na.Length < 1e-12 or nb.Length < 1e-12:
+        return None
+    na.normalize()
+    nb.normalize()
+    if na.dot(nb) < 0.0:
+        nb = -1.0 * nb
+    return math.degrees(math.acos(max(-1.0, min(1.0, na.dot(nb)))))
+
+
+def _subname(sub):
+    """The sub-shape name as a string ("Edge1"), from a name or a list."""
+    if isinstance(sub, (list, tuple)):
+        return sub[0] if sub else ""
+    return sub
+
+
+def _support_face(obj, name):
+    """The support face of `obj` named `name`, or None.
+
+    The fill's support faces are named on the object that OWNS the
+    boundary edge ("Face1"), and that object's shape may be the face
+    itself (a Silk strip's Shape is its surface) or a compound holding
+    it -- both are resolved here, and a name that does not resolve is
+    None rather than an exception.
+    """
+    shape = getattr(obj, "Shape", None)
+    if shape is None or not name:
+        return None
+    if getattr(shape, "ShapeType", "") == "Face":
+        return shape if name in ("Face1", "Face") else None
+    try:
+        face = shape.getElement(name)
+    except Exception:
+        face = None
+    if face is None:
+        faces = getattr(shape, "Faces", None) or []
+        if not faces:
+            return None
+        face = faces[0]
+    if getattr(face, "ShapeType", "") != "Face":
+        faces = getattr(face, "Faces", None) or []
+        if not faces:
+            return None
+        face = faces[0]
+    return face
+
+
+def fill_normal_gap(fill, links, faces=None, stations=None, grid=None):
+    """The fill's TANGENT-PLANE GAP along the boundary it claims (deg).
+
+    For every boundary edge the fill was given, the edge is sampled, each
+    sample point is solved on the FILL's surface and on the SUPPORT
+    surface, and the two normals at that point are compared -- the
+    tangent-plane gap, the G1 metric.  The method is `solve_uv` (the
+    probe's, moved here) plus `normal_gap_deg`; the error floor is
+    `solve_uv`'s own (4.5e-13 mm, #97's calibration).
+
+    A sample point where the fill does not pass through the boundary is
+    SKIPPED, never counted as a zero gap: that is the difference between
+    "no gap" and "no measurement".  Whether the fill contains its
+    boundary at all is the C0 residual check's business
+    (`corner_fill_problem`).
+
+    An edge with NO support face has no surface to measure against: its
+    gap is None and the whole measurement reads as not measurable.  That
+    is the honest reading for a fill built over bare curves.
+
+    Returns a dict:
+      "measurable"   bool -- was there a station to measure at all
+      "max_gap_deg"  float or None -- the worst gap over the boundary
+      "per_edge"     list of {"label", "gap_deg", "residual",
+                              "ref_residual", "stations", "reason"} -- one
+                              per boundary edge, raw
+      "reason"       None or why nothing could be measured
+    """
+    stations = FILL_NORMAL_GAP_STATIONS if stations is None else int(stations)
+    grid = FILL_NORMAL_GAP_GRID if grid is None else int(grid)
+    links = list(links or [])
+    faces = list(faces or [])
+    shape = getattr(fill, "Shape", None)
+    per_edge = []
+    if shape is None or not shape.Faces:
+        return {"measurable": False, "max_gap_deg": None, "per_edge": [],
+                "reason": "the fill produced no face"}
+    face = shape.Faces[0]
+    surf = face.Surface
+    prange = face.ParameterRange
+    worst = None
+    for i, (obj, subname) in enumerate(links):
+        label = "%s.%s" % (getattr(obj, "Name", "?"), _subname(subname))
+        entry = {"label": label, "gap_deg": None, "residual": None,
+                 "stations": 0, "reason": None}
+        fname = faces[i] if i < len(faces) else None
+        ref = _support_face(obj, fname)
+        if ref is None:
+            entry["reason"] = ("no support face was given" if not fname
+                               else "the support face %r does not resolve"
+                               % (fname,))
+            per_edge.append(entry)
+            continue
+        rsurf = ref.Surface
+        rrange = ref.ParameterRange
+        edge = obj.Shape.getElement(_subname(subname))
+        gap = None
+        residual = 0.0
+        ref_residual = 0.0
+        used = 0
+        for k in range(stations):
+            t = (edge.FirstParameter
+                 + (edge.LastParameter - edge.FirstParameter)
+                 * k / float(max(1, stations - 1)))
+            point = edge.valueAt(t)
+            u, v, res = solve_uv(surf, point, prange, grid=grid)
+            residual = max(residual, res)
+            if res > FILL_CONTACT_TOL:
+                continue      # the fill does not pass through this point
+            ur, vr, rres = solve_uv(rsurf, point, rrange, grid=grid)
+            ref_residual = max(ref_residual, rres)
+            if rres > FILL_CONTACT_TOL:
+                continue      # the point is not on the support surface
+            g = normal_gap_deg(surf, u, v, rsurf, ur, vr)
+            if g is None:
+                continue
+            gap = g if gap is None else max(gap, g)
+            used += 1
+        entry["gap_deg"] = gap
+        entry["residual"] = residual
+        entry["ref_residual"] = ref_residual
+        entry["stations"] = used
+        if gap is None:
+            entry["reason"] = "no station could be measured"
+        per_edge.append(entry)
+        if gap is not None:
+            worst = gap if worst is None else max(worst, gap)
+    return {"measurable": worst is not None, "max_gap_deg": worst,
+            "per_edge": per_edge,
+            "reason": None if worst is not None
+            else "no station on any boundary edge could be measured"}
+
+
+def corner_fill_problem(fill, links, faces=None, order=None):
     """None when `fill` is a sound fill of `links`, else the reason.
 
     A fill must have a face, be a valid shape, and CONTAIN every boundary
     edge it was given -- the C0 check, and the reason an over-constrained
     boundary can never be left standing.
+
+    With `order` given, the fill must ALSO have REACHED that continuity
+    order: the tangent-plane gap along the boundary (`fill_normal_gap`)
+    must be within `FILL_NORMAL_GAP_TOL_DEG`.  This is the check the
+    requested order alone cannot make: FreeCAD accepts an order and can
+    hand back a fill that did not reach it, and a C0 fill passes every
+    C0 test (#121).  Order 0 (C0) asks for no tangent-plane continuity,
+    so no gap bar applies to it.
+
+    `faces` are the support faces (one per boundary edge).  Without them
+    the gap cannot be measured and the order is NOT judged: the fill is
+    then accepted on its C0 evidence alone, and the measurement report
+    says so.
     """
     shape = fill.Shape
     if not shape.Faces:
@@ -1047,10 +1292,18 @@ def corner_fill_problem(fill, links):
     if not shape.isValid():
         return "the face is not a valid shape"
     for obj, subname in links:
-        distance = shape.distToShape(obj.Shape.getElement(subname))[0]
+        name = _subname(subname)
+        distance = shape.distToShape(obj.Shape.getElement(name))[0]
         if distance > FILL_CONTACT_TOL:
             return ("it misses %s.%s by %.4g mm"
-                    % (obj.Name, subname, distance))
+                    % (obj.Name, name, distance))
+    if order is not None and int(order) >= 1:
+        gap = fill_normal_gap(fill, links, faces)
+        if gap["measurable"] and gap["max_gap_deg"] > FILL_NORMAL_GAP_TOL_DEG:
+            return ("its tangent-plane gap along the boundary is %.3f deg, "
+                    "above the %.1f deg bar for continuity order %d"
+                    % (gap["max_gap_deg"], FILL_NORMAL_GAP_TOL_DEG,
+                       int(order)))
     return None
 
 
@@ -1060,6 +1313,12 @@ def _order_problem(order):
     `BoundaryOrder` is FreeCAD's 0/1/2 and nothing else: >= 3 is refused by
     FreeCAD itself ("BRepFill : The continuity is not G0 G1 or G2"), so the
     honest answer is to refuse it here, before an object exists.
+
+    This is only the FIRST gate, and it is about the VALUE, not about what
+    the fill reaches: an order inside 0/1/2 is an order FreeCAD ACCEPTS,
+    and FreeCAD may hand back a fill that did not reach it.  Whether the
+    fill reached the order asked for is measured, not assumed --
+    `corner_fill_problem` reads the tangent-plane gap (#121).
     """
     if order in CORNER_FILL_ORDERS:
         return None
@@ -1071,9 +1330,10 @@ def _build_fill(links, faces, order, name):
     """The shared build-and-validate tail of both fill entry points.
 
     (object, None) or (None, reason). The created object is FreeCAD's own,
-    not a Silk one. A fill that produced no face, is invalid, or misses its
-    own boundary is REMOVED again before returning, so an invalid fill is
-    never parked in the tree reading `State=Up-to-date` (#80/#83).
+    not a Silk one. A fill that produced no face, is invalid, misses its
+    own boundary, or did not REACH the order it was asked for is REMOVED
+    again before returning, so an invalid fill is never parked in the tree
+    reading `State=Up-to-date` (#80/#83).
     """
     doc = FreeCAD.ActiveDocument
     try:
@@ -1088,7 +1348,7 @@ def _build_fill(links, faces, order, name):
     obj.BoundaryFaces = faces
     obj.BoundaryOrder = [order] * len(links)
     doc.recompute()
-    problem = corner_fill_problem(obj, links)
+    problem = corner_fill_problem(obj, links, faces, order)
     if problem is not None:
         doc.removeObject(obj.Name)
         doc.recompute()
@@ -1096,7 +1356,42 @@ def _build_fill(links, faces, order, name):
     return obj, None
 
 
-def create_fill(links, faces=None, order=1, name="Surface"):
+def _fill_at_order(links, faces, order, name, fallback_order=None):
+    """(object, why, used_order) -- the fill, or nothing.
+
+    `why` is None when the fill built at the order that was asked for;
+    otherwise it names the refusal (an order FreeCAD cannot take, or the
+    oracle's verdict that the fill did not reach it) or the failure.
+    `used_order` is the order the fill was actually built at.
+
+    `fallback_order` is the SELECTABLE C0 fallback (#96: "offer the
+    selectable C0 fallback where the requested order is refused"): the
+    order to build at when the requested one is refused -- either because
+    FreeCAD does not take that order at all, or because the oracle caught
+    that the fill did not reach it.  None (the default) means NO
+    fallback: the refusal stands and nothing is left in the tree, so a
+    caller never gets a C0 fill it did not ask for.
+    """
+    problem = _order_problem(order)
+    if problem is None:
+        obj, problem = _build_fill(links, faces, order, name)
+        if obj is not None:
+            return obj, None, order
+    if fallback_order is None:
+        return None, problem, order
+    bad = _order_problem(fallback_order)
+    if bad is not None:
+        return None, ("%s; the selected fallback order %r is not usable "
+                      "either (%s)" % (problem, fallback_order, bad)), order
+    obj, why = _build_fill(links, faces, fallback_order, name)
+    if obj is None:
+        return None, ("%s; the selected fallback at order %d did not build "
+                      "either (%s)" % (problem, fallback_order, why)), order
+    return obj, problem, fallback_order
+
+
+def create_fill(links, faces=None, order=1, name="Surface",
+                fallback_order=None):
     """Create ONE `Surface::Filling` over an EXPLICIT hole boundary (#96).
 
     `links` is the boundary as `[(object, "EdgeN"), ...]` -- the sub-shapes
@@ -1115,8 +1410,19 @@ def create_fill(links, faces=None, order=1, name="Surface"):
     constructed: an order outside 0/1/2, or a boundary that is not ONE
     closed loop -- branched, pinched, open, over-constrained with a surplus
     edge -- is refused by name and leaves NO object in the tree. The build
-    is then validated by the C0 boundary residual (`corner_fill_problem`),
-    and a fill that misses its own boundary is removed again.
+    is then validated by the C0 boundary residual AND, for an order of 1
+    or 2, by the TANGENT-PLANE GAP the fill actually reached
+    (`corner_fill_problem`): the requested order alone is not evidence,
+    because FreeCAD accepts an order it may not reach, and a C0 fill
+    passes every C0 test (#121).
+
+    `fallback_order` is the SELECTABLE C0 fallback (#96): the order to
+    build at when the requested order is refused -- by FreeCAD's own order
+    list, or by the oracle's verdict that the fill did not reach it. The
+    default is None: NO fallback, so the refusal stands and nothing is
+    left in the tree. When a fallback IS selected, the fallback build is
+    reported by name, and the fill's own `BoundaryOrder` carries the order
+    it was really built at.
 
     The corner's own collector is `corner_fill_boundary` (ring strips ->
     this same wiring), used by `create_corner_fill`.
@@ -1125,7 +1431,7 @@ def create_fill(links, faces=None, order=1, name="Surface"):
         links = [links]     # one bare (object, "EdgeN") link
     links = [(o, s) for o, s in list(links or []) if o is not None and s]
     problem = _order_problem(order)
-    if problem is not None:
+    if problem is not None and fallback_order is None:
         FreeCAD.Console.PrintError(
             "Silk: %s. Nothing was created.\n" % problem)
         return None
@@ -1142,19 +1448,24 @@ def create_fill(links, faces=None, order=1, name="Surface"):
             "edges, %d faces). Nothing was created.\n"
             % (len(ordered), len(faces)))
         return None
-    obj, problem = _build_fill(ordered, faces, order, name)
+    obj, why, used = _fill_at_order(ordered, faces, order, name,
+                                    fallback_order)
     if obj is None:
         FreeCAD.Console.PrintError(
             "Silk: the surface fill over %d boundary edges did not build -- "
-            "%s. Nothing was left in the tree.\n" % (len(ordered), problem))
+            "%s. Nothing was left in the tree.\n" % (len(ordered), why))
         return None
+    if used != order:
+        FreeCAD.Console.PrintMessage(
+            "Silk: the fill at continuity order %d was refused (%s); the "
+            "selected fallback built it at order %d.\n" % (order, why, used))
     FreeCAD.Console.PrintMessage(
         "Silk: surface fill %s created over %d boundary edges (order %d)\n"
-        % (obj.Name, len(ordered), order))
+        % (obj.Name, len(ordered), used))
     return obj
 
 
-def create_corner_fill(*strips, order=1, name="Surface"):
+def create_corner_fill(*strips, order=1, name="Surface", fallback_order=None):
     """Create ONE `Surface::Filling` over the hole the corner's ring strips
     close (#96).
 
@@ -1170,9 +1481,14 @@ def create_corner_fill(*strips, order=1, name="Surface"):
     constructed: a selection that is not a ring around one junction, a ring
     whose junction rows cannot be named, or an order outside 0/1/2 is
     refused by name and leaves NO object in the tree. The build is then
-    validated, and a fill that produced no face, is invalid, or misses its
-    own boundary is REMOVED again with a named refusal -- an invalid fill
-    must never be parked in the tree reading `State=Up-to-date` (#80/#83).
+    validated, and a fill that produced no face, is invalid, misses its own
+    boundary, or did not REACH the order it was asked for is REMOVED again
+    with a named refusal -- an invalid fill must never be parked in the
+    tree reading `State=Up-to-date` (#80/#83).
+
+    `fallback_order` is the SELECTABLE C0 fallback (#96): the order to
+    build at when the requested order is refused. The default is None: NO
+    fallback, so the refusal stands and nothing is left in the tree.
 
     The created object is FreeCAD's own, not a Silk one: it carries no band
     or split bookkeeping and no Silk view provider. GUI-free -- the command
@@ -1187,7 +1503,7 @@ def create_corner_fill(*strips, order=1, name="Surface"):
             "one junction (got %d). Nothing was created.\n" % len(strips))
         return None
     bad_order = _order_problem(order)
-    if bad_order is not None:
+    if bad_order is not None and fallback_order is None:
         FreeCAD.Console.PrintError(
             "Silk: %s. Nothing was created.\n" % bad_order)
         return None
@@ -1198,15 +1514,21 @@ def create_corner_fill(*strips, order=1, name="Surface"):
             "Nothing was created.\n" % (len(strips), why))
         return None
     links, faces = boundary
-    obj, problem = _build_fill(links, faces, order, name)
+    obj, why, used = _fill_at_order(links, faces, order, name,
+                                    fallback_order)
     if obj is None:
         FreeCAD.Console.PrintError(
             "Silk: the surface fill over %s did not build -- %s. Nothing was "
             "left in the tree.\n"
-            % (", ".join(s.Name for s in strips), problem))
+            % (", ".join(s.Name for s in strips), why))
         return None
+    if used != order:
+        FreeCAD.Console.PrintMessage(
+            "Silk: the corner fill at continuity order %d was refused (%s); "
+            "the selected fallback built it at order %d.\n"
+            % (order, why, used))
     FreeCAD.Console.PrintMessage(
         "Silk: surface fill %s created over %s (order %d, %d boundary "
         "edges)\n"
-        % (obj.Name, ", ".join(s.Name for s in strips), order, len(links)))
+        % (obj.Name, ", ".join(s.Name for s in strips), used, len(links)))
     return obj

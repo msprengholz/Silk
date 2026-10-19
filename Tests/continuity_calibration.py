@@ -220,6 +220,29 @@ def known_g1_angle(theta_deg, n=41):
             "analytic_k_gap": exact["k_gap"]}
 
 
+def shipped_normal_gap(theta_deg, t=0.5, grid=30):
+    """The SHIPPED fill instrument on the same known dihedral (#121).
+
+    The corner fill's tangent-plane gap is read by the shipped oracle with
+    `SilkWorkflowOps.solve_uv` + `normal_gap_deg` -- the OTHER instrument,
+    on the SAME pair of planes this function's neighbour uses.  The truth
+    is `theta_deg`; the instrument must report it.  This is the
+    known-answer calibration the shipped bar rests on.
+    """
+    from SilkWorkflowOps import solve_uv, normal_gap_deg
+    theta = math.radians(theta_deg)
+    a = flat_plane()
+    b = plane_surface(theta, mirrored=True)
+    ba, bb = _pair_bsplines(a, b)
+    point = ba.value(0.0, t)
+    ua, va, resa = solve_uv(ba, point, (0.0, 1.0, 0.0, 1.0), grid=grid)
+    ub, vb, resb = solve_uv(bb, point, (0.0, 1.0, 0.0, 1.0), grid=grid)
+    gap = normal_gap_deg(ba, ua, va, bb, ub, vb)
+    return {"theta_deg": theta_deg, "gap_deg": gap,
+            "residual_a": resa, "residual_b": resb,
+            "uv_a": (ua, va), "uv_b": (ub, vb)}
+
+
 # ---------------------------------------------------------------------------
 # (4) known curvature jump (the G2 calibration)
 # ---------------------------------------------------------------------------

@@ -118,6 +118,27 @@ class BoundarySplineViewProvider:
     `claimChildren` reads the live link, so it survives a reload with the
     rest of the view provider (`__getstate__` / `__setstate__` are what let
     FreeCAD rebuild it).
+
+    #121 -- WHICH READING OF #11 WAS ASKED.  The ask was: *"the
+    BoundarySpline object should own/parent the sketches that drive it
+    (sketches in its group), so the model tree reads top-down: spline ->
+    sketches"*.  Two readings hide in it -- an OWNERSHIP one (the object
+    holds the sketch in its DATA) and a PARENTING one (the tree shows the
+    sketch inside the spline) -- and the ask's own purpose clause names
+    the second: the deliverable is that the MODEL TREE READS TOP-DOWN.
+    The owner accepted that reading when the ticket was closed: *"Done
+    and merged: `BoundarySpline` parents the sketch that drives it,
+    reusing the existing claim-children idiom (#52) rather than a second
+    grouping mechanism"* (#11).
+
+    The ownership half is not absent either: `obj.Sketch` is an
+    `App::PropertyLink`, so the spline DOES own its sketch in the data.
+    What a `Part::FeaturePython` cannot do is hold children in the DATA
+    TREE -- FreeCAD renders a feature's children through the view
+    provider's `claimChildren` (the #52 idiom the Edge already uses), and
+    a second grouping mechanism would be a second way of saying the same
+    thing.  So the tree-level reading is the one that was asked, and it
+    is the one that ships.
     """
 
     def __init__(self, vobj):
