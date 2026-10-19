@@ -219,9 +219,12 @@ def test_manual_measurement_scripts_reachable(doc):
     import Tests.g2_corner_roll_measure as roll
     import Tests.g2_corner_roll_visual as visual
     import Tests.rolling_corner_visual as rolling
+    # #123: the RSS/baseline instrument is a MANUAL measurement script
+    # too, and it is reachable by the same contract.
+    import Tests.rss_baseline_measure as rss
     errs = []
     checks = []
-    for mod in (demo, cm, solve, edge, fill, roll, visual, rolling):
+    for mod in (demo, cm, solve, edge, fill, roll, visual, rolling, rss):
         ok = callable(getattr(mod, "main", None))
         checks.append("%s.main callable: %s" % (mod.__name__, ok))
         if not ok:
