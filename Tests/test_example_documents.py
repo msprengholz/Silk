@@ -413,6 +413,11 @@ def test_cornercube_fixture_is_reproducible_from_its_generator(doc):
                 continue
             for (a, b), (ea, eb) in zip(got, expected):
                 for p, q in ((a, ea), (b, eb)):
+                    # The generator declares world points as plain tuples
+                    # (so a fixture read back from disk compares without
+                    # caring about the quaternion's sign); the sketch gives
+                    # Vectors. Convert once, here.
+                    q = FreeCAD.Vector(*q)
                     delta = (p - q).Length
                     worst = max(worst, delta)
                     if delta > 1e-6:
