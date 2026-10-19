@@ -35,7 +35,8 @@ from popup import tipsDialog
 from SilkMachinery import patch_side as _patch_side, band_cells, \
     band_diagnosis, ensure_hidden_idxs_property, shared_seam, \
     seam_from_edge, split_pair, axis_splits, band_edge, \
-    NO_BAND_1, NO_BAND_2, _EDGE_OF, _cyclic_adjacent, set_grid_display
+    NO_BAND_1, NO_BAND_2, _EDGE_OF, _cyclic_adjacent, set_grid_display, \
+    split_band_cells, CORNER_PIECE, OUTER_PIECE, LEADER_PIECES
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -581,6 +582,12 @@ def run_blend(fp):
     # module-level band_cells; #33). The corner cell at a 4-patch
     # junction is not part of the band (reserved for the corner blend
     # op, #28).
+    # #119: a SPLIT blend (`Leader` > 0) takes its cell from the base
+    # surface SEGMENTED at the leader -- a position ON THE SEAM CURVE,
+    # not one of the patch's two named band edges. `Leader` = 0 is the
+    # shipped full-seam path, untouched.
+    leader = float(getattr(fp, "Leader", 0.0) or 0.0)
+
     def get_strip(p, ea, ss):
         """Extract the band cell as `(flat 16 poles, flat 16 weights)`,
         with poles[U][V] = flat[U*4+V] (FreeCAD convention).
@@ -598,7 +605,30 @@ def run_blend(fp):
         same 4 end poles, so the strip met the patch exactly at the poles
         and up to 0.39 mm off in between (90 deg arc, R=10). The fallback
         for a cell with no stored weights is unit (`_cell_weights`).
+
+        #119: a SPLIT blend (`Leader` > 0) takes its cell from the
+        patch's base surface SEGMENTED at the leader instead of from the
+        patch's own subgrid cells -- the leader is a position ON THE SEAM
+        CURVE, not one of the patch's two named band edges, so it cannot
+        live on the patch. The patch object is NOT modified: the split is
+        a property of the blend.
         """
+        if leader > 0.0:
+            base = getattr(getattr(p, "Proxy", None), "_base_surface", None)
+            if base is None:
+                FreeCAD.Console.PrintError(
+                    "Silk: blend band on %s: the patch has no base surface "
+                    "to split at the leader %g.\n" % (p.Name, leader))
+                return None
+            piece = getattr(fp, "LeaderPiece", CORNER_PIECE)
+            if piece not in LEADER_PIECES:
+                piece = CORNER_PIECE
+            corner_cell, outer_cell, why = split_band_cells(
+                base, p, ea, ss, leader)
+            if corner_cell is None:
+                FreeCAD.Console.PrintError("Silk: %s\n" % why)
+                return None
+            return corner_cell if piece == CORNER_PIECE else outer_cell
         idxs = band_cells(p, ea, ss)
         if len(idxs) != 1:
             FreeCAD.Console.PrintError(
@@ -676,12 +706,14 @@ def run_blend(fp):
 
         # Map left param index to right param index: corner pairs fix
         # the seam ends, the inferred alignment governs the middle.
-        for lc_idx, rc_idx in pairs:
-            rb = cmap[eb].get(rc_idx)
-            if rb is not None and li == cmap[ea].get(lc_idx):
-                ri = rb
-                break
-        else:
+        ri = None
+        if leader <= 0.0:
+            for lc_idx, rc_idx in pairs:
+                rb = cmap[eb].get(rc_idx)
+                if rb is not None and li == cmap[ea].get(lc_idx):
+                    ri = rb
+                    break
+        if ri is None:
             ri = li if identity else 3 - li
 
         # Right strip: shared edge → outward (keep shared→outer direction)
@@ -756,7 +788,8 @@ def _guarded_execute(fp):
 
 
 def _on_changed(fp, prop):
-    if prop == "tolerance" or prop == "Edge" or prop.startswith("Patch"):
+    if prop in ("tolerance", "Edge", "Leader", "LeaderPiece") \
+            or prop.startswith("Patch"):
         if 'Restore' not in fp.State and getattr(fp, "PatchA", None):
             fp.recompute()
 
@@ -1156,6 +1189,21 @@ class Blend(BlendStrip):
                         "shared boundary edge pinning the seam (optional)").Edge = edge
         obj.addProperty("App::PropertyFloat", "tolerance", "Inputs",
                         "corner matching tolerance").tolerance = 0.01
+        # #119: the rolling corner's split. `Leader` is a position on the
+        # SEAM CURVE (a fraction of the curve's own parameter, measured
+        # from the junction corner); 0 = no split, i.e. the shipped
+        # full-seam behaviour, byte for byte. `LeaderPiece` says which
+        # side of that cut this blend covers: the corner-side piece or
+        # the outer one. The two pieces are two real surfaces that meet
+        # exactly at the cut.
+        obj.addProperty("App::PropertyFloat", "Leader", "Inputs",
+                        "rolling leader: the split position along the "
+                        "seam curve, 0 = no split").Leader = 0.0
+        obj.addProperty("App::PropertyEnumeration", "LeaderPiece",
+                        "Inputs",
+                        "which side of the leader this blend covers")
+        obj.LeaderPiece = list(LEADER_PIECES)
+        obj.setEditorMode("LeaderPiece", 1)
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs", "blend grid poles").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "Outputs", "blend grid weights").Weights
         obj.addProperty("Part::PropertyGeometryList", "Legs", "Outputs", "grid segments").Legs
