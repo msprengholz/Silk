@@ -10,11 +10,23 @@ no option to hide them.
 
 The trap this file exists for is the RESTORED document. `__init__` does
 not run on restore, so adding the property there alone leaves every Blend
-in an already-built document -- the owner's 8 blends and 1 corner -- with
-no toggle at all. `SilkBlend.ensure_grid_toggle` is the
+in an already-built document -- the owner's own committed model, 8 blends
+-- with no toggle at all. `SilkBlend.ensure_grid_toggle` is the
 `ensure_hidden_idxs_property` pattern applied to it: the restore path
 GIVES the property to the object, and the first test asserts that on the
 owner's own committed model, opened from disk.
+
+#124: the owner's model carries 8 blends and NO corner -- that is the
+COMMITTED file's inventory (`Tests/owner_model_fixture.py`
+`DOCUMENTED_INVENTORY`, read offline from the file's own Document.xml),
+and the owner stopped at the corner stage on purpose (the commit that
+added the file says so: the panel required 4 ring blends and a Demo01
+junction is 3-valent).  The corner's restore path is covered where it
+can be built ON PURPOSE: the second test in this module builds a corner
+model, strips the toggle off it and reopens it.  What this module must
+not do is assert a corner count that only a DIRTY working tree could
+supply -- that is the #67 family again, and it is why the inventory is
+stated once and checked by `Tests/test_owner_model_fixture.py`.
 
 The same class of trap, second instance: that model's blends are
 `DisplayMode = "Shaded"`, which is why its strip edges cannot be selected
@@ -41,15 +53,17 @@ import tempfile
 import FreeCAD
 
 import Tests.demo01_fixture_model as MODEL
+# The owner's model: the path, the DOCUMENTED inventory and the readers
+# (#124). Imported, not copied, so the state and the tests cannot
+# disagree about what the file on disk contains.
+import Tests.owner_model_fixture as OWNER
 from Tests.mcp_harness import check
 # The Coin-node readers live with the #108 tests; imported, not copied, so
 # "the toggle hides the node" means the same thing in both places.
 from Tests.test_display_grid import _grid_node, _which_child, \
     _grid_point_count
 
-_SILK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OWNER_PATH = os.path.join(_SILK_DIR, "Resources", "Test_files",
-                          "SketchOnly_Demo01Subset_withPatches.FCStd")
+OWNER_PATH = OWNER.OWNER_PATH
 
 GRID_TYPES = ("Blend", "BlendStrip", "CornerBlend")
 CORNERS = ("B12", "B24", "B43", "B31")
@@ -81,21 +95,32 @@ def _toggle_and_read(document, objects, value):
 
 def test_owner_model_restores_with_a_working_grid_toggle(doc):
     """The owner's own committed model (`SketchOnly_Demo01Subset_withPatches
-    .FCStd`, 8 Blends + 1 CornerBlend) was built BEFORE the property
-    existed, so its objects have no `ShowGrid` on disk. Opened from disk
-    they must each carry it, the toggle must actually hide the Coin grid
-    node, and the restored view mode must be Flat Lines rather than the
-    unpickable Shaded."""
+    .FCStd`, 8 Blends) was built BEFORE the property existed, so its
+    objects have no `ShowGrid` on disk. Opened from disk they must each
+    carry it, the toggle must actually hide the Coin grid node, and the
+    restored view mode must be Flat Lines rather than the unpickable
+    Shaded.
+
+    The inventory the model is asserted to carry is the DOCUMENTED one
+    (#124): 8 blends and 0 corners, read from
+    `Tests/owner_model_fixture.DOCUMENTED_INVENTORY`.  A corner count
+    that only a dirty working tree could supply is exactly the defect
+    this ticket is about, so it is not asserted here."""
     errors, checks = [], []
     source, tmpdir = MODEL.open_fresh(OWNER_PATH)
     try:
         objs = _grid_objects(source)
         blends = [o for o in objs if o.object_type in ("Blend", "BlendStrip")]
         corners = [o for o in objs if o.object_type == "CornerBlend"]
-        check(len(blends) == 8 and len(corners) == 1,
+        want_blends = OWNER.DOCUMENTED_INVENTORY["Blend"]
+        want_corners = OWNER.DOCUMENTED_INVENTORY["CornerBlend"]
+        check(len(blends) == want_blends and len(corners) == want_corners,
               "the owner's model carries %d blends and %d corners, want the "
-              "8 + 1 it was built with -- the restore arms below assert "
-              "nothing otherwise" % (len(blends), len(corners)), errors)
+              "%d + %d it was saved with (the documented inventory, "
+              "Tests/owner_model_fixture.DOCUMENTED_INVENTORY) -- the "
+              "restore arms below assert nothing otherwise"
+              % (len(blends), len(corners), want_blends, want_corners),
+              errors)
 
         missing = [o.Name for o in objs if not hasattr(o, "ShowGrid")]
         check(not missing,
