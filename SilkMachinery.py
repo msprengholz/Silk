@@ -712,6 +712,155 @@ def band_diagnosis(p, ea, ss):
            _edges_str(p, along_letter), n_along, excluded, left, fix))
 
 
+# ---- the rolling corner: splitting a blend ALONG its seam (#119) -------
+#
+# The maintainer's rolling corner (video episode 51) cuts each edge
+# blend along its seam and re-creates the rest of the band, so the
+# junction ends up with two zones: a small fillet that rolls into a large
+# one.  The cut position is a "rolling leader" -- a position ON THE SEAM
+# CURVE, measured from the junction corner.
+#
+# PARAMETER SPACE (stated once, used everywhere): the leader is a
+# fraction of the SEAM CURVE'S OWN parameter, measured from the
+# junction corner end.  The patch's base surface is a bicubic Bezier and
+# a boundary side of it is a cubic Bezier curve whose parameter IS that
+# side's surface coordinate, so "0.25 of the way along the seam curve"
+# is the surface coordinate 0.25 (or 0.75, measured from the other end).
+# It is NOT the band depth (the setback) and NOT an arc-length fraction:
+# the maintainer's own tool places the cut by a curve position, and the
+# curve's own parameter is what a Bezier segment carries.
+
+# The two pieces a split blend is cut into.  `CORNER_PIECE` is the piece
+# that still reaches the junction corner; `OUTER_PIECE` is the rest.
+CORNER_PIECE = "corner"
+OUTER_PIECE = "outer"
+LEADER_PIECES = (CORNER_PIECE, OUTER_PIECE)
+
+
+def seam_axis_roles(ea):
+    """('U'|'V', 'U'|'V') -- the seam-parallel axis and the band axis.
+
+    A seam along U is crossed by the band, so the band lives on the V
+    axis; a seam along V is the other way round."""
+    return ("U", "V") if ea[0] == "U" else ("V", "U")
+
+
+def band_extent(p, ea, ss):
+    """((along_lo, along_hi), (band_lo, band_hi), corner_end) or (None, why).
+
+    The band's interval ACROSS the seam, the band's interval ALONG the
+    seam, and which parametric end of the seam carries the junction
+    corner (0 or 1).
+
+    The band is ONE cell (#82), so the along-seam axis has exactly one
+    corner cell at the junction end and the band's own along-seam extent
+    is the interval next to it.  An axis with a corner cell at BOTH ends
+    (or none) cannot say which end the junction is at -- refused by name
+    rather than guessed."""
+    along_letter, band_letter = seam_axis_roles(ea)
+    along_pair = split_pair(p, along_letter)
+    band_pair = split_pair(p, band_letter)
+    along_ivs = build_intervals(*along_pair)
+    band_ivs = build_intervals(*band_pair)
+    corners = corner_cells(*along_pair, len(along_ivs))
+    name = getattr(p, "Name", "?")
+    if len(corners) != 1:
+        return None, ("the band on %s has %d corner cells on its %s axis, "
+                      "so it does not reach exactly one junction corner"
+                      % (name, len(corners), along_letter))
+    idx = next(iter(corners))
+    corner_set = set(corners)
+    if idx == 0:
+        corner_end = 0
+    elif idx == len(along_ivs) - 1:
+        corner_end = 1
+    else:
+        return None, ("the band on %s has its corner cell in the middle of "
+                      "the %s axis" % (name, along_letter))
+    if not band_ivs:
+        return None, "the band on %s has no interval" % name
+    keep = [i for i in range(len(along_ivs)) if i not in corner_set]
+    if len(keep) != 1:
+        return None, ("the band on %s covers %d cells along its %s axis "
+                      "(exactly 1 is required)"
+                      % (name, len(keep), along_letter))
+    along_lo, along_hi = along_ivs[keep[0]]
+    band_lo, band_hi = band_ivs[0 if ss == 0 else -1]
+    return (along_lo, along_hi), (band_lo, band_hi), corner_end
+
+
+def leader_cut(p, ea, ss, leader):
+    """(cut_parameter, corner_end) or (None, why).
+
+    Where the seam curve is cut for a leader `leader` (a fraction of the
+    seam curve's own parameter, measured from the junction corner).  The
+    cut must fall inside the band's own along-seam extent: a leader
+    inside the corner cell would cut where the corner blend's own cell
+    lives, and that is refused by name."""
+    ext = band_extent(p, ea, ss)
+    if ext[0] is None:
+        return None, ext[1]
+    (along_lo, along_hi), _band, corner_end = ext
+    if not 0.0 < float(leader) < 1.0:
+        return None, ("the leader %r is not a position inside the seam "
+                      "curve (0, 1)" % (leader,))
+    cut = float(leader) if corner_end == 0 else 1.0 - float(leader)
+    if not (along_lo < cut < along_hi):
+        return None, ("the leader %g falls at %g on the seam, outside the "
+                      "band's own extent (%g .. %g)"
+                      % (float(leader), cut, along_lo, along_hi))
+    return cut, corner_end
+
+
+def split_band_cells(base_surface, p, ea, ss, leader):
+    """((corner_poles, corner_weights), (outer_poles, outer_weights), why).
+
+    The band's cell cut at `leader` into the two pieces a split blend is
+    made of: the corner-side piece (the band's own along-seam extent up
+    to the leader) and the outer piece (the rest).
+
+    The cut is an exact knot line of BOTH nets -- the base surface is
+    SEGMENTED (`BSplineSurface.segment`, the same machinery
+    `build_subgrids` uses), not re-fitted -- so the two pieces share the
+    cut curve exactly and meet with C0 continuity there.
+
+    `base_surface` is the patch's own base surface (a Bezier patch); the
+    patch object itself is never modified."""
+    cut_info = leader_cut(p, ea, ss, leader)
+    if cut_info[0] is None:
+        return None, None, cut_info[1]
+    cut, corner_end = cut_info
+    ext = band_extent(p, ea, ss)
+    (along_lo, along_hi), (band_lo, band_hi) = ext[0], ext[1]
+    along_letter, _band_letter = seam_axis_roles(ea)
+    if corner_end == 0:
+        corner_span = (along_lo, cut)
+        outer_span = (cut, along_hi)
+    else:
+        corner_span = (cut, along_hi)
+        outer_span = (along_lo, cut)
+    if along_letter == "U":
+        boxes = ((corner_span[0], corner_span[1], band_lo, band_hi),
+                 (outer_span[0], outer_span[1], band_lo, band_hi))
+    else:
+        boxes = ((band_lo, band_hi, corner_span[0], corner_span[1]),
+                 (band_lo, band_hi, outer_span[0], outer_span[1]))
+    out = []
+    for (u0, u1, v0, v1) in boxes:
+        seg = base_surface.copy()
+        seg.segment(u0, u1, v0, v1)
+        poles = seg.getPoles()
+        weights = seg.getWeights()
+        flat = []
+        flat_w = []
+        for u in range(4):
+            for v in range(4):
+                flat.append(poles[u][v])
+                flat_w.append(float(weights[u][v]))
+        out.append((flat, flat_w))
+    return out[0], out[1], None
+
+
 # ---- the 4-strip corner ring and its subgrid chain (#91) ----------------
 #
 # Where four Patches meet at a shared junction, the four ring Blend strips

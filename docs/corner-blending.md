@@ -100,6 +100,36 @@ fillet rolls into the large one. Until that is built, the honest sentence is:
 > maintainer's two-zone rolling fillet. The two-zone look needs the segmented
 > recipe (#119).
 
+## The rolling corner, built (opt-in) — #119
+
+The segmented recipe is **built** as an opt-in
+(`SilkWorkflowOps.create_split_blend` /
+`create_rolling_triangle` / `create_rolling_corner`; the full write-up
+and the measurements are `docs/research/silk-rolling-corner.md`):
+
+* a blend can be **split at a rolling leader** — a position on the
+  **seam curve**, measured from the junction corner — into two real
+  surfaces that meet exactly at the cut (the base surface is *segmented*
+  there, so the cut is a knot line of both nets: 5.6e-17 mm measured);
+* the corner can carry a small **triangular surface** of its own, built
+  by FreeCAD's own `Surface::Filling` over the two corner-side seam
+  pieces and the chord across the corner;
+* the default path is **byte-identical** when the opt-in is not used
+  (`Leader` = 0 → the same 24 poles, deviation 0.00e+00).
+
+**What the measurement says.** On the cube-corner fixture the leader
+does **not** change the corner's own shape: the junction's curvature
+spread is 1.037 with the leader and 1.037 without it (identical to
+thirteen digits). The reason is in the shipped corner chain and is
+written down in the research note: the subgrid extrapolation is
+**scale-invariant along the seam** (the along-seam step cancels against
+the ratio that scales it), and the corner's boundary — the member's
+junction row — sits at the band's own corner end, which the split does
+not move. So the rolling has to come from the **boundary** (the
+maintainer's ring members are cuts of the base surfaces, so their
+junction rows sit at the cut), which is the step this build does not
+yet close.
+
 ## The Y-split
 
 An alternative for the 3-valent junction: build it as **three four-sided patches
