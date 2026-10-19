@@ -13,6 +13,28 @@ One spline, one sketch: unlike an Edge (1-2 sketches, shared by up to two
 patches), a BoundarySpline has exactly one input, so `claimChildren` is the
 link list of one -- and the claim follows the link, which is why it also
 holds on a reloaded document.
+
+#121 -- WHICH READING OF #11 WAS ASKED, AND WHY THIS IS IT.  The ask was
+*"the BoundarySpline object should own/parent the sketches that drive it
+(sketches in its group), so the model tree reads top-down: spline ->
+sketches"*.  Two readings hide in it: an OWNERSHIP one (the object holds
+the sketch in its DATA) and a PARENTING one (the tree shows the sketch
+INSIDE the spline).  The purpose clause names the second -- the
+deliverable is that the model tree reads top-down -- and the owner
+accepted it when the ticket was closed: *"Done and merged:
+`BoundarySpline` parents the sketch that drives it, reusing the existing
+claim-children idiom (#52) rather than a second grouping mechanism"*
+(#11).
+
+The ownership half is not missing either: `obj.Sketch` is an
+`App::PropertyLink`, so the spline owns its sketch in the DATA.  What a
+`Part::FeaturePython` cannot do is hold children in the DATA TREE:
+FreeCAD renders a feature's children through the view provider's
+`claimChildren` (the #52 idiom the Edge already uses), and a second
+grouping mechanism would only be a second way of saying the same thing.
+So the tree-level reading is the one that was asked, it is the one that
+ships, and the test below pins BOTH halves -- the datas-level link (the
+ownership) and the tree claim (the parenting).
 """
 
 import os
@@ -124,8 +146,38 @@ def test_the_claim_survives_save_and_reopen(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_the_spline_owns_its_sketch_in_the_data(doc):
+    """#121: the OWNERSHIP half of #11's ask -- the spline holds the sketch
+    that drives it in its DATA (`Sketch`, an `App::PropertyLink`), and the
+    tree claim is that very object.
+
+    The ask had two readings (own in the data / parent in the tree); this
+    pins the first, and `test_boundaryspline_claims_its_driving_sketch`
+    pins the second.  A `Part::FeaturePython` cannot hold children in the
+    DATA TREE -- FreeCAD renders a feature's children through the view
+    provider's `claimChildren` -- so the tree-level reading is the one
+    that was asked for (see this module's docstring).
+    """
+    errors, checks = [], []
+    sketch = _triangle_sketch(doc)
+    spline = _boundary_spline(doc, sketch)
+
+    link = getattr(spline, "Sketch", None)
+    checks.append("datas-level Sketch link: %s"
+                  % (link.Name if link is not None else None))
+    check(link is sketch,
+          "the spline does not link the sketch it drives: %r"
+          % (link,), errors)
+    children = _claims(spline)
+    check(children == [sketch],
+          "the tree claim is not the linked sketch: %r"
+          % ([o.Name for o in children],), errors)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_boundaryspline_claims_its_driving_sketch,
     test_a_sketch_no_spline_drives_stays_top_level,
+    test_the_spline_owns_its_sketch_in_the_data,
     test_the_claim_survives_save_and_reopen,
 ]

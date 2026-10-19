@@ -66,13 +66,18 @@ from `b` (raw patches) to `a` (blended strips) if the G2 default is to
 hold.
 """
 
-import math
-
 import FreeCAD
 import Part
 from FreeCAD import Base
 
 from Tests import corner_model
+
+# The instrument (#121): the tangent-plane gap is now measured by the
+# SHIPPED oracle too (`SilkWorkflowOps.corner_fill_problem`), so the solver
+# and the angle live with the code that judges the fill and this probe
+# imports them -- ONE implementation, ONE error floor.  The algorithm is
+# unchanged, so the readings in this file's header still stand.
+from SilkWorkflowOps import solve_uv, normal_gap_deg as _normal_gap
 
 RIDGE_PATCHES = ("Patch44", "Patch001", "Patch002", "Patch003")
 STRIP_ORDER = ("B12", "B24", "B43", "B31")
@@ -84,55 +89,9 @@ TOL = 1e-4
 # parameter solve (the fill's surface is a general trim, so S.parameter()
 # is NOT reliable enough for boundary points -- see the measurement note)
 # ---------------------------------------------------------------------------
-
-def solve_uv(surf, point, prange, grid=120):
-    """(u, v, residual) for `point` on `surf`, solved over `prange`.
-
-    Coarse grid to bracket the nearest point, then a damped Newton on the
-    two parameters.  `residual` is |surf.value(u, v) - point| -- the small
-    number the caller wants, and the big number when `point` is not on the
-    surface at all (which is exactly the raw-patch-feed evidence).
-    """
-    u0, u1, v0, v1 = prange
-    best = None
-    for i in range(grid + 1):
-        u = u0 + (u1 - u0) * i / grid
-        for j in range(grid + 1):
-            v = v0 + (v1 - v0) * j / grid
-            d = (surf.value(u, v) - point).Length
-            if best is None or d < best[0]:
-                best = (d, u, v)
-    u, v = best[1], best[2]
-    for _ in range(80):
-        r = surf.value(u, v) - point
-        if r.Length < 1e-11:
-            break
-        h = 1e-6
-        su = (surf.value(u + h, v) - surf.value(u - h, v)) / (2 * h)
-        sv = (surf.value(u, v + h) - surf.value(u, v - h)) / (2 * h)
-        a, b, c = su.dot(su), su.dot(sv), sv.dot(sv)
-        d, e = su.dot(r), sv.dot(r)
-        det = a * c - b * b
-        if abs(det) < 1e-18:
-            break
-        u -= (c * d - b * e) / det
-        v -= (a * e - b * d) / det
-        u = min(u1, max(u0, u))
-        v = min(v1, max(v0, v))
-    return u, v, (surf.value(u, v) - point).Length
-
-
-def _normal_gap(surf_a, ua, va, surf_b, ub, vb):
-    na = surf_a.normal(ua, va)
-    nb = surf_b.normal(ub, vb)
-    if na.Length < 1e-12 or nb.Length < 1e-12:
-        return None
-    na.normalize()
-    nb.normalize()
-    if na.dot(nb) < 0.0:
-        nb = -1.0 * nb
-    return math.degrees(math.acos(max(-1.0, min(1.0, na.dot(nb)))))
-
+# `solve_uv` and `_normal_gap` are imported from `SilkWorkflowOps` (see the
+# note at the top): the shipped oracle measures the same quantity with the
+# same code.
 
 # ---------------------------------------------------------------------------
 # patch / strip geometry helpers
