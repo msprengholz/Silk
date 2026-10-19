@@ -44,30 +44,61 @@ expose it (`docs/research/silk-corner-type-taxonomy.md`).
 
 | the video does | Silk today |
 |---|---|
-| sets the two setbacks **asymmetrically** (its own numbers: 0.25 and 0.125) so one fillet is large and the other small | the setback is already the user's, per patch and per end, in the panel. Asymmetry **reaches the corner's shape**: curvature spread 1.04 → 2.29 |
-| the small fillet **rolls around** the large one | **not claimed** — see below |
-| **segments** each blend along its seam, backfills the rest with the original surface, **trims** the 66 back, and **inserts a separate fill** | one 6×6 surface spans the whole corner. The segmented recipe is **opt-in, not built**: #119, staged, and limited to tools Silk or FreeCAD already provide |
+| sets the two setbacks **asymmetrically** (its own numbers: 0.25 and 0.125) so one fillet is large and the other small | the setback is already the user's, per patch and per end, in the panel. Asymmetry **reaches the corner's shape**: curvature spread 1.04 → 2.29 — but see the ruling below: that is **not** the two-zone look |
+| the small fillet **rolls around** the large one | **not achieved** — the owner's own look at the render (2026-10-21) is the ruling: *"the patch has weirdly rounded edges. I would not consider this to be a rolling corner"* |
+| **sections** each blend along its seam, backfills the rest with the original surface, **trims** the 66 back, and **inserts a separate fill** | one 6×6 surface spans the whole corner, and the band it consumes is **not** re-created. The segmented recipe is **opt-in, not built**: #119, staged, and limited to tools Silk or FreeCAD already provide |
 
-## Is our corner a rolling fillet? The honest answer
+## Is our corner a rolling fillet? The **ruled** answer: **no**
 
-Measured on the cube-corner fixture with the video's own asymmetric setbacks
-(`Tests/g2_corner_roll_measure.py`, `docs/research/silk-corner-roll.md`):
+**The owner's ruling (2026-10-21), on the rendered corner:** *"the patch has weirdly
+rounded edges. I would not consider this to be a rolling corner like described by
+the silk maintainner. … I only see one surface, but it should be two!"*
 
-- the corner's own curvature spread moves **1.04 → 2.29** (`k_max/k_min`),
-  `k_min` dropping 8.58 → 2.42 /mm — ≥ 4 orders above the instrument floor;
-- near the junction it goes **saddle** (`k1 = +1.70`, `k2 = −2.46 /mm`, negative
-  Gaussian curvature), which the symmetric corner does not;
-- **every seam stays at the exact `k_gap` floor** (≤ 6.8e-13 /mm).
+That is the ground truth for this question, and it **overturns the reading #118
+gave**. What #118 measured is real and still stands — the corner's curvature
+spread moves **1.04 → 2.29** and it develops a **saddle** (`k1 = +1.70`,
+`k2 = −2.46 /mm`) while every seam stays at the exact `k_gap` floor. But the
+*interpretation* was wrong: a saddle is a **twist**, and the author's rolling
+corner is **two convex fillets of different size**. The measurement says the
+asymmetry is absorbed; it does **not** say the result is a rolling fillet, and
+the rendered surface says it is not.
 
-So the asymmetry is absorbed into the corner's shape instead of averaging out —
-which is *necessary* for a rolling look. It is **not sufficient to claim one**:
-the author's rolling corner is **two convex fillets**, and a saddle is a twist,
-not two fillets. **Nobody has looked at it.** Whether the screen shows two zones
-or a twisted corner is a visual judgement on the demo shape (zebra + curvature
-view, setbacks 0.25 / 0.125) — until that is done, the presentation says:
+**Why ours is one surface and his is two — the step comparison.** The maintainer's
+own class help (`ControlGrid66_4Sub.py`, quoted in
+`docs/research/silk-corner-type-taxonomy.md`) is explicit:
+
+> "three surfaces meeting to form a hard corner (like a cube corner). **Here more
+> sectioning of the original surfaces is required.** You end up with **2 small
+> blends, and one larger blend.** use `ControlGrid64_3_1Grid44` opposite the large
+> blend to create the fourth blend. Now you have 4 blends across 3 surfaces, and
+> can make the 4 SubGrids."
+
+| step | the maintainer | Silk today | same? |
+|---|---|---|---|
+| 1. cut the base surface | the base `CubicSurface_44` is **sectioned** into cells (`ControlGrid44_2EdgeSegments` = a *2-edge rectangular cut*; `ControlGrid44_EdgeSegment` = a *single strip cut*) | the patch is divided into subgrid cells and the **band** is the cut — but the **whole band** is consumed | partly |
+| 2. **preserve what is not blended** | the un-blended remainder is **re-created as its own surface** — the demo's `*_Segment_surfaces` groups hold 11 extra `CubicSurface_44` whose tooltip is *"re-create the portions of the original surface that are to be preserved and not blended"* | **nothing is preserved.** The band is consumed and the patch's own surface is hidden under it (auto-hide), never re-created | **no** |
+| 3. "2 small blends, and one larger blend" | the three ring members differ in **how far they run along the seam** — small = near the corner, large = continuing past it | the three ring members differ in **band depth** (the setback) | **no — the wrong parameter** |
+| 4. the triangular 4th member | `ControlGrid64_3_1Grid44` opposite the large blend | ported, faithful (pole parity 0.000e+00) | yes |
+| 5. 4 subgrids → one surface | `ControlGrid66_4Sub` → `CubicSurface_66` | the same chain, our 6×6 | yes |
+
+**The two divergences are the whole answer.** Step 2 is missing, so the corner's
+neighbours are the blends themselves and the 66's outline is the **band edge** —
+one closed loop at a roughly constant distance from the junction, which is
+exactly the "weirdly rounded edges": a rounded triangle with rounded corners, a
+**blob**, not a fillet. Step 3's "small" and "large" are about **extent along the
+seam**, and we varied **depth** instead — the same numbers, a different
+parameter. So the video's 0.25 / 0.125 are read as *where the segment ends along
+the seam*, not as *how deep the band is*.
+
+**Consequence.** #119 is **not** a refinement of the look — it **is** the look.
+Its first stage (section each blend along its seam and re-create the preserved
+remainder) is what produces the second surface and the seam where the small
+fillet rolls into the large one. Until that is built, the honest sentence is:
 
 > the corner **responds directionally** to asymmetric setbacks — measured, seam
-> continuity untouched — and the **two-zone look needs the segmented recipe**.
+> continuity untouched — and it is **one surface with a rounded outline**, not the
+> maintainer's two-zone rolling fillet. The two-zone look needs the segmented
+> recipe (#119).
 
 ## The Y-split
 

@@ -8,14 +8,26 @@ large, one small — or does it average into one uniform round?** Two readings
 were pre-declared: the curvature spread grows (it rolls) or it stays put (it
 mushes, and the rolling look depends on the parked segmented-blend recipe).
 
-**Answer (one line). It rolls.** At the cube-corner junction the corner's own
-normal-curvature spread moves from **k_max/k_min = 1.04 (symmetric) to 2.29
-(asymmetric)** — a 2.2× move, ≥ 4 orders of magnitude above the instrument
-floor — while every strip seam stays at the exact `k_gap` floor
-(≤ 6.8e-13 /mm): the asymmetry **reaches the corner's shape** and it becomes
-an oval (and develops a saddle), rather than averaging into a round. The
-rolling character is already in the shipped single 6×6; it does not need the
-parked segmented-blend + trim + fill recipe.
+**Answer (one line). It moves — but it is NOT the maintainer's rolling fillet.**
+At the cube-corner junction the corner's own normal-curvature spread moves from
+**k_max/k_min = 1.04 (symmetric) to 2.29 (asymmetric)** — a 2.2× move, ≥ 4
+orders of magnitude above the instrument floor — while every strip seam stays
+at the exact `k_gap` floor (≤ 6.8e-13 /mm): the asymmetry **reaches the
+corner's shape** (oval, then saddle) rather than averaging into a round.
+
+> **Superseded reading (2026-10-21).** This document first concluded *"It
+> rolls."* **That conclusion was wrong** and the owner ruled on the rendered
+> corner: *"the patch has weirdly rounded edges. I would not consider this to be
+> a rolling corner like described by the silk maintainer. … I only see one
+> surface, but it should be two!"* The measurement stands; the interpretation
+> does not. A saddle is a **twist**, not two fillets. What this finding actually
+> establishes is that the corner **does not average the unequal setbacks away**
+> — a precondition for a two-zone construction, not a rolling fillet. The
+> reason ours is one surface and the maintainer's is two is a **step we never
+> took**: his ring members are *cuts* of the base surface and the un-blended
+> remainder is re-created as its own surface; ours consumes the whole band and
+> preserves nothing. See `docs/corner-blending.md` for the step comparison and
+> #119 for the build.
 
 **Scope.** A finding, not a fix — no production code changed. Measured on the
 `Tests/cube_corner_model.py` cube-corner fixture (three exact planar squares,
@@ -129,11 +141,40 @@ config. The corner therefore **does not compromise or average the setbacks**:
 it absorbs the unequal widths into its own shape (oval, then saddle) while
 staying curvature-continuous to each strip.
 
-Consequence for the ticket's outcomes: this is the **"spread grows"** branch.
-The shipped single 6×6 does express the rolling character; the effect can be
-demonstrated by dragging the `Band A` / `Band B` editors, and the parked
-segmented-blend + trim + fill recipe is a refinement rather than the source of
-the look.
+**The reading below was WRONG, and the owner ruled on it (2026-10-21).** The
+measurement above stands. The *interpretation* — "a rolling fillet is exactly a
+shape that goes hyperbolic as it turns" — was an inference, and the rendered
+surface does not support it. The owner's look at the render: *"the patch has
+weirdly rounded edges. I would not consider this to be a rolling corner like
+described by the silk maintainer. … I only see one surface, but it should be
+two!"* A **saddle is a twist**, and the maintainer's rolling corner is **two
+convex fillets of different size**. So this finding should be read as:
+
+> **the corner absorbs asymmetric setbacks into its own shape** (spread
+> 1.04 → 2.29, and a saddle near the junction) while every seam stays
+> curvature-continuous — **and the result is still NOT the maintainer's rolling
+> fillet.**
+
+**What the finding is actually good for.** It is the evidence that the corner is
+**not averaging** the unequal widths away — which is a precondition for any
+two-zone construction, and a reason not to fear the #119 work. It is **not**
+evidence that the two-zone look already exists.
+
+**Why ours is one surface and his is two** (the step comparison, and the reason
+this measurement was taken on the wrong parameter): the maintainer's own help
+text for `ControlGrid66_4Sub` says *"Here more sectioning of the original
+surfaces is required. You end up with 2 small blends, and one larger blend."*
+His ring members are **cuts** of the base surface, and the un-blended remainder
+is **re-created as its own surface** (the demo's `*_Segment_surfaces` groups,
+tooltip: *"re-create the portions of the original surface that are to be
+preserved and not blended"*). Silk consumes the **whole band** and preserves
+nothing, so the 66's outline is the band edge — one closed loop at a roughly
+constant distance from the junction: a rounded triangle with rounded corners, a
+blob rather than a fillet. And "small" vs "large" is about **how far the blend
+runs along the seam**, not **how deep the band is** — this measurement varied
+the depth, which is why it found anisotropy and a saddle instead of two zones.
+The full comparison is in `docs/corner-blending.md`; the segmented recipe is
+#119.
 
 ## Caveats
 

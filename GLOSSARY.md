@@ -68,9 +68,13 @@ _Avoid_: triangular patch, fake blend, fourth strip
 **Rolling fillet**:
 The maintainer's name for a corner showing **two zones of different fillet size** -- one
 large fillet in one direction, a small one that appears to roll around it. **The author's
-effect, judged by eye**, and we do not claim it: what is measured on our corner is
-*anisotropy* (asymmetric setbacks move its curvature spread 1.04 -> 2.29) and, past a
-threshold, a *saddle* -- and a saddle is not two fillets (`docs/corner-blending.md`).
+effect, judged by eye**, and **we do not have it**: our 3-valent corner is ONE 6x6 whose
+outline is the band edge -- a rounded triangle with rounded corners -- and the owner's
+look at the render (2026-10-21) ruled that this is not a rolling corner. What is measured
+is *anisotropy* (asymmetric setbacks move its curvature spread 1.04 -> 2.29) and, past a
+threshold, a *saddle* -- and a saddle is a twist, not two fillets. The two-zone look
+needs the **sectioned** recipe: cut each blend along its seam and re-create the preserved
+remainder as its own surface (`docs/corner-blending.md`, #119).
 _Avoid_: our corner is a rolling fillet (overclaim)
 
 **Restore shim**:
