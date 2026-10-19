@@ -39,6 +39,60 @@ same weights, deviation `0.00e+00`
 
 ---
 
+## 0. What the maintainer's own demo file says (hard data)
+
+Read offline from `Silk_Demo_01.FCStd` (the demo's stored grids), the
+maintainer's rolling corner is:
+
+* **the 64 is built from ONE cell per side.** `ControlGrid64_2Grid44`
+  has `Grid_0` and `Grid_1` = one `ControlGrid44_2EdgeSegments` cell
+  from each side of the seam -- two 44 cells merged in the blend
+  direction into the 6-pole across. So the **4-pole direction is ALONG
+  the seam** and it is **one cell** (the same layout Silk's blend has:
+  4 along the seam, 6 across).
+* **the base surface is cut, not the curve.** Every base surface is cut
+  by `ControlGrid44_2EdgeSegments` (a 2-edge rectangular cut of one
+  `CubicSurface_44`); D01 holds 31 of them. The seam curves are cut
+  into pieces by `ControlPoly4_segment` **at the setback points**, and
+  every seam curve carries **two** named setback points per end (a
+  `major_` and a `minor_`, e.g. `CubicCurve_4012`: minor_front u=0.075,
+  major_front u=0.100, major_back u=0.800, minor_back u=0.950). The
+  video's 0.25 / 0.125 are the values of such leaders.
+* **the backfill exists**: D01 holds 11 extra `CubicSurface_44` in
+  `*_Segment_surfaces` groups, "re-create the portions of the original
+  surface that are to be preserved and not blended" -- the video's
+  "gaps filled with segments of the original surface".
+* **there is no 3-sided 66**: `ControlGrid66_4Sub` is a four-member
+  fill (4 x `SubGrid33_2Grid64`); a 3-valent corner has only three
+  blends, so the fourth member (the scaffolding piece with a collapsed
+  row) is what makes a Silk-native 66 possible at all. The only
+  3-input corner upstream has is the N-star cup, which is closed as out
+  of scope.
+
+**What this changes for this build, and what it does not.**
+
+* The **base-surface cut exists** in `SilkMachinery`: the base surface is
+  a bicubic Bezier and `BSplineSurface.segment(u0, u1, v0, v1)` is the
+  rectangular parametric cut upstream's `ControlGrid44_2EdgeSegments`
+  performs -- the same call `build_subgrids` makes for the patch's own
+  cells. `SilkMachinery.split_band_cells` uses exactly that call, so
+  **Stage 1 needed no new operation**: the split cuts the base surface
+  at the leader, the cut is a knot line of both nets, and the two
+  pieces meet exactly (5.551e-17 mm, measured).
+* The **triangle needs no grid**: its two sides are pieces of the
+  ORIGINAL base curves (the seam curve from the junction corner to the
+  leader), which is what `create_rolling_triangle` feeds to FreeCAD's
+  filling.
+* The **preserved remainder** is already in Silk: the patch's own base
+  surface, with the band cells hidden by the blend's auto-hide, is the
+  backfill.
+* What Silk's model does **not** carry is the demo's *pair* of setback
+  points at the same seam end (a minor and a major). Silk's patch has
+  one band edge per axis end, so the second leader lives on the BLEND
+  (the split), not on the patch's cell structure. The geometry is the
+  same; the cell structure is not, and that is the one place the
+  maintainer's structure and ours differ.
+
 ## 1. The parameter space (one statement, used by every piece)
 
 The **rolling leader** is a fraction of the **seam curve's own

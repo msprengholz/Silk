@@ -118,6 +118,19 @@ and the measurements are `docs/research/silk-rolling-corner.md`):
 * the default path is **byte-identical** when the opt-in is not used
   (`Leader` = 0 → the same 24 poles, deviation 0.00e+00).
 
+**What the maintainer's demo file says** (read offline from
+`Silk_Demo_01.FCStd`): the 64 is built from **one cell per side** (the
+4-pole direction is ALONG the seam), the base surface is **cut** by
+upstream's `ControlGrid44_2EdgeSegments` at the **setback points**, every
+seam curve carries a **major and a minor setback** per end, the
+preserved remainder is re-created as **11 extra `CubicSurface_44`**
+(the "backfill"), and there is **no 3-sided 66** — `ControlGrid66_4Sub`
+is a four-member fill, which is why the fourth "scaffolding piece" (the
+member with a collapsed row) exists at all. Silk's `SilkMachinery`
+already has the base-surface cut (`BSplineSurface.segment` on the base
+surface — the same call upstream's 2EdgeSegments makes, and the one
+`split_band_cells` uses), so the split needed no new operation.
+
 **Path (B): no `ControlGrid66`, no triangular member.** The rolling
 path builds the **big quad patch** (the 0.75 piece of each split blend
 — a `CubicSurface_64`, Silk-made, low order) and the **small triangular
