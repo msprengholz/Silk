@@ -12,8 +12,10 @@ boundary sags/bulges, the radial ridges S-bend up to the central peak.
 
 build_corner_model(doc) creates 24 node sketches + 12 edges + 4 patches
 + 4 strips in `doc` via SilkWorkflowOps only, and returns the object
-map. The same module regenerates the reference fixture
-Resources/Test_files/Silk_Corner2x2.FCStd (see save_fixture).
+map.  `save_fixture` writes that model to a SCRATCH path: it refuses to
+write inside the repository, so the tracked reference fixture
+(`Resources/Test_files/Silk_Corner2x2.FCStd`) cannot be rewritten by a
+stray call (#124).
 """
 
 import os
@@ -182,6 +184,12 @@ def build_corner_pair(doc):
 
 
 def fixture_path():
+    """The TRACKED reference fixture's path -- a READ path.
+
+    `save_fixture` does not write here (#124): it refuses every
+    destination inside the repository.  Regenerating the tracked fixture
+    is a deliberate, reviewed act.
+    """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(root, "Resources", "Test_files", "Silk_Corner2x2.FCStd")
 
@@ -196,13 +204,60 @@ def build_corner_model_with_blend(doc):
     return model
 
 
-def save_fixture():
-    """Regenerate the 2x2 corner reference fixture headlessly."""
+def repo_root():
+    """The workbench root -- the directory that holds `Resources/`."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def writable_destination(path):
+    """The absolute destination a fixture writer may write to.
+
+    #124: a tracked fixture is regenerated DELIBERATELY, by hand, so a
+    writer that is not a generator (there is no caller of `save_fixture`
+    anywhere in the repo) must not be able to name one.  Two rules:
+
+      * the destination is REQUIRED -- there is no default that points at
+        a committed file, and
+      * a destination INSIDE the repository is REFUSED.
+
+    Returns the absolute path; raises RuntimeError when the destination is
+    missing or inside the repository.
+    """
+    if path is None:
+        raise RuntimeError(
+            "save_fixture needs an explicit destination: it will not guess "
+            "a path, and it refuses to write inside the repository (a "
+            "tracked fixture is regenerated deliberately, by hand).")
+    dest = os.path.abspath(path)
+    root = os.path.abspath(repo_root())
+    if dest == root or dest.startswith(root + os.sep):
+        raise RuntimeError(
+            "refusing to write %s: it is inside the repository (%s), so it "
+            "is a tracked file. Write to a scratch path and copy the "
+            "result in deliberately." % (dest, root))
+    return dest
+
+
+def save_fixture(path):
+    """Regenerate the 2x2 corner model and write it to `path`.
+
+    #124: this used to save to the TRACKED fixture
+    (`Resources/Test_files/Silk_Corner2x2.FCStd`) with no argument, and
+    had NO CALLER anywhere in the repo: a one-call footgun that silently
+    rewrote a committed file.  `writable_destination` now stands in front
+    of it: the destination is required and a tracked path is refused.
+
+    Regenerating a committed fixture therefore stays possible, but only
+    as a deliberate, reviewed act: write to a scratch path, compare, and
+    copy the result in on purpose.
+
+    Returns (document, model, path).
+    """
+    dest = writable_destination(path)
     for d in FreeCAD.listDocuments().values():
         if d.Name == "CornerFixture":
             FreeCAD.closeDocument("CornerFixture")
     doc = FreeCAD.newDocument("CornerFixture")
     model = build_corner_model_with_blend(doc)
-    path = fixture_path()
-    doc.saveAs(path)
-    return doc, model, path
+    doc.saveAs(dest)
+    return doc, model, dest

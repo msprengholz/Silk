@@ -39,17 +39,18 @@ No continuity label is asserted anywhere in this module.
 MANUAL = True
 
 import itertools
-import os
 
 import FreeCAD
 
 import SilkChecks
 import SilkWorkflowOps as OPS
 import Tests.demo01_fixture_model as MODEL
+# The owner's model: the path and the DOCUMENTED inventory (#124).
+# Imported, not copied, so the state and the tests cannot disagree.
+import Tests.owner_model_fixture as OWNER
+from Tests.mcp_harness import check
 
-_SILK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OWNER_PATH = os.path.join(_SILK_DIR, "Resources", "Test_files",
-                          "SketchOnly_Demo01Subset_withPatches.FCStd")
+OWNER_PATH = OWNER.OWNER_PATH
 
 
 class CaptureConsole:
@@ -134,10 +135,25 @@ def test_owner_model_three_valent_rings_build(doc):
     Edges / 5 Patches / 8 Blends / 0 corners) fills all four 3-valent
     junctions: 36 poles, one valid face, oracle-green, nothing refused.  This
     is the case that must never regress again -- the exact shape that refused
-    every ring with "twisted input"."""
+    every ring with "twisted input"`.
+
+    #124: the inventory is the DOCUMENTED one
+    (`Tests/owner_model_fixture.DOCUMENTED_INVENTORY`, read offline from
+    the file's own Document.xml).  The corner count is 0 because the owner
+    stopped at the corner stage on purpose (the commit that added the
+    file says so), and a corner that only a DIRTY working tree could
+    supply would turn one of the four fills into an idempotent no-op --
+    the test would then assert nothing for that junction."""
     errors, checks, report = [], [], []
     source, opened_dir = MODEL.open_fresh(OWNER_PATH)
     try:
+        got = OWNER.document_inventory(source)
+        for kind in sorted(OWNER.DOCUMENTED_INVENTORY):
+            want = OWNER.DOCUMENTED_INVENTORY[kind]
+            check(got.get(kind, 0) == want,
+                  "the owner's model carries %d %s object(s), the documented "
+                  "inventory says %d -- the file on disk and this test "
+                  "must agree" % (got.get(kind, 0), kind, want), errors)
         rings = _triangle_rings(source)
         if len(rings) != 4:
             errors.append("the owner's model has %d three-valent junctions, "
