@@ -184,6 +184,17 @@ click script (`be27f61`, `69864af`), and the **suite tier split** (`d9b17bc`,
 
 ## 5. The gate at the pause, and the two failures
 
+> **SUPERSEDED GATE RULE (the owner's hard rule, 2026-10-20).** The
+> in-process fallback below SPAWNS a FreeCAD and opens a window on the
+> owner's screen: it is **forbidden** now. The only permitted gate is the
+> RPC path against the owner's already-running GUI, inside the lock:
+> `flock /tmp/silk_rpc.lock -c "python3 Tests/run_all.py"` (add a by-name
+> filter to iterate). If the RPC at 127.0.0.1:9875 does not answer,
+> REPORT that and desk-check — never fall back to a spawn. The rule lives
+> in `AGENTS.md`, "Test suite (two launchers, one suite)". The paragraph
+> below is the record of what was run AT THE PAUSE, when the GUI was down
+> and the spawn was still the sanctioned path.
+
 The owner's GUI FreeCAD was **down** at the pause, so the gate ran in the
 documented **in-process fallback** (`freecad Tests/run_all.py` — it spawns its
 own FreeCAD; use it only when no GUI is running, never alongside one):

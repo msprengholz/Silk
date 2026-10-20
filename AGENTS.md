@@ -368,7 +368,10 @@ class CaptureConsole:
 ### Test suite (two launchers, one suite)
 - `Tests/suite.py` — auto-discovers `Tests/test_*.py` modules (uses `ALL_TESTS` if present, else top-level `test_*` functions)
 - `Tests/run_all.py` — **primary launcher**: `python3 Tests/run_all.py` connects via XML-RPC to the user's already-running FreeCAD GUI (127.0.0.1:9875, no restart). Takes an optional substring filter (e.g. `python3 Tests/run_all.py chain`), `--inspect` to leave test documents open for stage-2 human inspection, and `--save` to persist the leftover geometry to `Resources/Test_files/_inspect/` (gitignored) so each test's final state can be reopened even after FreeCAD closes (implies `--inspect`). Exit codes: 0 = all pass, 1 = failures, 2 = FreeCAD unreachable.
-- `freecad Tests/run_all.py` — fallback in-process mode (spawns its own FreeCAD)
+- `freecad Tests/run_all.py` — fallback in-process mode (spawns its own FreeCAD). **FORBIDDEN here** — see the rule below.
+- **NEVER SPAWN A FREECAD** (the owner's hard rule, 2026-10-20 — a complaint, so it is absolute): `freecad Tests/run_all.py`, `freecadcmd ...` and every other spawn open a WINDOW on the owner's screen. The ONLY permitted way to run the suite is against the GUI that is already running, and every run belongs inside the lock:
+  `flock /tmp/silk_rpc.lock -c "python3 Tests/run_all.py"` — and while iterating, a by-name filter instead of the whole tier: `flock /tmp/silk_rpc.lock -c "python3 Tests/run_all.py rolling_corner_66"`.
+  If the RPC at 127.0.0.1:9875 does not answer, REPORT it ("the RPC is down, I cannot gate") and carry on with desk-checking, or stop and wait for the owner to start the GUI. **A run that spawns FreeCAD is worse than no run at all.**
 - Stage tests: `test_edge_stage.py` (E1–E4 oracle), `test_patch_stage.py` (P1–P4), `test_blend_stage.py` (B1–B4), `test_chain.py` (full 9→7→2→1 rebuild, the acceptance gate — always runs)
 - Ops layer: `SilkWorkflowOps.py` (`create_edge`, `create_patch`, `create_blend`) — the only construction path; oracle: `SilkChecks.py` (`check_edge`, `check_patch`, `check_blend`)
 - The harness monkey-patches `popup.tipsDialog` to a console stub so unattended runs never block on modal popups
