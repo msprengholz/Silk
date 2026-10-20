@@ -60,14 +60,16 @@ class Silk (Workbench):
 	"""
 
 	# The workflow commands: one per process step -- Edge -> Patch -> Blend ->
-	# Corner Blend -- plus the corner stage's FreeCAD fill (#96, owner
-	# decision D3): `Silk_CornerFill` builds ONE `Surface::Filling` over the
-	# hole the ring strips close, beside the Silk corner, so the foreign
-	# component can be demonstrated and judged. It is not a fifth step --
-	# the corner blend stays the default -- but it is a button the owner can
-	# press instead of running the command by hand.
+	# Corner Blend. The corner stage's FreeCAD fill (`Silk_CornerFill`, #96)
+	# is **NOT in the visible set** (owner, 2026-10-21: *"i can easily do a
+	# freecad surface fill by myself now, lets not expose this in the silk
+	# workflow wizard"*). It was added here on 2026-10-18 and taken back out
+	# the next day. The command stays REGISTERED (a script can still call it,
+	# and the rolling corner's build path uses the same component), but the
+	# wizard does not offer it: the corner stage is one step, and the fill
+	# is the user's own FreeCAD work.
 	WORKFLOW_COMMANDS = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend",
-	                     "Silk_CreateCornerBlend", "Silk_CornerFill"]
+	                     "Silk_CreateCornerBlend"]
 
 	# The task panel
 	GUIDE_COMMANDS = ["Silk_Guide"]

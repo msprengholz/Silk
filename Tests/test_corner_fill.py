@@ -411,15 +411,17 @@ def test_corner_fill_refuses_an_order_it_cannot_build(doc):
 
 
 def test_corner_fill_command_is_registered_and_refuses_a_bad_selection(doc):
-    """#96 (D3): `Silk_CornerFill` is a real registered Gui command --
-    `Gui.listCommands()` holds it and FreeCAD builds a QAction for it, the
-    public check `test_initgui_commands` makes for the whole visible set --
-    and the handler REFUSES a selection that is not a corner-fill boundary
-    BY NAME, in the COMPONENT's own wording, leaving nothing in the tree.
+    """`Silk_CornerFill` is a real registered Gui command --
+    `Gui.listCommands()` holds it and FreeCAD builds a QAction for it -- and
+    the handler REFUSES a selection that is not a corner-fill boundary BY
+    NAME, in the COMPONENT's own wording, leaving nothing in the tree.
 
-    Deliberately silent on WHERE the button sits: menu/toolbar layout is
-    `test_initgui_commands`' contract. What is pinned here is that the command
-    exists for FreeCAD and that a bad selection is refused cleanly.
+    The command is NOT in the visible set: the owner took the fill button out
+    of the wizard on 2026-10-21 ("i can easily do a freecad surface fill by
+    myself now, lets not expose this in the silk workflow wizard"). It stays
+    REGISTERED, so a script can call it and the rolling corner's build path
+    can use the same component. `test_initgui_commands` is the contract for
+    what IS visible; this test is the contract for the command itself.
     """
     errors, checks = [], []
     import Tests.corner_model as cm

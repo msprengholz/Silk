@@ -55,13 +55,15 @@ FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 # The visible set, spelled out independently of InitGui.py's own
 # constants so a typo in the file cannot make the test agree with itself.
-# `Silk_CornerFill` is #96's owner decision D3: the fill button stands
-# beside the Silk corner blend.
+# `Silk_CornerFill` is NOT here: it was in the visible set for one day
+# (2026-10-18, #96's D3) and the owner took it out again on 2026-10-21 --
+# "i can easily do a freecad surface fill by myself now, lets not expose this
+# in the silk workflow wizard". The corner stage is ONE step; the fill is the
+# owner's own FreeCAD work. The command stays registered for scripts.
 EXPECTED_VISIBLE = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend",
-                    "Silk_CreateCornerBlend", "Silk_CornerFill", "Silk_Guide",
-                    "Reload_Silk"]
+                    "Silk_CreateCornerBlend", "Silk_Guide", "Reload_Silk"]
 EXPECTED_WORKFLOW = ["Silk_CreateEdge", "Silk_CreatePatch", "Silk_CreateBlend",
-                     "Silk_CreateCornerBlend", "Silk_CornerFill"]
+                     "Silk_CreateCornerBlend"]
 EXPECTED_GROUPS = ["Workflow", "Guide", "Dev"]
 
 # Modules a legacy document's proxy needs at open time (ticket #50).
@@ -314,8 +316,8 @@ def test_every_visible_command_is_registered(doc):
     `getAction()` does NOT build the action on demand. In a session that has
     been up since before a name joined the visible set, that name's action
     list is empty while every name the running toolbar was built with keeps
-    its action across a hot reload (probe, this session: Silk_CornerFill 0
-    actions, Silk_CreateEdge/Patch/Blend/CornerBlend/Guide/Reload_Silk 1).
+    its action across a hot reload (probe, that session: a freshly added
+    name 0 actions, the six older ones 1 each).
     So a name the session's toolbar predates is REPORTED, not failed -- what
     is asserted for every visible name is registration (listCommands() and
     Command.get()) plus the structures handed to appendToolbar/appendMenu,
