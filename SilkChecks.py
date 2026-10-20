@@ -764,10 +764,18 @@ def _oracle_cell_net(p, idx):
     The net is re-derived from the patch's own base surface -- the
     segmented cell -- through `Proxy.getSubgrid`, which is the patch's raw
     reader, not the cell cache the blend consumes (`_subgrids` /
-    `_subgrid_weights`, the #107 seam itself). A proxy without `getSubgrid`
-    (the legacy Patch44 shim, a test stub) falls back to that cache, with
+    `_subgrid_weights`, the #107 seam itself). A proxy whose `getSubgrid`
+    cannot answer (the legacy Patch44 shim before its base surface is
+    built, a test stub) falls back to that cache, with
     unit weights when the patch stores none -- the pre-#107 reading, so
     those objects keep the verdict they always had.
+
+    #120: that fallback is a RECORDED exception to the spec's principle 1
+    ("never inspect private internals") -- see docs/specs/
+    test-structure-and-mutation.md, "Recorded exception to principle 1:
+    the oracle's legacy cell reader". It stays because closing it would
+    turn a legacy patch's VERDICT into a refusal, and #120 changes no
+    behaviour.
 
     Returns (None, None) when `idx` is outside the patch's cells.
     """
@@ -1644,7 +1652,7 @@ def check_corner_blend(cb, strip0=None, strip1=None, strip2=None,
                   if s is not None]
     if len(strips) not in (3, 4):
         return [("ring_input", False,
-                 "a corner ring is 3 or 4 blend strips (got %d)"
+                 "a corner ring is 3 or 4 blends (got %d)"
                  % len(strips))]
     return _check_corner_blend(cb, strips, reference_poles)
 

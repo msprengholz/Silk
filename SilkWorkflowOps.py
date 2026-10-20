@@ -303,7 +303,7 @@ def seam_inventory(doc=None):
 def _existing_corner_blend(doc, strips):
     """The CornerBlend already filling exactly this strip SET, or None
     (#28/#91 idempotency). Identity-only: a junction is identified by its
-    three or four blend strips, whatever order they were handed over in."""
+    three or four blends, whatever order they were handed over in."""
     want = {id(s) for s in strips}
     for o in doc.Objects:
         if getattr(o, "object_type", None) != "CornerBlend":
@@ -608,7 +608,7 @@ def create_rolling_corner(strips, patch, leader=ROLLING_LEADER, order=1,
     The shipped default 3-valent corner (which DOES build the member
     and the 66) is untouched by this path.
 
-    `strips` are the ring's three blend strips, `patch` the PINNED patch
+    `strips` are the ring's three blends, `patch` the PINNED patch
     -- the one whose corner carries the triangular surface.  The two
     ring strips on that patch's seams are split at the leader (two real
     surfaces each, meeting exactly at the cut).
@@ -624,7 +624,7 @@ def create_rolling_corner(strips, patch, leader=ROLLING_LEADER, order=1,
     strips = [s for s in (strips or []) if s is not None]
     if len(strips) != 3:
         FreeCAD.Console.PrintError(
-            "Silk: the rolling corner needs the ring's 3 blend strips (got "
+            "Silk: the rolling corner needs the ring's 3 blends (got "
             "%d). Nothing was created.\n" % len(strips))
         return None
     on_patch = [s for s in strips
@@ -752,7 +752,7 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
     whose boundary sits AT THE LEADER, plus the small triangular surface
     the maintainer's file carries beside it.
 
-    `strips` are the ring's three (or four) blend strips; `patch` the
+    `strips` are the ring's three (or four) blends; `patch` the
     pinned patch whose corner carries the member.  `leader` is the
     fraction of the seam curve's own parameter, measured from the
     junction corner -- the SAME parameter space as `create_split_blend`
@@ -784,7 +784,7 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
     strips = [s for s in (strips or []) if s is not None]
     if len(strips) not in (3, 4):
         FreeCAD.Console.PrintError(
-            "Silk: the rolling corner needs the ring's 3 or 4 blend strips "
+            "Silk: the rolling corner needs the ring's 3 or 4 blends "
             "(got %d). Nothing was created.\n" % len(strips))
         return None
     if patch is None:
@@ -1519,7 +1519,7 @@ def create_corner_fill(*strips, order=1, name="Surface", fallback_order=None):
     strips = [s for s in (strips or []) if s is not None]
     if len(strips) not in (3, 4):
         FreeCAD.Console.PrintError(
-            "Silk: a corner fill needs the ring's 3 or 4 blend strips around "
+            "Silk: a corner fill needs the ring's 3 or 4 blends around "
             "one junction (got %d). Nothing was created.\n" % len(strips))
         return None
     bad_order = _order_problem(order)

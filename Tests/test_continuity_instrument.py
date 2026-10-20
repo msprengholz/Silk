@@ -14,6 +14,7 @@ calibration module, `test_*_calibration` fail.
 """
 
 import glob
+import ast
 import math
 import os
 
@@ -222,9 +223,13 @@ def test_manual_measurement_scripts_reachable(doc):
     # #123: the RSS/baseline instrument is a MANUAL measurement script
     # too, and it is reachable by the same contract.
     import Tests.rss_baseline_measure as rss
+    # #120: this one had a `main()` and NO marker -- the probe the
+    # review found.  It is reachable by the same contract as the rest.
+    import Tests.g2_corner_fill_probe as fillprobe
     errs = []
     checks = []
-    for mod in (demo, cm, solve, edge, fill, roll, visual, rolling, rss):
+    for mod in (demo, cm, solve, edge, fill, roll, visual, rolling, rss,
+                fillprobe):
         ok = callable(getattr(mod, "main", None))
         checks.append("%s.main callable: %s" % (mod.__name__, ok))
         if not ok:
@@ -274,3 +279,62 @@ ALL_TESTS = [
     test_manual_measurement_scripts_reachable,
     test_no_continuity_threshold_in_suite,
 ]
+
+
+MEASUREMENT_SCRIPT_TAGS = ("g2_", "_probe", "_measure", "_measurement",
+                            "_visual")
+
+
+def test_every_measurement_script_carries_the_manual_marker(doc):
+    """No measurement script may lose the marker that keeps it out of the
+    default run (#120).
+
+    The sweep reads the SOURCE, it does not import: a probe is never
+    imported (and so never builds anything) merely to be checked.  The
+    rule is the one AGENTS.md states -- the marker is the contract -- and
+    it is applied to the modules whose NAME says what they are:
+    `g2_*`, `*_probe`, `*_measure`, `*_measurement`, `*_visual`.  Of those,
+    the ones that expose a `main()` are SCRIPTS and must carry
+    `MANUAL = True`; the ones without a `main()` are libraries (the
+    sampled oracle, the feasibility model) and are imported by the suite,
+    so the marker would say nothing about them.
+
+    `Tests/g2_corner_fill_probe.py` is the case this exists for: a
+    measurement script with a `main()` and no marker, which the reachability
+    test did not name either.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    scripts = []
+    offenders = []
+    for path in sorted(glob.glob(os.path.join(here, "*.py"))):
+        base = os.path.basename(path)
+        if base.startswith("test_"):
+            continue                      # a test module: the tier's own rules
+        if not any(tag in base for tag in MEASUREMENT_SCRIPT_TAGS):
+            continue
+        with open(path) as fh:
+            tree = ast.parse(fh.read(), filename=path)
+        has_main = False
+        marked = False
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "main":
+                has_main = True
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (isinstance(target, ast.Name) and target.id == "MANUAL"
+                            and isinstance(node.value, ast.Constant)
+                            and node.value.value is True):
+                        marked = True
+        if not has_main:
+            continue                      # a library, not a script
+        scripts.append(base)
+        if not marked:
+            offenders.append(base)
+    errs = []
+    if offenders:
+        errs.append("measurement scripts without MANUAL = True: %s"
+                    % ", ".join(offenders))
+    return {"pass": not errs, "errors": errs,
+            "checks": ["measurement scripts: %s -- all carry MANUAL: %s"
+                       % (", ".join(scripts) or "none",
+                          "yes" if not offenders else "NO")]}

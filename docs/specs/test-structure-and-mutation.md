@@ -4,11 +4,43 @@ Status: **design decision** on the path to #26 (legacy prune) and #41 (mutation 
 
 ## Guiding principles
 
-1. **External behavior via ops + oracle.** Tests assert through the ops layer (`create_edge` / `create_patch` / `create_blend`) and the oracle (`check_edge` / `check_patch` / `check_blend`) plus stored poles/shape at 1e-6. Never inspect private internals (`_subgrids`, `_base_surface`, …) — behavior only.
+1. **External behavior via ops + oracle.** Tests assert through the ops layer (`create_edge` / `create_patch` / `create_blend`) and the oracle (`check_edge` / `check_patch` / `check_blend`) plus stored poles/shape at 1e-6. Never inspect private internals (`_subgrids`, `_base_surface`, …) — behavior only. (One recorded exception, the oracle's legacy cell reader: see below.)
 2. **Mutation is first-class.** Every testable object type must demonstrate **build → mutate → revalidate** (oracle still green, geometry still valid, no stale state), not just build. "We must not only create but also change the geometry and see that it is still valid" is a stated requirement, not an afterthought.
 3. **The chain gate is sacred.** The 9→7→2→1 ground-truth rebuild at 1e-6 is the acceptance gate and must survive any restructuring (and, after #40, run on unified objects).
 4. **No redundant duplication.** One authoritative oracle module per object; the stage/comprehensive overlap is resolved; legacy/retired-object tests are pruned (#26), not left green-but-meaningless.
 5. **Regression tests stay small and named after the bug** (#30 / #31 / #32) so history is legible.
+
+## Recorded exception to principle 1: the oracle's legacy cell reader (#120)
+
+Principle 1 says never to inspect private internals. There is exactly ONE place in the
+code that does, and it is recorded here rather than left implicit.
+
+**Where.** `SilkChecks._oracle_cell_net` falls back to the patch's own cell cache
+(`Proxy._subgrids` / `Proxy._subgrid_weights`) when the public reader cannot answer.
+`SilkChecks.check_blend` reads `p.Proxy._subgrids` once more, on the same path, as the
+"does this patch have cells at all" guard. Those two sites are the whole of it -- a scan of
+`SilkChecks.py` finds no other private read.
+
+**Why the fallback exists.** The PRIMARY path is the public reader:
+`Proxy.getSubgrid(u0, u1, v0, v1)` re-derives the cell from the patch's own base surface,
+and both the current `Patch` (`SilkPatch.py`) and the legacy `Patch44` shim
+(`SilkPatch44.py`) expose it. The fallback is reached only when that reader cannot answer:
+a proxy with no `getSubgrid` at all, or one whose base surface is not built (the legacy
+`Patch44` restore shim before its `execute()` has run; a test stub). It was added by #107,
+which recorded that the legacy objects "keep the verdict they always had".
+
+**Why closing it is not an improvement.** Closing the fallback would not make the oracle
+stricter; it would make it SILENT. A legacy patch would stop being CHECKED and start being
+SKIPPED: `check_blend` would answer "no shared edge found between the patches"
+(`B1_c0_seams` / `B2_c1_tangents` red) where it used to answer a verdict, so an old
+document's verdict would change. The restore contract (#93)
+requires an old document to come back with the verdicts it always had. A ticket whose scope
+is "none of these changes behaviour" cannot close it silently.
+
+**What the exception does NOT cover.** The fallback is a fallback: the oracle decides nothing
+else from the cache, and every other test and oracle path stays on the public surface. The
+exception is bounded to the legacy path named above; a public reader that covered the legacy
+objects would let it be closed, and this paragraph would be the record of why it was not.
 
 ## Target module layout
 

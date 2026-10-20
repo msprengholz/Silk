@@ -135,7 +135,7 @@ SECTION_NONE = -1
 
 # Per-stage collection bounds. Edge: 1 or 2 sketches (1 -> 3L, 2 -> 2N).
 # Patch: 3 or 4 edges (3 -> pointed, 4 -> quad). Blend: 1..N seams.
-# Corner Blend: 3 or 4 blend strips, the ring around one junction -- three
+# Corner Blend: 3 or 4 blends, the ring around one junction -- three
 # where three patches meet, four where four do.
 EDGE_MIN, EDGE_MAX = 1, 2
 PATCH_MIN, PATCH_MAX = 3, 4
@@ -242,7 +242,7 @@ HIDE_GRIDS_TOOLTIP = (
 PLACEHOLDERS = {
     SECTION_EDGE: "nothing collected -- click a sketch in the 3D view",
     SECTION_PATCH: "nothing collected -- click edges in the 3D view",
-    SECTION_CORNER: ("nothing collected -- click the 3 or 4 blend strips "
+    SECTION_CORNER: ("nothing collected -- click the 3 or 4 blends "
                      "that ring one junction"),
 }
 
@@ -1198,7 +1198,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             return self.object_type(obj) == "Edge"
         if section == SECTION_CORNER:
             # Corner Blend collects the 3 or 4 ring blends themselves
-            # (identity, not geometry): a Blend strip object. A wrong type
+            # (identity, not geometry): a Blend object. A wrong type
             # is ignored.
             return self.object_type(obj) in BLEND_TYPES
         # Blend: an Edge object that is a seam right now. An edge with

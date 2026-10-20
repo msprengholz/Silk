@@ -863,7 +863,7 @@ def split_band_cells(base_surface, p, ea, ss, leader):
 
 # ---- the 4-strip corner ring and its subgrid chain (#91) ----------------
 #
-# Where four Patches meet at a shared junction, the four ring Blend strips
+# Where four Patches meet at a shared junction, the four ring blends
 # enclose the corner cell. Upstream Silk builds that corner from FOUR 3x3
 # subgrids -- `SubGrid33_2Grid64` over each consecutive strip pair, then
 # `ControlGrid66_4Sub` to assemble the 6x6 -- and the surface comes from
@@ -1375,7 +1375,7 @@ def _doc_index(obj):
 
 
 def corner_ring(strips):
-    """Order 4 Blend strips into their cyclic ring, deterministically.
+    """Order 4 blends into their cyclic ring, deterministically.
 
     Identity-only, like the seam resolver: two strips are adjacent iff
     they share a PATCH object. The four must form one 4-cycle (each
