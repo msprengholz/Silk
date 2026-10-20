@@ -69,6 +69,76 @@ def _refuse(fp, msg):
     _clear_result(fp)
 
 
+def _patch_needs_rebuild(p):
+    """True when `p`'s geometry must be rebuilt before a strip reads it.
+
+    #125 -- the measurement behind this predicate:
+
+      * FreeCAD's single-object `obj.recompute()` FORCES the execute,
+        even on an object that is clean (measured on a live object:
+        `obj.recompute()` on an up-to-date object ran its execute again
+        and left it Touched). So the unconditional `pa.recompute()` in
+        `run_blend` re-ran each patch's execute a second time inside
+        every document pass.
+      * A patch's execute touches every blend that reads it (the #41
+        live-update chain, SilkPatch.Patch._execute). So that second,
+        forced rebuild re-armed the blends that had ALREADY been rebuilt
+        in the same pass -- the document never settled, and every later
+        recompute rebuilt the whole chain (0.83 s on the cube-corner
+        fixture, two blends Touched forever).
+
+    The rule: rebuild a patch that is DIRTY (the user edited a band
+    edge, an input changed) or that has never been built; leave a CLEAN
+    patch alone. A clean patch's subgrid cells are current by
+    construction -- the document pass rebuilds a patch BEFORE the
+    blends that read it (a blend links to its patches, so the
+    framework's topological order puts the patch first), and the patch
+    purges its own Touched flag at the end of its execute.
+    """
+    if "Touched" in p.State:
+        return True
+    # never built: the proxy has no cell array yet (a restored patch
+    # whose execute has not run yet).  A patch that RAN but produced no
+    # surface is NOT rebuilt here -- it is left exactly as it is, so a
+    # degenerate patch cannot keep re-arming the blends that read it.
+    return not hasattr(getattr(p, "Proxy", None), "_subgrids")
+
+
+def _rebuild_restored_shape(fp):
+    """The blend's surface, rebuilt from the STORED poles.  True when the
+    Shape was rewritten.
+
+    #125: a restored blend's Shape may PREDATE #108 -- the control grid
+    was part of the Shape then (the owner's saved model carries 4
+    boundary edges + 38 grid legs per strip, while the current contract
+    is the surface alone).  The framework does NOT necessarily mark a
+    restored blend dirty: seven of the owner's eight came back dirty and
+    were rebuilt, and one came back clean and kept its pre-#108 Shape
+    until something else touched it -- and then a DISPLAY toggle changed
+    the Shape, which is exactly what the grid-is-display-not-geometry
+    contract forbids.
+
+    The surface is rebuilt from the stored poles with the very function
+    AN.CubicSurface_64.execute uses (`AN.NURBS_Cubic_64_surf`, which owns
+    the knot vector -- nothing here hand-rolls it), so no document
+    object is created: a restore must not add anything to the document
+    it is restoring.  The strip itself is NOT rebuilt (the stored poles
+    ARE the strip's own output and stay as they are); only the Shape is
+    brought onto the current contract.
+    """
+    poles = list(getattr(fp, "Poles", None) or [])
+    weights = list(getattr(fp, "Weights", None) or [])
+    if len(poles) != 24 or len(weights) != 24:
+        return False
+    try:
+        import ArachNURBS as AN
+        weighted = [[poles[i], weights[i]] for i in range(24)]
+        fp.Shape = AN.NURBS_Cubic_64_surf(weighted).toShape()
+        return True
+    except Exception:
+        return False
+
+
 def _seam_from_edge(a_c, b_c, ep0, ep1, tol):
     """Pin the seam from an explicit Edge's endpoint poles (#39 decision
     C). Delegates to `SilkMachinery.seam_from_edge`, which is the single
@@ -519,9 +589,31 @@ def run_blend(fp):
                                             getattr(p, "object_type", None)))
             return
 
-    # Ensure patches are up to date and will recompute their Shape with auto-hide
-    pa.recompute()
-    pb.recompute()
+    # Ensure the patches are up to date before the strip reads their cells.
+    #
+    # #125: this used to be an UNCONDITIONAL `p.recompute()`, and
+    # FreeCAD's single-object recompute FORCES the execute even on a
+    # clean object (measured: `obj.recompute()` on an up-to-date object
+    # runs its execute again). So every blend rebuild rebuilt BOTH of its
+    # patches a second time inside the same document pass -- and the
+    # patch's execute touches every blend that reads it (the #41
+    # live-update chain, SilkPatch.Patch._execute). A blend that had
+    # ALREADY been rebuilt in that pass was therefore touched AGAIN by
+    # the next blend's forced rebuild, and the pass never settled: the
+    # two blends stayed Touched forever and every later document
+    # recompute rebuilt the whole chain (0.83 s on the cube corner).
+    #
+    # The rebuild is now CONDITIONAL, and the chain is untouched: a
+    # DIRTY patch (the user edited a band edge, an input changed) is
+    # rebuilt before the strip reads it, exactly as before; a CLEAN
+    # patch is left alone. A clean patch's subgrid cells are current by
+    # construction -- the document pass rebuilds a patch BEFORE the
+    # blends that read it (a blend links to its patches, so the
+    # framework's topological order puts the patch first), and the patch
+    # purges its own Touched flag at the end of its execute.
+    for p in (pa, pb):
+        if _patch_needs_rebuild(p):
+            p.recompute()
 
     for p in (pa, pb):
         if not getattr(getattr(p, "Proxy", None), "_base_surface", None):
@@ -1174,6 +1266,17 @@ class BlendStrip:
         ensure_grid_toggle(obj)
         migrate_shaded_display(obj)
         self._install_delete_watcher(obj)
+        # #125: a restored blend's stored SHAPE may PREDATE #108 -- the
+        # control grid was part of the Shape then (the owner's saved
+        # model carries 4 boundary edges + 38 grid legs per strip). The
+        # framework does NOT necessarily mark a restored blend dirty (one
+        # of the owner's eight came back clean), so the stale Shape would
+        # stay until something else touched the blend -- and a DISPLAY
+        # toggle would then CHANGE the Shape, which the
+        # grid-is-display-not-geometry contract (#108) forbids. So the
+        # Shape is brought onto the current contract right here, from the
+        # stored poles, without touching the document.
+        _rebuild_restored_shape(obj)
 
     def onDelete(self, fp):
         # FreeCAD 1.1.3 never calls this (no DocumentObjectPy::onDelete);
