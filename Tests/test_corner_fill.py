@@ -630,7 +630,7 @@ def test_the_c0_fallback_is_selectable(doc):
 
     cm.build_corner_model(doc)
     strips = [doc.getObject(n) for n in STRIPS]
-    links, _faces = OPS.corner_fill_boundary(strips)
+    links, _faces = OPS.corner_fill_boundary(strips)[0]
     check(bool(links), "the ring's boundary did not resolve", errors)
     if not links:
         return {"pass": not errors, "checks": checks, "errors": errors}
