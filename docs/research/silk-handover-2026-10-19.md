@@ -102,6 +102,21 @@ so the cut is a knot line of both nets and the two pieces meet at
 
 ### 2.4 The next build: **Path A** — the maintainer's structure
 
+**There IS a Path A checkpoint now: `4e21833` ("wip(#119): PATH A -- the
+rolling corner built from CUT cells").** It was interrupted at the session pause
+while writing its test file, and it is **committed but UNGATED at the time of
+writing**. It contains: a `CornerBlend` variant in `SilkCorner.py` that takes
+the ring members' **cut** cells (plus a `member_grid()` helper and the leader
+carried on the corner); `create_rolling_corner_66(strips, patch, leader=…,
+seams=…)` in `SilkWorkflowOps.py`; `Tests/test_rolling_corner_66.py` (the
+fast-tier contract, **written but never run**); and
+`Tests/rolling_corner_66_visual.py` (the render + numbers script, never run).
+
+**Its own acceptance test was RED when the session paused** — see §5 for the
+gate. So the state is: the cut cells are written, but **the leader still does
+not move the corner**, and the WIP was interrupted before its author could say
+why.
+
 **The acceptance test, and it is the whole thing:**
 
 > the corner's curvature spread (`k_max/k_min`) and saddle fraction **must MOVE
@@ -119,6 +134,15 @@ freecad surface patch"*).
 
 **If it turns out impossible in our machinery, say so with the evidence and
 what it would take.** Do not fake it, and do not fall back to Path B silently.
+
+**Where Path A was interrupted:** it had just written the test module, and its
+own test names are the acceptance — `test_the_leader_moves_the_corner_s_shape`,
+`test_the_junction_at_the_cut_is_closed`,
+`test_the_rolling_corner_builds_the_66_the_member_and_the_fill`, plus
+`test_a_corner_without_the_rolling_construction_is_the_shipped_one` (the
+default path must stay byte-identical) and
+`test_a_leader_outside_the_seam_is_refused_by_name`. **The first thing to do
+is read those tests and make them pass, not to write more code.**
 
 ---
 
@@ -158,7 +182,42 @@ click script (`be27f61`, `69864af`), and the **suite tier split** (`d9b17bc`,
 
 ---
 
-## 5. Exact commands for the next session
+## 5. The gate at the pause, and the two failures
+
+The owner's GUI FreeCAD was **down** at the pause, so the gate ran in the
+documented **in-process fallback** (`freecad Tests/run_all.py` — it spawns its
+own FreeCAD; use it only when no GUI is running, never alongside one):
+
+```
+IN-PROCESS GATE: total 211  passed 209  failed 2
+FAIL: test_a_corner_without_the_rolling_construction_is_the_shipped_one
+      ['First arg must be Vector']
+FAIL: test_the_leader_moves_the_corner_s_shape
+      ['the rolling corner is the shipped corner, pole for pole']
+```
+
+**Both failures are the Path A WIP's own tests** — everything else, including
+all of #121's new tests (#96's normal-gap instrument, the order judgement, the
+selectable C0 fallback, #11's datas-level link) and #123's instrument tests,
+is green.
+
+**What the two failures mean:**
+
+1. `test_a_corner_without_the_rolling_construction_is_the_shipped_one` —
+   *"First arg must be Vector"* — a **test bug**, the same Vector/tuple
+   mismatch class as the CornerCube one: the test subtracts a tuple from a
+   Vector. Cheap to fix.
+2. `test_the_leader_moves_the_corner_s_shape` — *"the rolling corner is the
+   shipped corner, pole for pole"* — **the acceptance test is red**: with the
+   leader set, the corner comes out pole-identical to the shipped corner.
+   **This is THE thing to chase.** Either Path A was interrupted before the cut
+   cells reached the corner's boundary (most likely: it was interrupted while
+   writing the test module), or the cut cells do not carry the cut into the
+   corner's junction row. The maintainer's file says they do: his ring
+   members' junction rows sit at the cut.
+
+**The last fully-green state** was `195/195` (fast tier) at `5b66d85`, before
+the Path A WIP and the #121 merge. Treat that as the known-good baseline.
 
 ```bash
 cd /home/mo/.local/share/FreeCAD/v1-1/Mod/Silk
