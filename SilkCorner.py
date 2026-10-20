@@ -462,6 +462,18 @@ class CornerBlend:
             if 'Restore' not in fp.State and list(getattr(fp, "Strips", []) or []):
                 fp.touch()
                 fp.recompute()
+        elif prop in ("ShowGrid", "ShowSurface"):
+            # A DISPLAY toggle must not leave the object dirty. FreeCAD
+            # sets the Touched flag on every property write -- after
+            # onChanged returns -- so the next document recompute pass
+            # rebuilt the whole corner chain (the member, the four 33
+            # subgrids, the 66 and its surface) for a change that only
+            # decides what is DRAWN. Measured: 857 ms per toggle on the
+            # cube corner, against 4 ms for the write itself.
+            try:
+                fp.purgeTouched()
+            except Exception:
+                pass
 
     def execute(self, fp):
         if 'Restore' in fp.State:

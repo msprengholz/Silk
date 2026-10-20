@@ -792,6 +792,15 @@ def _on_changed(fp, prop):
             or prop.startswith("Patch"):
         if 'Restore' not in fp.State and getattr(fp, "PatchA", None):
             fp.recompute()
+    elif prop in ("ShowGrid", "ShowSurface"):
+        # A DISPLAY toggle must not leave the object dirty: FreeCAD sets the
+        # Touched flag on every property write, so the next document
+        # recompute pass rebuilt the blend for a change that only decides
+        # what is DRAWN. Same fix as the corner's.
+        try:
+            fp.purgeTouched()
+        except Exception:
+            pass
 
 
 def _on_delete(fp):

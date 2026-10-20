@@ -1557,6 +1557,34 @@ def grid_coin_node(legs):
     return sep
 
 
+def _grid_legs_key(legs):
+    """A cheap, exact key for a set of display legs.
+
+    The legs are `Part.LineSegment` objects, and their `==` is not reliably
+    value-based, so a list comparison cannot decide "same legs". This reads
+    the coordinates instead: a few floats per segment, against the hundreds
+    of Coin nodes a rebuild allocates. `None` if the shape is not what we
+    expect -- in which case the caller rebuilds, which is always safe.
+    """
+    key = []
+    try:
+        for item in legs:
+            # The legs arrive as a flat list of Part.LineSegment, but a
+            # nested list of them is also seen in the wild.
+            segs = item if isinstance(item, (list, tuple)) else [item]
+            row = []
+            for seg in segs:
+                a = seg.StartPoint
+                b = seg.EndPoint
+                row.append((round(float(a.x), 9), round(float(a.y), 9),
+                            round(float(a.z), 9), round(float(b.x), 9),
+                            round(float(b.y), 9), round(float(b.z), 9)))
+            key.append(tuple(row))
+    except Exception:
+        return None
+    return tuple(key)
+
+
 def set_grid_display(proxy, vobj, legs, visible, color, width):
     """(Re)build the control-grid Coin node on `vobj` and show/hide it.
 
@@ -1565,6 +1593,14 @@ def set_grid_display(proxy, vobj, legs, visible, color, width):
     changing anything else. No ViewObject (headless) or no pivy is a
     silent no-op -- no node, no error. The switch is re-appended to
     RootNode on every call so exactly one grid node ever exists.
+
+    **A visibility change does NOT rebuild.** Building a control grid
+    allocates a Coin node per pole and per leg, so a toggle used to cost
+    the whole grid -- seconds for a corner's 36 poles, and seconds again
+    for every object when the panel hides the grids across a document.
+    When the inputs are unchanged (the same legs, colour and width), the
+    existing node is kept and only the switch is flipped; the rebuild
+    happens when the legs or the appearance actually change.
     """
     if vobj is None:
         return None
@@ -1579,6 +1615,20 @@ def set_grid_display(proxy, vobj, legs, visible, color, width):
     if switch is None:
         switch = coin.SoSwitch()
         proxy._silk_grid_node = switch
+    # A pure show/hide is O(1): keep the node, flip the switch.
+    cached = getattr(proxy, "_silk_grid_cache", None)
+    key = _grid_legs_key(legs)
+    if (cached is not None and key is not None
+            and cached[0] == key and cached[1] == color
+            and cached[2] == width
+            and switch.getNumChildren() > 0):
+        switch.whichChild = 0 if visible else -1
+        try:
+            if switch.getParent() is not root:
+                root.addChild(switch)
+        except Exception:
+            pass
+        return switch
     try:
         root.removeChild(switch)
     except Exception:
@@ -1603,6 +1653,9 @@ def set_grid_display(proxy, vobj, legs, visible, color, width):
     switch.addChild(display)
     switch.whichChild = 0 if visible else -1
     root.addChild(switch)
+    # Remember what the node was built from, so the next pure toggle can
+    # skip the rebuild.
+    proxy._silk_grid_cache = (key, color, width)
     return switch
 
 

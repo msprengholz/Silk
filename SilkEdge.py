@@ -405,9 +405,25 @@ class Edge:
         self.execute(obj)
 
     def onChanged(self, fp, prop):
-        if prop in ("ShowCurve", "ShowPolygon", "reverse"):
+        # `ShowPolygon` is NOT in this list: the control polygon is a VIEW
+        # node (the view provider draws it from the stored Legs, per #108
+        # "ShowPolygon no longer changes Shape"), so showing or hiding it
+        # must not rebuild the edge. `ShowCurve` stays -- the curve IS the
+        # shape (#108: "Shape is GEOMETRY ONLY"), so it decides what the
+        # build puts there.
+        if prop in ("ShowCurve", "reverse"):
             if 'Restore' not in fp.State:
                 self.execute(fp)
+        elif prop == "ShowPolygon":
+            # A DISPLAY toggle must not leave the object dirty: FreeCAD sets
+            # the Touched flag on every property write, so the next document
+            # recompute pass rebuilt the edge for a change that only decides
+            # what is DRAWN. Same fix as the patch's, the blend's and the
+            # corner's.
+            try:
+                fp.purgeTouched()
+            except Exception:
+                pass
 
     def execute(self, fp):
         if 'Restore' in fp.State:

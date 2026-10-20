@@ -246,9 +246,31 @@ class Patch:
                 self._normalize_splits_on_set(fp, prop)
             except Exception:
                 pass   # never let housekeeping break the object
+        if prop == "ShowGrid":
+            # A DISPLAY toggle must not leave the object dirty: FreeCAD
+            # sets the Touched flag on every property write, so the next
+            # document recompute pass rebuilt the patch for a change that
+            # only decides what is DRAWN (the control grid is a view node).
+            # Same fix as the blend's and the corner's.
+            try:
+                fp.purgeTouched()
+            except Exception:
+                pass
+            return
         # Guard: only recompute if object is fully initialized (has inputs)
+        #
+        # `ShowGrid` is NOT in this list, and that is the fix for a display
+        # toggle costing seconds. The control grid is a VIEW node (the view
+        # provider draws it from the stored Legs), so showing or hiding it
+        # changes nothing about the geometry: the view provider's
+        # `updateData` already refreshes the node. Recomputing the patch for
+        # it rebuilt the fill, the subgrids and the surface for nothing, and
+        # the panel's "hide grids" button writes the property on every
+        # object, so the whole document paid for it. `ShowSurface` and
+        # `ShowSubgrids` DO stay: they decide what `build_display` puts in
+        # the shape, so they need the build.
         if prop in ("USplit1", "USplit2", "VSplit1", "VSplit2",
-                    "ShowSurface", "ShowGrid", "ShowSubgrids", "reverse"):
+                    "ShowSurface", "ShowSubgrids", "reverse"):
             if getattr(self, "_normalizing_splits", False):
                 # This onChanged IS the corrective write _normalize_splits_on_set
                 # just made (a clamp or a swap); the user's outer write is
