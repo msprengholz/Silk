@@ -5,7 +5,6 @@ Does FreeCAD's built-in surface tool (`Surface::Filling`, the ADR-0005
 "G2 default" for the corner stage) actually reach G2 across the 4-patch
 corner junction, and **what feed does it need**?
 
-MANUAL = True
 
 MEASUREMENT ONLY.  Nothing here is a production object; every carrier is
 a throwaway `Part::Feature` / `Surface::Filling` built in a scratch
@@ -67,6 +66,9 @@ This is the measured input the ticket owner needs to move ADR-0005 Q1
 from `b` (raw patches) to `a` (blended strips) if the G2 default is to
 hold.
 """
+
+MANUAL = True  # #120: this is a measurement script -- the marker
+# keeps it out of the default run; the suite asserts it is reachable.
 
 import FreeCAD
 import Part
