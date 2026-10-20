@@ -135,37 +135,58 @@ def test_the_leader_moves_the_corner_s_shape(doc):
 
     The previous build measured the same spread (1.036938) with and
     without its leader.  Here the leader is the band's own corner-side
-    cut, so the corner's spread MUST move."""
+    cut, so the corner's spread MUST move.
+
+    THE TWO CORNERS ARE TWO OBJECTS.  The rolling build REUSES the
+    corner object of the ring it rolls -- the corner follows the
+    leader -- so the shipped corner is built in its OWN document and
+    the comparison is between two different corners, never a corner
+    against itself."""
     errors, checks = [], []
     _fixture(doc)
     strips = _strips(doc)
-    shipped = create_corner_blend(*strips, name="Shipped")
-    doc.recompute()
-    s_kmax, s_kmin, s_ratio = _spread(shipped)
-    checks.append("the shipped corner: k_max %.6g, k_min %.6g, ratio %.6g"
-                  % (s_kmax, s_kmin, s_ratio))
-    patch = doc.getObject("PatchA")
-    rolled = [s for s in strips if s.PatchA is patch or s.PatchB is patch]
-    res = create_rolling_corner_66(strips, patch, leader=0.25, seams=rolled,
-                                   name="Roll")
-    doc.recompute()
-    if res is None:
-        return {"pass": False,
-                "errors": ["the rolling corner did not build"],
-                "checks": checks}
-    r_kmax, r_kmin, r_ratio = _spread(res["corner"])
-    checks.append("the rolling corner: k_max %.6g, k_min %.6g, ratio %.6g"
-                  % (r_kmax, r_kmin, r_ratio))
-    if abs(r_ratio - s_ratio) < 1e-6:
-        errors.append("the leader did not move the corner's shape "
-                      "(ratio %.6g both ways)" % s_ratio)
-    # and the corner fill's poles are not the shipped ones
-    same = all((a - b).Length < 1e-12 for a, b in
-               zip(list(shipped.Poles), list(res["corner"].Poles)))
-    if same:
-        errors.append("the rolling corner is the shipped corner, pole for "
-                      "pole")
-    return {"pass": not errors, "errors": errors, "checks": checks}
+    # the shipped corner, in its own document
+    sdoc = FreeCAD.newDocument("ShippedCornerDoc")
+    try:
+        ccm.build_cube_corner_model(sdoc)
+        sdoc.recompute()
+        sdoc.recompute()
+        sstrips = [sdoc.getObject(n) for n in ("B_AB", "B_BC", "B_CA")]
+        shipped = create_corner_blend(*sstrips, name="Shipped")
+        sdoc.recompute()
+        s_kmax, s_kmin, s_ratio = _spread(shipped)
+        s_poles = [FreeCAD.Vector(v) for v in shipped.Poles]
+        checks.append("the shipped corner: k_max %.6g, k_min %.6g, ratio %.6g"
+                      % (s_kmax, s_kmin, s_ratio))
+        patch = doc.getObject("PatchA")
+        rolled = [s for s in strips
+                  if s.PatchA is patch or s.PatchB is patch]
+        # the ops layer builds into the ACTIVE document
+        FreeCAD.setActiveDocument(doc.Name)
+        res = create_rolling_corner_66(strips, patch, leader=0.25,
+                                       seams=rolled, name="Roll")
+        doc.recompute()
+        if res is None:
+            return {"pass": False,
+                    "errors": ["the rolling corner did not build"],
+                    "checks": checks}
+        r_kmax, r_kmin, r_ratio = _spread(res["corner"])
+        checks.append("the rolling corner: k_max %.6g, k_min %.6g, ratio %.6g"
+                      % (r_kmax, r_kmin, r_ratio))
+        if abs(r_ratio - s_ratio) < 1e-6:
+            errors.append("the leader did not move the corner's shape "
+                          "(ratio %.6g both ways)" % s_ratio)
+        # and the corner fill's poles are not the shipped ones
+        same = all((a - b).Length < 1e-12 for a, b in
+                   zip(s_poles, list(res["corner"].Poles)))
+        checks.append("the poles are the shipped ones: %s"
+                      % ("yes" if same else "no"))
+        if same:
+            errors.append("the rolling corner is the shipped corner, pole "
+                          "for pole")
+        return {"pass": not errors, "errors": errors, "checks": checks}
+    finally:
+        FreeCAD.closeDocument(sdoc.Name)
 
 
 def test_the_junction_at_the_cut_is_closed(doc):
@@ -203,7 +224,7 @@ def test_a_corner_without_the_rolling_construction_is_the_shipped_one(doc):
     strips = _strips(doc)
     first = create_corner_blend(*strips, name="Shipped1")
     doc.recompute()
-    poles = [tuple(v) for v in first.Poles]
+    poles = [FreeCAD.Vector(v) for v in first.Poles]
     second = create_corner_blend(*strips, name="Shipped2")
     doc.recompute()
     same = all((a - b).Length < 1e-12 for a, b in
@@ -218,6 +239,66 @@ def test_a_corner_without_the_rolling_construction_is_the_shipped_one(doc):
         if abs(p.USplit1 - 0.1) > 1e-12 or abs(p.VSplit1 - 0.1) > 1e-12:
             errors.append("%s's band edges moved without the rolling "
                           "construction" % name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_the_leader_is_measured_from_the_junction_corner(doc):
+    """The leader is a DISTANCE FROM THE JUNCTION, so a junction at the
+    1 end of an axis mirrors the split value (`1 - leader`).
+
+    The fixture is the 2x2 model (`Tests/corner_model.py`): a 4-valent
+    junction whose patches carry the junction at the 1 end of an axis.
+    The cube-corner fixture has it at the 0 end on every axis, so it
+    cannot see this.
+    """
+    errors, checks = [], []
+    from SilkBlend import side_and_end
+    from SilkMachinery import band_extent
+    from Tests import corner_model as cm
+    cm.build_corner_model(doc)
+    doc.recompute()
+    doc.recompute()
+    strips = [doc.getObject(n) for n in ("B12", "B24", "B43", "B31")]
+    target = None
+    for s in strips:
+        for p in (s.PatchA, s.PatchB):
+            e, ss = side_and_end(s, p)
+            ext = band_extent(p, e, ss)
+            if ext[0] is not None and ext[2] == 1:
+                target = (s, p)
+                break
+        if target is not None:
+            break
+    if target is None:
+        return {"pass": False,
+                "errors": ["the fixture carries no junction at the 1 end of "
+                            "an axis"],
+                "checks": checks}
+    s, p = target
+    checks.append("the seam %s on %s carries the junction at the 1 end"
+                  % (s.Name, p.Name))
+    res = create_rolling_corner_66(strips, p, leader=0.25, seams=[s],
+                                   name="Roll")
+    doc.recompute()
+    if res is None:
+        return {"pass": False,
+                "errors": ["the rolling corner did not build"],
+                "checks": checks}
+    for q in (s.PatchA, s.PatchB):
+        e2, ss2 = side_and_end(s, q)
+        ext = band_extent(q, e2, ss2)
+        if ext[0] is None:
+            errors.append("%s: the band's extent cannot be read" % q.Name)
+            continue
+        (lo, hi), _band, corner_end = ext
+        # the corner's boundary sits at the far end of the band from the
+        # junction: its distance from the junction is the leader
+        away = lo if corner_end == 0 else 1.0 - hi
+        checks.append("%s: the junction at the %d end, the corner's boundary "
+                      "%.4g from it" % (q.Name, corner_end, away))
+        if abs(away - 0.25) > 1e-9:
+            errors.append("%s: the corner's boundary is %.4g from the "
+                          "junction, not the leader 0.25" % (q.Name, away))
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 

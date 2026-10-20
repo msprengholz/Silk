@@ -710,27 +710,40 @@ def create_rolling_corner(strips, patch, leader=ROLLING_LEADER, order=1,
 #     extrapolation is scale-invariant).
 
 
-def _leader_home(strip, patch, tol=None):
-    """(property name, why) -- the patch property that carries the
-    ROLLING LEADER of this seam: the band edge on the seam-PARALLEL
-    axis, at the junction end.
+def _leader_home(strip, patch, leader, tol=None):
+    """(property name, value to write, why) -- the patch property that
+    carries the ROLLING LEADER of this seam: the band edge on the
+    seam-PARALLEL axis, at the junction end, and the value to write
+    into it.
 
     That edge IS the maintainer's leader: his band's cells start there,
     his base surfaces are cut there, and the corner fill's boundary sits
-    on it.  `None` (with the reason) when the seam cannot say which end
-    of which axis carries it."""
+    on it.
+
+    THE VALUE.  The leader is a fraction of the seam measured FROM THE
+    JUNCTION CORNER (`ROLLING_LEADER`'s parameter space, one statement
+    for the whole module); a split value is a position on the axis
+    measured from the axis's own 0 end.  The two agree only when the
+    junction is at the 0 end of the axis -- so a junction at the 1 end
+    mirrors the leader (`1 - leader`), which is what `leader_cut` does
+    for the same quantity on the split blend's own cut.
+
+    `None` (with the reason) when the seam cannot say which end of
+    which axis carries it."""
     from SilkBlend import side_and_end, band_edge_prop
     from SilkMachinery import band_extent, seam_axis_roles
     tol = getattr(strip, "tolerance", 0.01) if tol is None else tol
     e, ss = side_and_end(strip, patch, tol)
     if not e:
-        return None, ("blend %s cannot say which side of %s it takes"
-                      % (strip.Name, patch.Name))
+        return None, None, ("blend %s cannot say which side of %s it takes"
+                            % (strip.Name, patch.Name))
     along_letter, _band_letter = seam_axis_roles(e)
     ext = band_extent(patch, e, ss)
     if ext[0] is None:
-        return None, ext[1]
-    return band_edge_prop(along_letter, ext[2]), None
+        return None, None, ext[1]
+    corner_end = ext[2]
+    value = float(leader) if corner_end == 0 else 1.0 - float(leader)
+    return band_edge_prop(along_letter, corner_end), value, None
 
 
 def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
@@ -803,25 +816,26 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
         for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
             if p is None:
                 continue
-            prop, why = _leader_home(s, p)
+            prop, value, why = _leader_home(s, p, leader)
             if prop is None:
                 FreeCAD.Console.PrintError(
                     "Silk: the rolling leader cannot be placed: %s. Nothing "
                     "was created.\n" % why)
                 return None
             cur = float(getattr(p, prop, 0.0) or 0.0)
-            if abs(cur - leader) < 1e-12:
+            if abs(cur - value) < 1e-12:
                 continue
-            setattr(p, prop, leader)
-            written.append((p.Name, prop, cur, leader))
+            setattr(p, prop, value)
+            written.append((p.Name, prop, cur, value))
     if written:
         doc.recompute()
         doc.recompute()
     for pname, prop, old, new in written:
         FreeCAD.Console.PrintMessage(
             "Silk: the rolling leader moved %s.%s from %g to %g (the band's "
-            "corner-side cut; Silk's cell structure ties it to the "
-            "perpendicular seam's setback as well)\n"
+            "corner-side cut, measured from the junction corner; Silk's "
+            "cell structure ties it to the perpendicular seam's setback as "
+            "well)\n"
             % (pname, prop, old, new))
 
     # 2. the corner fill: the 66 chain, fed with the ring's cut cells.
@@ -854,14 +868,20 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
 
     # 3. the SMALL TRIANGULAR SURFACE beside it (the maintainer's own
     #    second surface), and the owner's FreeCAD replacement of it.
-    member = doc.addObject("Part::FeaturePython", name + "Member")
-    RollingMemberFace(member, strips, corner)
-    RollingMemberFaceViewProvider(member.ViewObject)
-    member.ViewObject.ShapeColor = (0.20, 0.45, 0.95)
-    member.ViewObject.Transparency = 0
-    doc.recompute()
+    # A 4-valent ring has FOUR blends and no triangular member -- there
+    # is nothing to put beside the 66 -- so the member face is a 3-valent
+    # thing only.
+    member = None
+    if len(strips) == 3:
+        member = doc.addObject("Part::FeaturePython", name + "Member")
+        RollingMemberFace(member, strips, corner)
+        RollingMemberFaceViewProvider(member.ViewObject)
+        member.ViewObject.ShapeColor = (0.20, 0.45, 0.95)
+        member.ViewObject.Transparency = 0
+        doc.recompute()
     member_fill = None
-    if fill_member and member.Shape and member.Shape.Edges:
+    if (fill_member and member is not None
+            and member.Shape and member.Shape.Edges):
         # The member's collapsed row is a DEGENERATE edge (its two ends
         # are the apex), so it is not a boundary curve a fill can take:
         # the fill's boundary is the member's own three real edges (the

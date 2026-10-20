@@ -1,0 +1,246 @@
+# The rolling corner, path (A): the 66 over the cut cells (#119)
+
+**What this is.** The ground truth for the rolling corner, read OFFLINE
+from the maintainer's own finished model, and what Silk's cell structure
+can and cannot say with it.  Every number here was measured with the
+shipped instruments (`Tests/g2_corner_roll_measure.py`,
+`Tests/g2_corner_roll_visual.py`, `Tests/continuity_calibration.py`) on
+the cube-corner fixture (`Tests/cube_corner_model.py`), and the raw
+output is the console log of
+
+```
+freecad Tests/rolling_corner_66_visual.py     # the numbers + the render
+```
+
+(the same in-process launcher the gate uses; it needs a GUI for the
+pictures, not for the numbers).
+
+---
+
+## 1. The maintainer's file, read offline
+
+`upstream/master:Resources/Tutorial_Files/Silk CopyPasta/
+Silk_CopyPasta_27_First_Corner_Rolled.FCStd` (and its 25/26
+predecessors) is a zip.  `Document.xml` holds the object classes, the
+links and the stored nets; the pole lists live in separate `Poles*` /
+`Weights*` files.  It is read offline, never opened in FreeCAD.
+
+The corner's object chain:
+
+```
+ControlGrid66_4Sub_012  ->  4 x SubGrid33_2Grid64
+   SubGrid33_2Grid64_048: ControlGrid64_2Grid44_048 + ControlGrid64_3_Grid44_000
+   SubGrid33_2Grid64_049: ControlGrid64_3_Grid44_000 + ControlGrid64_2Grid44_033
+   SubGrid33_2Grid64_050: ControlGrid64_2Grid44_033 + ControlGrid64_2Grid44_051
+   SubGrid33_2Grid64_051: ControlGrid64_2Grid44_051 + ControlGrid64_2Grid44_048
+      -> CubicSurface_66_013
+```
+
+So the corner is **four** members -- three blends
+(`ControlGrid64_2Grid44`, each over two `ControlGrid44_2EdgeSegments`)
+and one **triangular member** (`ControlGrid64_3_Grid44_000`, over one
+cell).  There is no separate triangle beside the 66: the "smaller
+triangular surface" of the owner's reading IS the member's own face.
+
+### 1.1 The ring members are CUTS of the base surfaces
+
+Every member's cell is a `ControlGrid44_2EdgeSegments` -- a two-edge cut
+of a base surface, bounded by two curves that are SEGMENTS of the
+surface's own edges (`ControlPoly4_segment` + `CubicCurve_4`).  Read
+off the stored cells (their parametric spans against the corner patch's
+own net, and the segment objects' `Point_onCurve` pairs), with the
+corner patch's surface `CubicSurface_44_036` parameterised (su, sv):
+
+| cell | surface | span (su) | span (sv) | what it is |
+|---|---|---|---|---|
+| 142 | 036 (the corner patch) | 0 .. 1/16 | 0.25 .. 0.75 | the band of seam curve200 |
+| 141 | 036 | 0.25 .. 0.75 | 0 .. 1/16 | the band of seam curve248 |
+| 140 | 036 | 1/16 .. 0.25 | 1/16 .. 0.25 | the MEMBER's cell |
+| 137 | 054 | -- | 0.25 .. 0.75 | the other side of the curve200 band |
+| 138 | 054 | -- | 0 .. 0.25 | the other side of the curve248 band |
+| 101 | 039 | 0 .. 0.25 | -- | the other side of the curve248 band |
+| 108 | 039 | 0.25 .. 0.75 | -- | the other side of the curve200 band |
+
+The numbers behind them: the seam curves are cut at **1/16 = 0.0625**
+(the setback -- the band's width across the seam) and at **0.25** (the
+leader -- where the band's along-seam extent starts); the `Point_onCurve`
+objects labelled `..._leader` carry u = 0.0625 and 0.8125, and the
+`..._leader005` points carry u = 0.25 and 0.75.
+
+**So the maintainer's corner patch is cut at TWO positions per axis:**
+the setback (1/16) and the leader (0.25).  The corner fill's boundary
+against each blend is that blend's CUT EDGE, i.e. it sits AT THE
+LEADER; the member's cell is the region BETWEEN the setback and the
+leader.
+
+### 1.2 Where the junction is, and where the member pinches
+
+The junction is the surface's corner (su, sv) = (0, 0) = (-100, -100, 0)
+in the file's own coordinates -- the point where seam curve200 (the
+su = 0 edge) and seam curve248 (the sv = 0 edge) meet.
+
+The member's grid (`ControlGrid64_3_Grid44_000`, 24 poles, one row
+collapsed) pinches at (0.25, 0.25) -- the LEADER/leader corner, NOT at
+the junction.  The junction square (0 .. 1/16)^2 is not in any of the
+seven cells: it is preserved original surface (the file's "backfill"
+surfaces).
+
+### 1.3 The structure to aim for, in Silk's words
+
+Silk's shipped 3-valent corner is the same OBJECTS (a 66 over four
+members, one of them the triangular member, plus the member's own face
+as a separate surface) with a different REGION: Silk's member is the
+patch's corner CELL, and its collapsed row -- the apex the 66 pinches
+at -- is AT THE JUNCTION.  The maintainer's is the cell between the
+setback and the leader, and its apex is at the leader/leader corner.
+
+---
+
+## 2. Which quantity sets Silk's 66's boundary, and the coupling
+
+In Silk's machinery the corner fill's boundary against a blend is that
+blend's JUNCTION ROW: the end row of the band's cell that faces the
+junction.  The band's cell is a rectangular cell of the patch's
+subgrid net, so that row sits at the patch's named band edge on the
+seam-parallel axis, at the junction end.  **That one split value is
+what the leader moves.**
+
+The consequence, stated plainly and not hidden: Silk's patch carries ONE
+named band edge per axis end (#82), and that edge is at once
+
+  * the setback of the PERPENDICULAR seam (the band's width across it),
+    and
+  * the leader of THIS seam (the band's along-seam extent).
+
+Moving the leader therefore moves that setback with it.  The
+maintainer's model has the two as separate cuts (1/16 and 0.25) and does
+not have this coupling; Silk's cell structure cannot hold both numbers
+at one axis end, and this build keeps one number.
+
+**A uniform leader is a pure scaling.**  Measured (cube-corner fixture,
+all three seams at the same setback, no rolling construction at all):
+the curvature spread is **1.03694 at setbacks 0.1, 0.25 and 0.5** -- the
+same to thirteen digits, because the corner is a scaled copy of itself.
+The leader moves the SHAPE only when it is moved on SOME of the ring's
+seams.
+
+---
+
+## 3. The numbers (the acceptance instrument)
+
+Fixture: `Tests/cube_corner_model.py` (three exact planar squares).  The
+rolling corner is `create_rolling_corner_66` with the leader on the two
+seams the pinned patch `PatchA` carries.
+
+| configuration | k_max | k_min | ratio | saddle cells | foot ratio |
+|---|---|---|---|---|---|
+| shipped corner | 8.90142 | 8.58433 | **1.03694** | 52/1024 = 5.08 % | 1.1772 |
+| rolling, leader 0.125 | -- | -- | **1.14972** | 52/1024 | 1.6263 |
+| rolling, leader 0.25 (the maintainer's) | 2.10333 | 1.56412 | **1.34474** | 52/1024 | 3.1715 |
+| rolling, leader 0.50 | 0.561144 | 0.399593 | **1.40429** | 52/1024 | 7.3289 |
+
+(the spread is measured at the corner's centre; the "foot ratio" is the
+spread at the point nearest the junction -- `junction_probe`'s foot.)
+
+**The spread MOVES with the leader** -- 1.03694 -> 1.34474 at the
+maintainer's own 0.25, and the junction foot's anisotropy moves from
+1.18 to 3.17 (7.33 at 0.5).  The curvature MAGNITUDES move too, but
+they are scale, not shape: k_max falls as 1/size^2 (8.90 -> 2.10 ->
+0.561).
+
+**The saddle-cell fraction does NOT move**: 52/1024 = 5.08 % in every
+configuration, and the 52 cells are the SAME cells (checked: the sets
+are equal).  They are the degenerate apex region -- the member's
+collapsed row -- which is a parametric invariant of the construction.
+
+The saddle count is not blind to the shape, though: #118's rotational
+asymmetric setback (every patch one large and one small setback) reads
+**320/1024 = 31.3 %** with a ratio of 2.288, against the symmetric
+config's 52/1024 and 1.037.  So the instrument works; the rolling
+corner's leader simply does not reach that pattern:
+
+* the leader is ONE number per seam, written on both patches of the
+  seam, so the seam's two sides get their setback from the leader of
+  the NEIGHBOURING seam;
+* the rotational LARGE/SMALL pattern needs one seam's two patches to
+  carry DIFFERENT setback values (E_BC's pair is {B.V = small,
+  C.V = large}), which one leader per seam cannot write.  It is a
+  parity obstruction of the coupling, not a tuning problem.
+
+Measured over every reachable subset of the ring (leader 0.25), the
+spread moves for every non-uniform subset and the saddle count stays
+52/1024:
+
+| rolled seams | ratio | saddle |
+|---|---|---|
+| none (shipped) | 1.03694 | 52/1024 |
+| B_AB | 5.56728 | 52/1024 |
+| B_BC | 2.34400 | 52/1024 |
+| B_CA | 5.56728 | 52/1024 |
+| B_AB + B_BC | 3.62434 | 52/1024 |
+| B_AB + B_CA (the default: PatchA's two seams) | 1.34474 | 52/1024 |
+| B_BC + B_CA | 3.62434 | 52/1024 |
+| all three | 1.03694 | 52/1024 |
+
+(all three = a uniform setback = a scaled copy = the shipped shape.)
+
+---
+
+## 4. The junction, the seams and the default path
+
+**The junction at the cut is CLOSED.**  The corner fill's boundary IS
+each blend's junction row, so the C0 residual between the 66's own
+surface and each blend's cut edge is at the instrument's floor:
+
+| configuration | B_AB | B_BC | B_CA |
+|---|---|---|---|
+| shipped corner | 1.55e-17 mm | 1.388e-17 mm | 1.389e-17 mm |
+| leader 0.25 | 2.86e-17 mm | 2.781e-17 mm | 1.394e-17 mm |
+| leader 0.50 | 5.598e-17 mm | 5.562e-17 mm | 1.412e-17 mm |
+
+Path (B) left **0.2915 mm** there (and 0.1522 mm at the triangle); both
+are gone.
+
+**The small triangular surface against the 66**: worst 0.04855 mm at
+leader 0.25 (0.05846 mm at 0.5), 0 mm at the apex.  The member's face
+and the 66 share only the collapsed (degenerate) row, so the member's
+base edge is not on the 66's boundary -- in the maintainer's file it is
+(his 66 takes the member's setback edges, because his member's cell is
+the region between the setback and the leader).  The owner's FreeCAD
+replacement of that face matches the face it replaces to **2.781e-17 mm**
+and stands the same 0.04855 mm from the 66.
+
+**The seam k_gap** (corner against the strip it feeds; exact from the
+control net, sampled along the seam; the instrument's floor is 0
+k_gap/mm and 0 mm c0, `Tests/continuity_calibration.error_floor`):
+
+| configuration | B_AB exact / sampled | B_BC exact / sampled | B_CA exact / sampled |
+|---|---|---|---|
+| shipped corner | 9.594e-13 / 0.00238 | 7.808e-15 / 0.004563 | 2.485e-13 / 0.00238 |
+| leader 0.25 | 3.412e-13 / 0.0009015 | 1.604e-14 / 0.01141 | 4.441e-14 / 0.0009015 |
+| leader 0.50 | 8.956e-14 / 0.00045 | 2.479e-14 / 0.02281 | 1.136e-14 / 0.00045 |
+
+**The default path is unchanged.**  A blend with `Leader` = 0 is the
+shipped blend, pole for pole: max pole deviation **0.00e+00 mm**, max
+weight deviation **0.00e+00** (`Tests/test_rolling_corner.py`).  This
+build touches no shipped code path: the rolling corner is opt-in, and
+the corner without it is the shipped corner.
+
+---
+
+## 5. What is left
+
+1. **The setback rides along with the leader** (one cut per axis end).
+   To hold them apart, Silk's cell structure would need a second cut at
+   the junction end of an axis -- a new concept in the patch's data
+   model, and #82 closed the "third split" question deliberately.
+2. **The member's cell is the corner cell, not the region between the
+   setback and the leader**, so the 66 pinches at the junction and the
+   member's face stands 0.0486 mm off it.  The maintainer's 66 does not
+   cover the junction at all (his junction square is preserved original
+   surface).
+3. **The saddle-cell fraction cannot serve as the leader's acceptance
+   instrument in this construction**: it is the degenerate apex's, and
+   it is the same 52 cells in every configuration.
+4. The rotational LARGE/SMALL pattern of the video is unreachable through
+   one leader per seam (parity, section 3).
