@@ -9,6 +9,13 @@ MEASUREMENT ONLY.  Nothing here is a production object; every carrier is
 a throwaway `Part::Feature` / `Surface::Filling` built in a scratch
 document and removed again.
 
+MANUAL-ONLY: the file name is not `test_*.py`, so `Tests/suite.py` does not
+discover it.  `Tests/test_continuity_instrument.py` asserts this module
+imports, exposes `main`, and carries `MANUAL`; nothing else in the suite runs
+it.  (Until #120 it carried neither the marker nor the reachability entry,
+while the other manual measurement scripts carried both -- so the marker,
+which is what keeps a probe out of the default run, was missing here.)
+
 Two feeds of the SAME corner hole are measured side by side:
 
   raw   the four raw patches' junction cells -- the ADR-0005 Q1=b feed.
@@ -73,6 +80,8 @@ import Part
 from FreeCAD import Base
 
 from Tests import corner_model
+
+MANUAL = True
 
 RIDGE_PATCHES = ("Patch44", "Patch001", "Patch002", "Patch003")
 STRIP_ORDER = ("B12", "B24", "B43", "B31")

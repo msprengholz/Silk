@@ -1,8 +1,14 @@
-# Wizard redesign — native task panel, three collect-then-confirm stages
+# Wizard redesign — native task panel, four collect-then-confirm stages
 
 Settled in a grilling session on 2026-10-11 (grill-with-docs: grilling + domain-modeling). This
 supersedes the #48 panel design. Read this together with the wizard-track decision-log entry on
 map #1; every item below was decided, not left open.
+
+**Status (#120).** This spec was written for THREE stages and the panel SHIPPED with FOUR:
+**Edge / Patch / Blend / Corner Blend**. The fourth section was added after this spec was
+settled, by #91 (`Silk_CreateCornerBlend` and the panel's corner section). The three-stage
+decision is kept below as the record of what was decided on 2026-10-11 -- it is not rewritten
+-- and the fourth section is described where the shipped panel is described.
 
 ## The finding that enables everything
 
@@ -34,10 +40,11 @@ Enter routing).
 
 ## Host & lifecycle
 
-- Native task panel (#71), three sections: **Edge / Patch / Blend** as header/content PAIRS in a
-  fixed order, one open at a time. The container is `SilkTaskPanel`'s own `SectionStack` (a plain
-  QWidget, deliberately NOT a QToolBox — a QToolBox stacks all three headers on top and cannot
-  fold). No header takes focus (`focusPolicy: NoFocus`), so it never steals focus from the 3D view.
+- Native task panel (#71), four sections: **Edge / Patch / Blend / Corner Blend** as
+  header/content PAIRS in a fixed order, one open at a time. The container is `SilkTaskPanel`'s
+  own `SectionStack` (a plain QWidget, deliberately NOT a QToolBox — a QToolBox stacks all four
+  headers on top and cannot fold). No header takes focus (`focusPolicy: NoFocus`), so it never
+  steals focus from the 3D view.
 - **Refuse to open** if any foreign task dialog is active (FreeCAD allows one at a time and
   raises `RuntimeError("Active task dialog found")`). Never silently close someone else's task.
 - **Close the panel on document switch** — collections would belong to a document the user is no
@@ -45,7 +52,7 @@ Enter routing).
 - Collections persist while the panel is open, cleared when it closes. No confirm-on-clear.
 - The widget is **deleted** by FreeCAD on close (`closeDialog`); rebuild from scratch every open.
 
-## Interaction model (uniform across all three stages)
+## Interaction model (uniform across all four stages)
 
 Collect inputs, then confirm:
 
@@ -60,13 +67,20 @@ Collect inputs, then confirm:
   the bad item.** Never silently drop it — that would change a quad into a pointed patch.
 - Wrong-type clicks are **silently ignored.** No dimming, no highlighting, no message.
 
-## The three sections
+## The four sections
 
 - **Edge** — collect **1 or 2** sketches (1 → 3L, 2 → 2N). Collecting rather than firing on the
   first click is what keeps 2N reachable. List shows the collected sketches.
 - **Patch** — collect **3 or 4** edges; list plus "N/4" and the resulting fill (quad/pointed).
 - **Blend** — one merged table: every seam with its status (blendable / blended by X / blocked);
   clicking collects it, collected rows are highlighted and removable.
+- **Corner Blend** (added by #91, after this spec was settled) — collect the **3 or 4 blends**
+  that ring one shared junction: three where three patches meet (the triangular fourth member
+  is built invisibly), four where four do. The section's bound is a RANGE, so its count line
+  reads "N collected -- ready" or "need 3 or 4" -- never "incomplete" at a confirmable 3.
+  Enter or OK builds ONE `CornerBlend` in ONE transaction (one undo step); a selection that is
+  not a ring around one shared junction is refused BY NAME and creates nothing, and a junction
+  that already has a corner is an idempotent no-op that names the existing object.
 
 ## Blend split parameter (the fillet-radius idea)
 

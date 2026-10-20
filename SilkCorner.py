@@ -3,7 +3,7 @@ SilkCorner — CornerBlend FeaturePython for the 4-subgrid corner fill (#28, #91
 
 Where 4 Patch objects meet at a central junction, each contributes its
 corner subgrid cell (excluded from the ring blend bands by #33). The
-CornerBlend takes the ring's 3 or 4 Blend strips (DAG: patch -> strip ->
+CornerBlend takes the ring's 3 or 4 blends (DAG: patch -> blend ->
 corner blend) and builds Silk's real corner: the four consecutive strip
 pairs each make a 3x3 subgrid (`SubGrid33_2Grid64`), the four subgrids
 assemble into a 6x6 (`ControlGrid66_4Sub`), and the surface comes from
@@ -26,7 +26,7 @@ the cube-corner fixture; on the ordinary 4-valent ring it is a
 byte-identical no-op.
 
 Usage:
-  1. Build the 3 or 4 ring Blend strips
+  1. Build the 3 or 4 ring blends
   2. Run create_corner_blend(*ring_blends)
   3. The corner blend auto-updates when any linked strip recomputes
 """
@@ -423,7 +423,7 @@ class CornerBlend:
 
     def __init__(self, obj, strips):
         obj.addProperty("App::PropertyLinkList", "Strips", "Inputs",
-                        "ring blend strips in cyclic order"
+                        "ring blends in cyclic order"
                         ).Strips = list(strips)
         obj.addProperty("App::PropertyFloat", "tolerance", "Inputs",
                         "corner matching tolerance").tolerance = CORNER_DEFAULT_TOL
@@ -633,7 +633,7 @@ class CornerBlendViewProvider:
 
 
 class CreateCornerFill:
-    """GUI command — the ring's 3 or 4 blend strips -> ONE FreeCAD
+    """GUI command — the ring's 3 or 4 blends -> ONE FreeCAD
     `Surface::Filling` over the corner's hole (#96).
 
     The owner's ask is to JUDGE a one-patch corner by eye. That judgement
@@ -683,7 +683,7 @@ class CreateCornerFill:
 
 
 class CreateCornerBlend:
-    """GUI command — select the 3 or 4 blend strips that ring a shared
+    """GUI command — select the 3 or 4 blends that ring a shared
     junction -> CornerBlend (ticket #91).
 
     The whole contract (adjudicating the ring, refusing a non-junction or

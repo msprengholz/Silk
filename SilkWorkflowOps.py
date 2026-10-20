@@ -301,7 +301,7 @@ def seam_inventory(doc=None):
 def _existing_corner_blend(doc, strips):
     """The CornerBlend already filling exactly this strip SET, or None
     (#28/#91 idempotency). Identity-only: a junction is identified by its
-    three or four blend strips, whatever order they were handed over in."""
+    three or four blends, whatever order they were handed over in."""
     want = {id(s) for s in strips}
     for o in doc.Objects:
         if getattr(o, "object_type", None) != "CornerBlend":
@@ -313,10 +313,10 @@ def _existing_corner_blend(doc, strips):
 
 
 def create_corner_blend(*strips, name="CornerBlend", pin=None):
-    """Create the CornerBlend filling the junction where 3 or 4 blend
-    strips meet (#28; rebuilt on the subgrid chain in #91).
+    """Create the CornerBlend filling the junction where 3 or 4
+    blends meet (#28; rebuilt on the subgrid chain in #91).
 
-    `strips` are the ring Blend strips, in any order (or one list): three
+    `strips` are the ring's blends, in any order (or one list): three
     where three patches meet (the triangular 4th member is built
     invisibly), four where four do.
     `pin` is the optional triangular-member placement (#117):
@@ -582,7 +582,7 @@ def create_rolling_corner(strips, patch, leader=ROLLING_LEADER, order=1,
                           name="Rolling"):
     """Build the rolling corner at a 3-valent junction (#119).
 
-    `strips` are the ring's three blend strips, `patch` the PINNED patch
+    `strips` are the ring's three blends, `patch` the PINNED patch
     -- the one whose corner cell carries the triangular surface.  The two
     ring strips on that patch's seams are split at the leader (two real
     surfaces each, meeting exactly at the cut), and the corner blend is
@@ -601,7 +601,7 @@ def create_rolling_corner(strips, patch, leader=ROLLING_LEADER, order=1,
     strips = [s for s in (strips or []) if s is not None]
     if len(strips) != 3:
         FreeCAD.Console.PrintError(
-            "Silk: the rolling corner needs the ring's 3 blend strips (got "
+            "Silk: the rolling corner needs the ring's 3 blends (got "
             "%d). Nothing was created.\n" % len(strips))
         return None
     on_patch = [s for s in strips
@@ -913,7 +913,7 @@ def create_corner_fill(*strips, order=1, name="Surface"):
     """Create ONE `Surface::Filling` over the hole the corner's ring strips
     close (#96).
 
-    `strips` are the ring Blend strips, in any order (or one list): three
+    `strips` are the ring's blends, in any order (or one list): three
     where three patches meet, four where four do -- the same selection
     `create_corner_blend` takes. `order` is the fill's own continuity order
     (0 = C0, 1 = G1, 2 = G2); the default is 1, the bar this workbench's own
@@ -938,7 +938,7 @@ def create_corner_fill(*strips, order=1, name="Surface"):
     strips = [s for s in (strips or []) if s is not None]
     if len(strips) not in (3, 4):
         FreeCAD.Console.PrintError(
-            "Silk: a corner fill needs the ring's 3 or 4 blend strips around "
+            "Silk: a corner fill needs the ring's 3 or 4 blends around "
             "one junction (got %d). Nothing was created.\n" % len(strips))
         return None
     bad_order = _order_problem(order)

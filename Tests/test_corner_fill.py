@@ -436,7 +436,7 @@ def test_corner_fill_command_is_registered_and_refuses_a_bad_selection(doc):
     cm.build_corner_model(doc)
     patch = doc.getObject("Patch44")
     strips = [doc.getObject(n) for n in STRIPS]
-    counted = "needs the ring's 3 or 4 blend strips"
+    counted = "needs the ring's 3 or 4 blends"
     cases = [("no selection", (), counted),
              ("a patch instead of the strips", (patch,), counted),
              ("one strip", (strips[0],), counted),

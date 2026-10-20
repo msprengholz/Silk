@@ -1,5 +1,5 @@
 """
-SilkBlend — the blend strip between two adjacent patches.
+SilkBlend — the blend between two adjacent patches.
 
 Two object types share ONE implementation (ticket #39):
 
@@ -497,7 +497,7 @@ def _cell_weights(p, idx):
 
 
 def run_blend(fp):
-    """Build the 2-patch blend strip on fp (shared by Blend and
+    """Build the 2-patch blend on fp (shared by Blend and
     BlendStrip). Silent return leaves the object untouched (missing /
     unfilled inputs); _refuse paths leave it empty/valid.
     """
