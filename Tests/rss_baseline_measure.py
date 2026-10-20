@@ -532,12 +532,12 @@ def probe_payload(mod_dir=None, deep=False):
 # ---------------------------------------------------------------------------
 
 _PROBE_CODE = """
+import json
 import sys
 sys.path.insert(0, %r)
 
 
 def _silk_rss_probe():
-    import json
     import Tests.rss_baseline_measure as M
     return M.probe_payload(deep=%s)
 
