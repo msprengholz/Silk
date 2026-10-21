@@ -706,6 +706,339 @@ def node_table(archive, corner):
 
 
 # ---------------------------------------------------------------------------
+# THE ROW MAP (#127): which of each ring member's own rows the loop reads
+# ---------------------------------------------------------------------------
+
+# The reader's own index map, ported from `ArachNURBS.SubGrid33_2Grid64`
+# (== `SilkMachinery.subgrid33_2grid64`).  A pair reads, from EACH of its two
+# members, the two rows at the shared corner's V end and the half of the
+# across-seam axis nearest the shared patch:
+#
+#   grid_0 corner 0  (V0,U0) -> rows (0, 1), columns 0..2
+#   grid_0 corner 3  (V3,U5) -> rows (3, 2), columns 5..3
+#   grid_1 corner 1  (V0,U5) -> rows (0, 1), columns 5..3
+#   grid_1 corner 2  (V3,U0) -> rows (3, 2), columns 0..2
+#
+# So the pair's shared corner is on OPPOSITE ends of the two members' 6-pole
+# axis (the shared patch) and on the SAME V end.  The first row read is the
+# member's RING ROW (it becomes one side of the 6x6); the second is the row
+# the interior extrapolation takes its tangent from.
+READ_ROWS = {
+    ("g0", 0): ((0, 1), (0, 1, 2)),
+    ("g0", 3): ((3, 2), (5, 4, 3)),
+    ("g1", 1): ((0, 1), (5, 4, 3)),
+    ("g1", 2): ((3, 2), (0, 1, 2)),
+}
+
+CORNER_SLOTS = (0, 5, 18, 23)      # (V0,U0) (V0,U5) (V3,U0) (V3,U5)
+
+
+def pair_needs_swap(common):
+    """`SilkMachinery._pair_needs_swap`: the reader would transpose."""
+    return common[0] in (1, 2) and common[1] in (0, 3)
+
+
+def pair_common(poles_0, poles_1, tol=1e-6):
+    """`SilkMachinery.pair_common` without FreeCAD: (i, j) or (None, why).
+
+    A single geometric match is the ordinary case; the degeneracy rule that
+    admits a collapsed end row lives in the machinery and is not duplicated
+    here -- a pair that needs it is reported as `ambiguous` with its match
+    list, which is all the row map needs.
+    """
+    c0 = [poles_0[k] for k in CORNER_SLOTS]
+    c1 = [poles_1[k] for k in CORNER_SLOTS]
+    matches = [(i, j) for i in range(4) for j in range(4)
+               if _dist(c0[i], c1[j]) <= tol]
+    if not matches:
+        return None, "the two grids share no corner at tolerance %g" % tol
+    if len(matches) == 1:
+        return matches[0], None
+    return None, "ambiguous (matches %r)" % (matches,)
+
+
+def _dist(a, b):
+    d = (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+    return (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) ** 0.5
+
+
+def _row_degeneracy(poles, row):
+    """How many pole PAIRS of one 6-pole row coincide (15 == collapsed)."""
+    p = [poles[row * 6 + u] for u in range(6)]
+    n = 0
+    for i in range(6):
+        for j in range(i):
+            if _dist(p[i], p[j]) <= 1e-7:
+                n += 1
+    return n
+
+
+def _surface_net(archive, surface_name):
+    """(poles, weights) of a `CubicSurface_44`'s own 4x4 Bezier net.
+
+    The surface stores no poles of its own -- it stores a SHAPE. Its net is
+    the `ControlGrid44_flow` grid it is built over, whose poles are the ones
+    FreeCAD's `getPoles()` reports for the surface (measured: using the
+    flow's `InputGrid` instead leaves 6e-03 mm residuals, the flow grid
+    1e-14)."""
+    node = archive.nodes.get(surface_name or "")
+    if node is None:
+        return None, None
+    grid = (node.links.get("Grid") or [None])[0]
+    g = archive.nodes.get(grid or "")
+    if g is None or not g.poles or len(g.poles) != 16:
+        return None, None
+    return g.poles, (g.weights or [1.0] * 16)
+
+
+def _bezier44(poles, weights, u, v):
+    """One point of a bicubic Bezier over a 4x4 [u][v] net."""
+    bu = [((1 - u) ** 3, 3 * u * (1 - u) ** 2, 3 * u * u * (1 - u), u ** 3)]
+    bv = [((1 - v) ** 3, 3 * v * (1 - v) ** 2, 3 * v * v * (1 - v), v ** 3)]
+    x = y = z = w = 0.0
+    for i in range(4):
+        for j in range(4):
+            b = bu[0][i] * bv[0][j] * weights[i * 4 + j]
+            p = poles[i * 4 + j]
+            x += b * p[0]
+            y += b * p[1]
+            z += b * p[2]
+            w += b
+    return (x / w, y / w, z / w)
+
+
+def surface_uv(poles, weights, pt, steps=40):
+    """(residual mm, u, v): where `pt` sits on that surface's own net.
+
+    A coarse scan plus a shrinking local refine. The RESIDUAL is the
+    instrument's error floor and is printed with every reading: 1e-14 mm on
+    a pole that lies on the surface, so a reading of `1/16` or `0.25` is a
+    measurement, not an eyeball."""
+    best = (float("inf"), 0.0, 0.0)
+    for i in range(steps + 1):
+        u = i / float(steps)
+        for j in range(steps + 1):
+            v = j / float(steps)
+            q = _bezier44(poles, weights, u, v)
+            d = _dist(q, pt)
+            if d < best[0]:
+                best = (d, u, v)
+    d0, u0, v0 = best
+    step = 1.0 / steps
+    for _ in range(40):
+        step *= 0.6
+        for du in (-step, 0.0, step):
+            for dv in (-step, 0.0, step):
+                u = min(1.0, max(0.0, u0 + du))
+                v = min(1.0, max(0.0, v0 + dv))
+                d = _dist(_bezier44(poles, weights, u, v), pt)
+                if d < d0:
+                    d0, u0, v0 = d, u, v
+    return d0, u0, v0
+
+
+def member_cells(archive, member):
+    """The base-surface CELLS one ring member is cut from, measured.
+
+    A member is two `ControlGrid44_2EdgeSegments` cells (the triangular
+    member is one), each a parametric RECTANGLE of a base `CubicSurface_44`.
+    The rectangle is read off the cell's own stored 4x4 net by inverting it
+    on the surface's net, so the reading does not depend on which of the
+    cell's two cut curves was taken as the u range.
+    """
+    node = archive.nodes.get(member or "")
+    out = []
+    if node is None:
+        return out
+    cells = node.links.get("Grid_0", []) + node.links.get("Grid_1", [])
+    cells += node.links.get("ControlGrid44", [])
+    for cell in cells:
+        c = archive.nodes.get(cell)
+        if c is None or not c.poles or len(c.poles) != 16:
+            continue
+        surf = (c.links.get("NL_Surface") or [None])[0]
+        sp, sw = _surface_net(archive, surf)
+        if sp is None:
+            continue
+        us, vs, res = [], [], []
+        for k in (0, 3, 12, 15):
+            d, u, v = surface_uv(sp, sw, c.poles[k])
+            us.append(u)
+            vs.append(v)
+            res.append(d)
+        out.append({"cell": cell, "surface": surf,
+                    "u": (min(us), max(us)), "v": (min(vs), max(vs)),
+                    "residual": max(res)})
+    return out
+
+
+def row_map(archive, corner):
+    """`{member: row facts}` + the four pair readings, read from the file.
+
+    This is STEP 1 of #127: for every ring member, which of its own rows each
+    neighbour subgrid reads, which V end both of its pairs agree on (the
+    RING ROW end), whether the member's collapsed row is one of them, and
+    where each row sits on its own base surface.
+    """
+    subs = sorted(corner["subs"])
+    members = corner["members"]
+    pairs = []
+    for k, s in enumerate(subs):
+        node = archive.nodes[s]
+        g0 = (node.links.get("Grid_0") or [None])[0]
+        g1 = (node.links.get("Grid_1") or [None])[0]
+        common, why = pair_common(archive.nodes[g0].poles,
+                                  archive.nodes[g1].poles)
+        pairs.append({"sub": s, "g0": g0, "g1": g1, "common": common,
+                      "why": why,
+                      "swap": bool(common and pair_needs_swap(common))})
+    facts = {}
+    for m in members:
+        node = archive.nodes[m]
+        roles = []
+        for k, pr in enumerate(pairs):
+            if pr["g0"] == m and pr["common"] is not None:
+                roles.append((k, "g0", pr["common"][0]))
+            elif pr["g1"] == m and pr["common"] is not None:
+                roles.append((k, "g1", pr["common"][1]))
+        read = {}
+        for (k, slot, idx) in roles:
+            got = READ_ROWS.get((slot, idx))
+            if got is None:
+                read[k] = None          # the reader would transpose it
+            else:
+                read[k] = got
+        ends = [read[k][0][0] for k in read if read[k] is not None]
+        facts[m] = {
+            "node": node,
+            "roles": roles,
+            "read": read,
+            "ring_v": (ends[0] if ends and len(set(ends)) == 1 else None),
+            "degenerate_rows": [v for v in range(4)
+                                if _row_degeneracy(node.poles, v) >= 5],
+            "cells": member_cells(archive, m),
+        }
+    return pairs, facts
+
+
+def row_report(archive, corner):
+    """The ROW MAP as text: the reference's side of STEP 1."""
+    pairs, facts = row_map(archive, corner)
+    lines = ["ROW MAP -- %s, corner %s" % (os.path.basename(archive.path),
+                                            corner["root"]),
+             "",
+             "  the four ring PAIRS (the reader's own index map):"]
+    for k, pr in enumerate(pairs):
+        if pr["common"] is None:
+            lines.append("    %d. %s | %s : %s"
+                         % (k, pr["g0"], pr["g1"], pr["why"]))
+            continue
+        i, j = pr["common"]
+        lines.append("    %d. %-30s | %-30s  corners (%d, %d)%s"
+                     % (k, pr["g0"], pr["g1"], i, j,
+                        "   [reader SWAPS the two grids]" if pr["swap"]
+                        else ""))
+    lines.append("")
+    lines.append("  per member: which rows its two pairs read, and what its "
+                 "own rows are")
+    for m in corner["members"]:
+        f = facts[m]
+        node = f["node"]
+        tag = "  <- TRI MEMBER" if m == corner.get("member_grid") else ""
+        lines.append("    %-32s %s%s" % (m, node.cls, tag))
+        for (k, slot, idx) in f["roles"]:
+            got = f["read"].get(k)
+            if got is None:
+                lines.append("        pair %d (%s corner %d): NOT READABLE "
+                             "without a grid swap" % (k, slot, idx))
+            else:
+                lines.append("        pair %d (%s corner %d): rows %s, "
+                             "across-seam columns %s"
+                             % (k, slot, idx, got[0], got[1]))
+        if f["ring_v"] is None:
+            lines.append("        RING V-END: its two pairs disagree -- the "
+                         "6x6's two sides would be DIFFERENT rows of it")
+        else:
+            rows = sorted({v for got in f["read"].values() if got
+                           for v in got[0]})
+            unread = [v for v in range(4) if v not in rows]
+            lines.append("        RING V-END: V%d (both pairs) -> rows %s "
+                         "read (the first is the 6x6 side, the second the "
+                         "extrapolation source); rows %s are NEVER read"
+                         % (f["ring_v"], rows, unread))
+        for v in range(4):
+            deg = _row_degeneracy(node.poles, v)
+            read_by = [k for k in f["read"] if f["read"][k]
+                       and v in f["read"][k][0]]
+            lines.append("        row V%d: coincident pairs %d/15, read by %s"
+                         % (v, deg,
+                            ("pairs " + ", ".join(str(k) for k in read_by))
+                            if read_by else "NO PAIR"))
+        for c in f["cells"]:
+            lines.append("        cell %-34s on %-20s u %.4f..%.4f  "
+                         "v %.4f..%.4f  (residual %.1e mm)"
+                         % (c["cell"], c["surface"], c["u"][0], c["u"][1],
+                            c["v"][0], c["v"][1], c["residual"]))
+        if f["ring_v"] is not None:
+            lines.extend(_ring_row_ends(archive, node, f["ring_v"],
+                                        f["cells"]))
+    return lines
+
+
+def _ring_row_ends(archive, node, row, cells):
+    """Where the RING ROW's two end poles sit on the member's own cells.
+
+    This is the line the loop rule is read off: the ring row ends at the
+    shared patch's corner cell FAR corner on the side that faces its ring
+    neighbour, and on its own seam at the other end. Measured on the base
+    surface's own parameters, with the inversion's residual as the error
+    floor.
+    """
+    out = []
+    ends = [node.poles[row * 6 + 0], node.poles[row * 6 + 5]]
+    for c in cells:
+        sp, sw = _surface_net(archive, c["surface"])
+        if sp is None:
+            continue
+        got = [surface_uv(sp, sw, pt) for pt in ends]
+        if max(g[0] for g in got) > 1e-3:
+            continue          # these poles are not on this cell's surface
+        out.append("        RING ROW V%d ends on %-20s (%.4f, %.4f) and "
+                   "(%.4f, %.4f)  (residual %.1e mm)"
+                   % (row, c["surface"], got[0][1], got[0][2],
+                      got[1][1], got[1][2], max(g[0] for g in got)))
+    return out
+
+
+def row_verdict(archive, corner):
+    """One line each: the rule, and what our ring does differently."""
+    _pairs, facts = row_map(archive, corner)
+    member = corner.get("member_grid")
+    fm = facts.get(member) or {}
+    ring_v = fm.get("ring_v")
+    deg = fm.get("degenerate_rows") or []
+    lines = [
+        "THE RULE, in one sentence: every ring member's TWO pairs are read "
+        "on the SAME V end -- the two rows at the member's ring-facing "
+        "edge, its ring row plus the next one inward -- so the member "
+        "contributes ONE WHOLE ROW as one side of the 6x6 and its opposite "
+        "V end lies inside the loop and is never read.",
+        "",
+        "HIS TRI MEMBER: ring row V%s, collapsed row(s) V%s -> the collapse "
+        "is %s the loop."
+        % (ring_v, deg or "none",
+           "NOT on" if (ring_v is not None and deg and ring_v not in deg)
+           else "ON"),
+        "OURS: the same rule -- `orient_junction_row` puts every strip's "
+        "junction-end row at V3 and every pair is read (3,2) -- but our "
+        "member's ring row IS its collapsed row, because the member is cut "
+        "from the patch's corner cell, whose apex corner IS the ring's "
+        "shared corner.",
+    ]
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # Our side: one corner built over the RPC in the owner's GUI
 # ---------------------------------------------------------------------------
 
@@ -726,14 +1059,15 @@ _free_before = None
 for _n, _d in list(FreeCAD.listDocuments().items()):
     if _d.Label == "_refdiff_ours":
         FreeCAD.closeDocument(_d.Name)
-out = R.ours_corner(leader=%(leader)r)
+out = R.ours_corner(leader=%(leader)r, rows=%(rows)s)
 for line in out["text"]:
     print(line)
 %(cleanup)s
 '''
 
 
-def ours_corner(leader, fixture="cube_corner", doc_label="_refdiff_ours"):
+def ours_corner(leader, fixture="cube_corner", doc_label="_refdiff_ours",
+                rows=False):
     """Build OUR corner at `leader` in a scratch document and describe it.
 
     RUNS INSIDE FREECAD (the local half sends `OURS_CODE` to the owner's GUI
@@ -787,6 +1121,8 @@ def ours_corner(leader, fixture="cube_corner", doc_label="_refdiff_ours"):
     # changed the construction or only reproduced it.
     grids, _cells, why = SC.corner_inputs(strips, SC.CORNER_DEFAULT_TOL)
     if grids is not None:
+        if rows:
+            text.extend(_our_row_lines(grids))
         subs = []
         for i in range(4):
             a, b = grids[i], grids[(i + 1) % 4]
@@ -814,6 +1150,11 @@ def ours_corner(leader, fixture="cube_corner", doc_label="_refdiff_ours"):
             mflips = [len(SilkChecks._normal_field_flips(
                 o.Shape.Faces[0].Surface, n=n)[0]) for n in (39, 81, 150)]
             text.append("           normal flips n=39/81/150: %r" % (mflips,))
+            d = _reach(o, corner)
+            if d:
+                text.append("           member interior -> quad: min %.5f "
+                            "max %.5f mm (%.0f%%..%.0f%% of the corner "
+                            "extent)" % (d[0], d[1], d[2], d[3]))
     for o in doc.Objects:
         if o.TypeId == "Surface::Filling":
             text.append("  tri face %s  [Surface::Filling] faces=%d "
@@ -829,6 +1170,58 @@ def ours_corner(leader, fixture="cube_corner", doc_label="_refdiff_ours"):
     return {"text": text, "doc": doc, "corner": corner}
 
 
+def _our_row_lines(grids):
+    """OUR ring's row map, from the grids `corner_inputs` hands the algebra.
+
+    RUNS INSIDE FREECAD. Same questions as `row_report`'s reference side, so
+    the two tables can be read side by side: which rows each pair reads, the
+    RING V-END both of a member's pairs agree on, and whether a member's
+    collapsed row is one of them.
+    """
+    import SilkMachinery as M
+
+    lines = ["", "  ROW MAP -- OURS (the ring `corner_inputs` assembles, in "
+                 "ring order)"]
+    members = [("strip %d" % k, g) for k, g in enumerate(grids)]
+    reads = {n: [] for n, _g in members}
+    for k in range(4):
+        a, b = grids[k], grids[(k + 1) % 4]
+        common, why = M.pair_common(a[0], b[0], 1e-6)
+        if common is None:
+            lines.append("    pair %d: %s" % (k, why))
+            continue
+        i, j = common
+        swap = M._pair_needs_swap(common)
+        lines.append("    pair %d: corners (%d, %d)%s"
+                     % (k, i, j, "   [reader SWAPS the two grids]" if swap
+                        else ""))
+        for side, idx, name in (("g0", i, "strip %d" % k),
+                                ("g1", j, "strip %d" % ((k + 1) % 4))):
+            got = READ_ROWS.get((side, idx))
+            reads[name].append((k, got))
+    for k, (name, g) in enumerate(members):
+        deg = [v for v in range(4) if _row_degeneracy(g[0], v) >= 5]
+        ends = [got[0][0] for _k, got in reads[name] if got]
+        rows = sorted({v for _k, got in reads[name] if got for v in got[0]})
+        unread = [v for v in range(4) if v not in rows]
+        lines.append("    %s: RING V-END %s, rows %s read, rows %s NEVER "
+                     "read, collapsed row(s) %s"
+                     % (name, ("V%d" % ends[0]) if ends and len(set(ends)) == 1
+                        else "DISAGREE %r" % (ends,), rows, unread, deg or
+                        "none"))
+        for _k, got in reads[name]:
+            if got is None:
+                lines.append("        pair %d: NOT READABLE without a swap"
+                             % _k)
+            else:
+                lines.append("        pair %d: rows %s, across-seam "
+                             "columns %s" % (_k, got[0], got[1]))
+        for v in range(4):
+            lines.append("        row V%d: coincident pairs %d/15"
+                         % (v, _row_degeneracy(g[0], v)))
+    return lines
+
+
 def _coins(poles, tol=1e-7):
     n = 0
     for i in range(len(poles)):
@@ -840,8 +1233,8 @@ def _coins(poles, tol=1e-7):
 
 
 def _reach(fill_obj, corner, grid=9):
-    """(min, max, pct_min, pct_max): how far the fill's INTERIOR stands off
-    the quad, as a percentage of the corner's own extent.
+    """(min, max, pct_min, pct_max): how far an object's FACE INTERIOR
+    stands off the quad, as a percentage of the corner's own extent.
 
     `distToShape` on the whole surfaces is 0 -- they share a boundary -- so
     this samples the FACE's own parameter rectangle and measures each sample
@@ -881,8 +1274,9 @@ def rpc_execute(code, timeout=900):
     return res.get("message", "")
 
 
-def ours_over_rpc(leader, close=True):
+def ours_over_rpc(leader, close=True, rows=False):
     boot = OURS_CODE % {"repo": REPO, "here": HERE, "leader": leader,
+                        "rows": repr(bool(rows)),
                         "cleanup": ("FreeCAD.closeDocument(out['doc'].Name)"
                                     if close else "pass")}
     return rpc_execute(boot)
@@ -1012,6 +1406,14 @@ def main(argv=None):
                     help="list every corner in the file and stop")
     ap.add_argument("--leaves", action="store_true",
                     help="also print the control-poly leaves under the member")
+    ap.add_argument("--rows", action="store_true",
+                    help="print THE ROW MAP instead: which of each ring "
+                         "member's own rows the loop reads (his side "
+                         "offline, ours over the RPC when --with-ours is "
+                         "added)")
+    ap.add_argument("--with-ours", action="store_true",
+                    help="with --rows: also build OUR corner and print its "
+                         "row map beside his")
     ap.add_argument("--ours", action="store_true",
                     help="also build OUR corner over the RPC and diff it")
     ap.add_argument("--leader", type=float, default=None,
@@ -1044,6 +1446,23 @@ def main(argv=None):
     corner, why = pick_corner(archive, args.corner)
     print("PICK  %s" % why)
     print("")
+    if args.rows:
+        for ln in row_report(archive, corner):
+            print(ln)
+        print("")
+        for ln in row_verdict(archive, corner):
+            print(ln)
+        if args.with_ours:
+            leader = args.leader
+            if leader is None:
+                cuts = archive.leader_cuts(corner)
+                us = [c["u0"] for c in cuts if c["u0"] is not None]
+                leader = min(us) if us else 0.25
+            print("")
+            print("OUR LEADER  %g" % leader)
+            for ln in ours_over_rpc(leader, rows=True).splitlines():
+                print(ln)
+        return 0
     ref_lines = reference_report(archive, corner, leaves=args.leaves)
     for ln in ref_lines:
         print(ln)

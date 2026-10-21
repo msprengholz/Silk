@@ -41,7 +41,8 @@ from SilkBlend import band_cells, side_and_end, seam_direction, BLEND_TYPES, \
 from SilkMachinery import (build_intervals, axis_intervals, split_pair,
     leader_pair, band_edge, corner_cell_index, corner_ring,
     corner_grid, orient_junction_row, corner_ring_3,
-    control_grid64_3_1, reverse_grid_rows, set_grid_display)
+    control_grid64_3_1, reverse_grid_rows, set_grid_display,
+    ring_corner_gap)
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -355,6 +356,30 @@ def corner_member_pin(strips, tol=CORNER_DEFAULT_TOL, pin=None):
     return member_pin, None
 
 
+def _ring_gap_reason(patches):
+    """`""` when every ring patch's corner closes, else the clause naming
+    the two numbers that keep it open (#127).
+
+    `SilkMachinery.ring_corner_gap` states the loop rule: a ring pair's
+    shared corner is the patch's corner cell FAR corner, which is ONE point
+    only when the band edge and the along start (the leader cut, when there
+    is one) are the same number at each end of the patch's two axes.  The
+    shipped construction writes ONE cut per axis end and therefore passes;
+    a patch carrying a REAL leader cut does not, and the ring's pairs then
+    report "the two grids share no corner" without saying why.  This puts
+    the why into that refusal.
+    """
+    for pth in patches:
+        gap = ring_corner_gap(pth)
+        if gap is not None:
+            letter, across, along = gap
+            return ("; the ring's corner is OPEN on %s: its %s axis carries a "
+                    "band edge of %g and a leader cut of %g, and a ring "
+                    "pair's shared corner needs those two to be one number "
+                    "(#127)" % (pth.Name, letter, across, along))
+    return ""
+
+
 def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
     """`corner_inputs` plus the member's own placement.
 
@@ -461,8 +486,12 @@ def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
             if pinned is not None:
                 return None, None, None, ("could not build the triangular 4th "
                                           "member at the pinned corner %s[%d]"
-                                          % (pinned[0].Name, pinned[1]))
-            return None, None, None, "could not build triangular 4th member"
+                                          "%s"
+                                          % (pinned[0].Name, pinned[1],
+                                             _ring_gap_reason(patches)))
+            return None, None, None, ("could not build triangular 4th "
+                                      "member%s"
+                                      % _ring_gap_reason(patches))
         grids = ring
     else:
         if pin is not None:
@@ -471,7 +500,7 @@ def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
                                       "has 4 strips")
         grids, why = _assemble_square_ring(grids, ordered)
         if grids is None:
-            return None, None, None, why
+            return None, None, None, why + _ring_gap_reason(ordered)
     return grids, corner_cells, member_pin, None
 
 

@@ -880,6 +880,53 @@ def band_cells(p, ea, ss):
     return [a * nv + b for b in sorted(keep_v)]
 
 
+def ring_corner_gap(p):
+    """None when the RING LOOP closes on patch `p`, else the two numbers
+    that keep it open (#127).
+
+    THE RULE (#127, read off the maintainer's own rings). A strip's
+    junction-end row ENDS, on the patch it shares with its ring
+    neighbour, at that patch's corner cell's FAR CORNER -- the corner
+    diagonally opposite the junction. Both strips of a ring pair must end
+    at the SAME point there, and the whole 6x6 side between them is the
+    fourth member's one row. On one axis `A` of the shared patch that
+    point's coordinate is the strip whose seam runs ALONG `A`: its
+    junction-end row sits at the corner cell's far edge = `A`'s leader
+    cut when the end carries one, else its band edge. On the axis across
+    that seam it is the BAND EDGE itself, because the band ends there.
+    The two strips of the pair name the two axes the other way round, so
+    the corner is one point exactly when, at each end of the patch's two
+    axes,
+
+        the leader cut  ==  the band edge  (or there is no leader).
+
+    One cut per axis end satisfies that by construction -- which is why
+    the shipped corner stands, and why one cut puts the triangular
+    member's APEX on the loop. A second cut (the rolling leader) breaks
+    it: the band's across width stays at the setback while the along
+    start moves out to the leader, so the two strips' rows end at
+    (setback, leader) and (leader, setback) -- two different points --
+    and `corner_grid` refuses `the two grids share no corner`. The two
+    numbers are returned so the refusal can quote them.
+
+    Returns (`letter`, across, along) of the first end that breaks it, or
+    None.
+    """
+    for letter in ("U", "V"):
+        s1, s2 = split_pair(p, letter)
+        l1, l2 = leader_pair(p, letter)
+        cuts = axis_cuts(s1, s2, l1, l2)
+        for split, leader in ((band_edge(s1), band_edge(l1)),
+                              (band_edge(s2), band_edge(l2))):
+            # a leader that does not clear the band edge is INERT
+            # (`axis_cuts`) and reads as one cut, so it cannot open the
+            # ring; only a REAL second cut does.
+            if split is None or leader is None or leader not in cuts:
+                continue
+            return (letter, split, leader)
+    return None
+
+
 def _edges_str(p, letter):
     """`USplit1 = 0.1, USplit2 = 0.9` — one axis as the data tab shows it,
     with the leader cut named when the axis carries one (#119)."""

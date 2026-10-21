@@ -164,9 +164,80 @@ def test_a_leader_inside_the_band_is_inert_and_named(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_the_ring_loop_closes_at_one_cut_and_opens_at_two(doc):
+    """#127's loop rule, as the one predicate that decides it.
+
+    A ring pair's shared corner is the patch's corner cell FAR corner.
+    On the axis across one strip's seam that corner's coordinate is the
+    BAND EDGE (where the band ends); on the axis along it, it is the
+    along START (the corner cell's far edge). The two strips of a pair
+    name the axes the other way round, so the corner is one point exactly
+    when the band edge and the along start are the same number at each end
+    -- one cut per axis end. A real second cut (the rolling leader) splits
+    them, and `ring_corner_gap` names the two numbers.
+    """
+    errors, checks = [], []
+    strips = _cube(doc)
+    for q in (strips[0].PatchA, strips[0].PatchB, strips[1].PatchB):
+        gap = SM.ring_corner_gap(q)
+        checks.append("%s, shipped (one cut per axis end): ring_corner_gap %r"
+                      % (q.Name, gap))
+        if gap is not None:
+            errors.append("%s: the shipped ring reports an open corner %r"
+                          % (q.Name, gap))
+    p = strips[0].PatchA
+    SM.ensure_leader_cuts(p)
+    p.ULeader1 = 0.25
+    p.VLeader1 = 0.25
+    doc.recompute()
+    gap = SM.ring_corner_gap(p)
+    checks.append("%s, leader 0.25 on both axes (two cuts per axis end): "
+                  "ring_corner_gap %r" % (p.Name, gap))
+    if gap is None:
+        errors.append("a real leader cut left the ring reported as CLOSED")
+    elif gap != ("U", 0.1, 0.25):
+        errors.append("the gap names %r, not the (axis, band edge, leader) "
+                      "that split it" % (gap,))
+    # THE MEMBER PATCH IS THE ONE PATCH WHERE TWO PAIRS MEET, so its two
+    # ring corners are the two ENDS of the member's one row -- two DIFFERENT
+    # points are correct there, and #119's arrangement (the cut on the
+    # member patch only) assembles.
+    import SilkCorner as SC
+    _grids, _cells, why = SC.corner_inputs(strips, SC.CORNER_DEFAULT_TOL)
+    checks.append("corner_inputs with the cut on the member patch only: %r"
+                  % (why,))
+    if why is not None:
+        errors.append("the member patch's own two ring corners should be the "
+                      "member row's two ends, not a refusal: %r" % (why,))
+    # ... and a SECOND patch with two cuts (a patch that carries a PAIR, not
+    # the member) opens the ring, and the refusal now says why.
+    for q in (strips[1].PatchA, strips[1].PatchB, strips[2].PatchB):
+        SM.ensure_leader_cuts(q)
+        q.ULeader1 = 0.25
+        q.VLeader1 = 0.25
+    doc.recompute()
+    _grids, _cells, why = SC.corner_inputs(strips, SC.CORNER_DEFAULT_TOL)
+    checks.append("corner_inputs with two cuts on every patch: %r" % (why,))
+    if not why or "the ring's corner is OPEN on" not in why:
+        errors.append("the corner refused without naming the open ring "
+                      "corner: %r" % (why,))
+    # the along start IS the leader only while the leader clears the band
+    # edge; an inert one leaves one cut and the ring closed.
+    p.ULeader1 = 0.0625
+    doc.recompute()
+    inert = SM.ring_corner_gap(p)
+    checks.append("%s, leader 0.0625 inside the 0.1 band (inert): "
+                  "ring_corner_gap %r" % (p.Name, inert))
+    if inert is not None and inert[0] == "U":
+        errors.append("an INERT leader on the U axis was reported as "
+                      "opening the ring: %r" % (inert,))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_a_patch_without_a_leader_reads_exactly_what_it_always_read,
     test_a_leader_cut_subdivides_the_axis_and_between_is_the_corner_cell,
     test_the_band_stays_one_cell_under_a_leader_cut,
     test_a_leader_inside_the_band_is_inert_and_named,
+    test_the_ring_loop_closes_at_one_cut_and_opens_at_two,
 ]
