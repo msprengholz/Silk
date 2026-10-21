@@ -65,17 +65,47 @@ needs to reach the four subgrids its fill machinery demands. Upstream calls it a
 that touch it.
 _Avoid_: triangular patch, fake blend, fourth strip
 
-**Rolling fillet**:
-The maintainer's name for a corner showing **two zones of different fillet size** -- one
-large fillet in one direction, a small one that appears to roll around it. **The author's
-effect, judged by eye**, and **we do not have it**: our 3-valent corner is ONE 6x6 whose
-outline is the band edge -- a rounded triangle with rounded corners -- and the owner's
-look at the render (2026-10-21) ruled that this is not a rolling corner. What is measured
-is *anisotropy* (asymmetric setbacks move its curvature spread 1.04 -> 2.29) and, past a
-threshold, a *saddle* -- and a saddle is a twist, not two fillets. The two-zone look
-needs the **sectioned** recipe: cut each blend along its seam and re-create the preserved
-remainder as its own surface (`docs/corner-blending.md`, #119).
-_Avoid_: our corner is a rolling fillet (overclaim)
+**Rolled corner** (also *rolling corner*):
+**TWO patches meeting along the rolling leader** -- the **quad** (a `ControlGrid66_4Sub` ->
+`CubicSurface_66` built from the four subgrids between consecutive ring members, with the
+triangular member **one of the four**, so its interior is the ring hole) and the **tri**
+(the member's **own** surface, beside the quad, sharing the leader boundary). Signature
+to check against the reference files: **every member is read by THREE consumers** -- its
+own `CubicSurface_64` and two `SubGrid33_2Grid64`. A corner where ONE patch wraps the
+whole region is **not** this, and curvature numbers do not make it so.
+_Avoid_: "it rolls" (a curvature reading, not a construction); "one surface spanning the
+corner" (that is the shipped fallback)
+
+**Quad** / **Tri** (in a rolled corner):
+the **quad** is the 66 above; the **tri** is the member's own face -- its spiderweb
+`CubicSurface_64`, or a FreeCAD fill over the member's **three real boundary curves plus
+the apex**. The tri sits **beside** the quad, not inside it: measured on the maintainer's
+file the tri interior is **16-62 %** of the corner extent away from the quad, where a
+wrapping patch reads **0.1-10 %**.
+_Avoid_: using "tri" for a fill drawn over a region the quad already covers
+
+**Rolling leader**:
+a position on the seam curve, measured from the junction corner, that **must be an
+independent cut** -- separate from the band edge (the setback). The maintainer has TWO
+cuts per axis end (setback 1/16 and leader 1/4); Silk carries one band edge per axis end
+(#82), so the leader exists as `ULeader1/2` / `VLeader1/2`, default unset = byte-identical.
+_Avoid_: writing the leader into the band edge (that makes setback and leader one number,
+which pinches the corner's 4th side -- the exact defect this vocabulary exists to stop)
+
+**Spiderweb**:
+the control net of a grid with a **collapsed row** (`ControlGrid64_3_1Grid44`), drawn as a
+web of lines to a point. It is a **scaffolding** grid: usable as a ring member, not as a
+corner face.
+_Avoid_: "the spiderweb" used for any corner surface -- the shipped corner's net is a
+perfectly ordinary 6x6
+
+**Rolled-fillet look**:
+the maintainer's *design* effect -- one large fillet and one small one that appears to roll
+around it, so the eye follows a single continuous break instead of seeing a cross. It is
+the **reason** the corner is built with two zones of different size; it is judged by eye
+and is **not** the acceptance for the construction. Named *rolling blend* by the author.
+_Avoid_: using it as a synonym for the construction (a corner can be built correctly and
+still be judged to look wrong, and vice versa)
 
 **Restore shim**:
 A class + view provider kept in a module only so an old document that saved
