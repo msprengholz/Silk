@@ -115,6 +115,28 @@ creates them anymore.
   ring `Blend`s around one junction — **four** at a 4-patch junction,
   **three** at a 3-patch hard corner (the triangular 4th member is then
   built invisibly; the user never picks upstream types) — **in any order**.
+- **The corner stage builds ONE OF TWO CONSTRUCTIONS, and the rolling one
+  is the DEFAULT** (#119; the owner, 2026-10-21: *"the rolling corner fill
+  should be the default fill!"*). The switch lives in the OPS LAYER
+  (`SilkWorkflowOps.create_corner_blend(..., construction=...)`):
+  `"rolling"` (the default) = the 66 over the ring's CUT cells (the
+  band's corner-side cut IS the rolling leader) plus the small triangular
+  member whose FACE is a FreeCAD `Surface::Filling` (the owner's
+  replacement of the spiderweb; the silk member behind it is hidden);
+  `"shipped"` (the fallback) = the 66 with the spiderweb member, byte for
+  byte the construction of before #119. No new button: the wizard's corner
+  step and the toolbar command both call the ops layer.
+- **The rolling construction refuses where the cut cannot be placed** — a
+  patch with TWO junctions on the seam-parallel axis shares the band edge,
+  so the leader has no home. The refusal is ATOMIC (the cut is planned
+  before it is written), so the corner stage falls back to the shipped
+  construction there, and says so by name.
+- A `Surface::Filling` whose boundary lives on a Silk object needs that
+  object's shape to be a **COMPOUND** (the face + the boundary curves):
+  a fill's boundary is a LINK to a sub-shape, and a FACE's sub-names are
+  resolved through the shape's element map — a replaced face breaks them
+  ("?Edge1") and the fill goes Invalid for good. A compound's children are
+  named BY POSITION, so the names survive the replacement.
 - Builds the real subgrid chain — `SubGrid33_2Grid64` ×4 →
   `ControlGrid66_4Sub` → `CubicSurface_66` — ported into `SilkMachinery`
   (`corner_ring`, `corner_grid`, `subgrid33_2grid64`, `control_grid66_4sub`)

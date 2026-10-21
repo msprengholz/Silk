@@ -152,7 +152,8 @@ def test_the_leader_moves_the_corner_s_shape(doc):
         sdoc.recompute()
         sdoc.recompute()
         sstrips = [sdoc.getObject(n) for n in ("B_AB", "B_BC", "B_CA")]
-        shipped = create_corner_blend(*sstrips, name="Shipped")
+        shipped = create_corner_blend(*sstrips, name="Shipped",
+                                      construction="shipped")
         sdoc.recompute()
         s_kmax, s_kmin, s_ratio = _spread(shipped)
         s_poles = [FreeCAD.Vector(v) for v in shipped.Poles]
@@ -218,14 +219,21 @@ def test_the_junction_at_the_cut_is_closed(doc):
 
 
 def test_a_corner_without_the_rolling_construction_is_the_shipped_one(doc):
-    """The default path is untouched: no rolling construction, no change."""
+    """The FALLBACK path is untouched: no rolling construction, no change.
+
+    Since #119 the corner stage's DEFAULT is the rolling construction,
+    so the shipped 66-with-the-spiderweb-member is selected BY NAME
+    (`construction="shipped"`).  This test pins that path: it is
+    reproducible, and it does not touch the patches' band edges."""
     errors, checks = [], []
     _fixture(doc)
     strips = _strips(doc)
-    first = create_corner_blend(*strips, name="Shipped1")
+    first = create_corner_blend(*strips, name="Shipped1",
+                               construction="shipped")
     doc.recompute()
     poles = [FreeCAD.Vector(v) for v in first.Poles]
-    second = create_corner_blend(*strips, name="Shipped2")
+    second = create_corner_blend(*strips, name="Shipped2",
+                                construction="shipped")
     doc.recompute()
     same = all((a - b).Length < 1e-12 for a, b in
                zip(poles, list(second.Poles)))
@@ -233,12 +241,89 @@ def test_a_corner_without_the_rolling_construction_is_the_shipped_one(doc):
                   % ("identical" if same else "DIFFERENT"))
     if not same:
         errors.append("the shipped corner is not reproducible")
-    # and the patches' band edges are untouched by a plain corner
+    # and the patches' band edges are untouched by the shipped corner
     for name in ("PatchA", "PatchB", "PatchC"):
         p = doc.getObject(name)
         if abs(p.USplit1 - 0.1) > 1e-12 or abs(p.VSplit1 - 0.1) > 1e-12:
             errors.append("%s's band edges moved without the rolling "
                           "construction" % name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_the_default_corner_is_the_rolling_one(doc):
+    """THE DEFAULT SWITCH (#119): a 3-valent corner builds the ROLLING
+    construction, and the shipped one is the selectable fallback.
+
+    The default (no `construction` argument) must:
+      * move the band's corner-side cut -- the rolling leader -- on the
+        seams of the patch that carries the triangular member,
+      * build the small triangular member AND its FreeCAD filling (the
+        owner's replacement of the spiderweb),
+      * and differ from the fallback, pole for pole.
+
+    The fallback (`construction="shipped"`) must leave the patches'
+    band edges alone: it is the construction of before #119, and its
+    byte-identity is pinned by the legacy-chain parity test
+    (`Tests/test_corner_blend.py::test_corner_blend_pole_parity_with_
+    legacy_chain`) and by the member calibration
+    (`Tests/test_triangular_member_calibration.py`)."""
+    errors, checks = [], []
+    _fixture(doc)
+    strips = _strips(doc)
+    patch = doc.getObject("PatchA")
+    rolled = [s for s in strips if s.PatchA is patch or s.PatchB is patch]
+
+    # the FALLBACK, in its own document: the shipped corner, untouched
+    sdoc = FreeCAD.newDocument("FallbackDoc")
+    try:
+        ccm.build_cube_corner_model(sdoc)
+        sdoc.recompute()
+        sdoc.recompute()
+        sstrips = [sdoc.getObject(n) for n in ("B_AB", "B_BC", "B_CA")]
+        shipped = create_corner_blend(*sstrips, name="Fallback",
+                                      construction="shipped")
+        sdoc.recompute()
+        s_poles = [FreeCAD.Vector(v) for v in shipped.Poles]
+        for name in ("PatchA", "PatchB", "PatchC"):
+            p = sdoc.getObject(name)
+            if abs(p.USplit1 - 0.1) > 1e-12 or abs(p.VSplit1 - 0.1) > 1e-12:
+                errors.append("the fallback moved %s's band edges" % name)
+        checks.append("the fallback: the band edges are untouched")
+    finally:
+        FreeCAD.closeDocument(sdoc.Name)
+
+    # the DEFAULT: the rolling construction
+    FreeCAD.setActiveDocument(doc.Name)
+    corner = create_corner_blend(*strips, name="Default")
+    doc.recompute()
+    if corner is None:
+        return {"pass": False,
+                "errors": ["the default corner did not build"],
+                "checks": checks}
+    member = doc.getObject("DefaultMember")
+    fill = doc.getObject("DefaultMemberFill")
+    checks.append("the default corner: %d poles, %d face(s)"
+                  % (len(corner.Poles), len(corner.Shape.Faces)))
+    if member is None:
+        errors.append("the default corner built no triangular member")
+    if fill is None:
+        errors.append("the default corner built no FreeCAD member filling")
+    elif getattr(fill, "TypeId", "") != "Surface::Filling":
+        errors.append("the member's face is not a FreeCAD Surface::Filling")
+    # the leader moved the cut
+    p = doc.getObject("PatchA")
+    checks.append("the cut moved: PatchA.USplit1=%g VSplit1=%g"
+                  % (p.USplit1, p.VSplit1))
+    if abs(p.USplit1 - 0.25) > 1e-12 and abs(p.VSplit1 - 0.25) > 1e-12:
+        errors.append("the default corner did not move the rolling cut")
+    # and it is NOT the shipped corner
+    same = all((a - b).Length < 1e-12 for a, b in
+               zip(s_poles, list(corner.Poles)))
+    checks.append("the default corner is the shipped one: %s"
+                  % ("yes" if same else "no"))
+    if same:
+        errors.append("the default corner is the shipped corner, pole for "
+                      "pole")
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 

@@ -244,3 +244,82 @@ the corner without it is the shipped corner.
    it is the same 52 cells in every configuration.
 4. The rotational LARGE/SMALL pattern of the video is unreachable through
    one leader per seam (parity, section 3).
+
+---
+
+## 6. The rolling corner is the DEFAULT, and the member's face is a fill (#119)
+
+**The switch.**  The owner, 2026-10-21: *"the rolling corner fill should
+be the default fill!"*  The switch lives in the OPS LAYER
+(`SilkWorkflowOps.create_corner_blend(..., construction=...)`), because
+the ops layer is the only construction path (AGENTS.md):
+
+| `construction` | what it builds |
+|---|---|
+| `"rolling"` (THE DEFAULT) | the 66 over the ring's CUT cells, plus the small triangular member whose FACE is a FreeCAD `Surface::Filling` |
+| `"shipped"` (THE FALLBACK) | the 66 with the spiderweb member -- the construction of before #119, byte for byte |
+
+The wizard's corner step and the toolbar command both call the ops
+layer, so both build the rolling corner, and the visible set stays
+Edge -> Patch -> Blend -> Corner Blend (no new button).
+
+**WHERE THE ROLLING CONSTRUCTION CANNOT BE BUILT, THE FALLBACK IS USED.**
+The rolling leader is a CUT in the band, and Silk carries ONE band edge
+per axis end (#82).  A patch that carries TWO junctions on the
+seam-parallel axis cannot carry that cut -- the band edge is shared --
+and the rolling construction refuses by name ("the band on Patch has 2
+corner cells on its U axis, so it does not reach exactly one junction
+corner").  That is the case in the demo-01 model and in the 2x2 corner
+model: their patches carry several junctions, so their corners keep the
+shipped construction.  The refusal is ATOMIC (the cut is planned before
+it is written, and undone if the corner does not build), so the fallback
+is the shipped corner, byte for byte.
+
+**THE MEMBER'S FACE IS A FILL.**  The spiderweb member is kept -- it
+carries the fill's boundary -- but hidden; the FreeCAD filling IS the
+member's face.  The fill is built through the shipped component
+(`create_fill`, #96) with #121's SELECTABLE C0 fallback, and its
+continuity is measured with the shipped instrument (`fill_normal_gap`).
+
+| | leader 0.25 | leader 0.50 |
+|---|---|---|
+| the fill's order (requested 1 = G1) | 0 (C0) | 0 (C0) |
+| the tangent-plane gap against the silk face | 0 deg | 0 deg |
+| the fill's own residual against the boundary | 3.0e-06 mm | 2.7e-06 .. 3.9e-06 mm |
+| the fill against the silk member | 2.781e-17 mm | 5.562e-17 mm |
+| the fill against the 66 | **0.04855 mm** | 0.05847 mm |
+
+The G1 order is REFUSED by FreeCAD on this boundary (measured: the fill
+is `Invalid` at orders 1 and 2), so the C0 fallback is what builds.  The
+tangent-plane gap reads 0 deg because the fixture is PLANAR (both
+surfaces are planes); on a curved corner it is the figure that says
+whether the fill reached the order.
+
+**CAN THE FILL TAKE THE MEMBER BOUNDARY AS IT IS?**  No: the member's
+collapsed row is a DEGENERATE edge (its two ends are the apex), and a
+degenerate edge is not a curve a fill can take.  The fill takes the
+member's three REAL edges, which do close a loop.
+
+**THE SHAPE, RE-MEASURED** (the baseline did not move: #125 fixed the
+settling, not the geometry):
+
+| configuration | k_max | k_min | spread | saddle cells |
+|---|---|---|---|---|
+| shipped corner (the fallback) | 8.90142 | 8.58433 | **1.03694** | 52/1024 = 5.08 % |
+| default (rolling), leader 0.25 | 2.10333 | 1.56412 | **1.34474** | 52/1024 |
+| default (rolling), leader 0.50 | 0.561144 | 0.399593 | **1.40429** | 52/1024 |
+
+The seam `k_gap` (exact / sampled), the cut's C0 and the fallback's
+byte-identity (0.00e+00 on poles and weights) are in the console log of
+
+```
+python3 Tests/run_all.py --manual     # and
+import Tests.rolling_corner_default_visual as v; v.main()
+```
+
+(the renders: `Resources/Test_files/_inspect/rollingdef_*.png`).
+
+**THE TWO GAPS ARE UNCHANGED AND STILL STRUCTURAL.**  The saddle
+fraction does not move (52/1024 in every configuration: it is the
+degenerate apex's), and the setback still rides along with the leader
+(one band edge per axis end).  Neither is fixed here.

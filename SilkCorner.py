@@ -228,12 +228,18 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
     when set, ONLY that candidate is tried (both reversal states, as the
     search does) and no other patch or corner is considered, so the
     member lands exactly where the user asked or the caller refuses. When
-    None the automatic search above runs unchanged."""
+    None the automatic search above runs unchanged.
+
+    Returns `(ring, pin)` -- the ring (or None) and the `(patch, corner)`
+    the member was built at (or None).  The pin is what the rolling
+    construction needs (#119): the leader is cut on the seams of the
+    patch that CARRIES the member, so the two cannot disagree about
+    which patch that is."""
     if pinned is not None:
         pth, corner = pinned
         poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
         if poles_c is None:
-            return None
+            return None, None
         for rev in (False, True):
             mp, mw = control_grid64_3_1(poles_c, weights_c, corner)
             if mp is None:
@@ -244,8 +250,8 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
             cand = _member_ring(base_grids, ordered, pth, member)
             p36, _w, _why = corner_grid(cand, CORNER_TOL)
             if p36 is not None:
-                return cand
-        return None
+                return cand, (pth, corner)
+        return None, None
     for pth in patches:
         poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
         if poles_c is None:
@@ -261,8 +267,8 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
                 cand = _member_ring(base_grids, ordered, pth, member)
                 p36, _w, _why = corner_grid(cand, CORNER_TOL)
                 if p36 is not None:
-                    return cand
-    return None
+                    return cand, (pth, corner)
+    return None, None
 
 
 def corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
@@ -279,7 +285,37 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
     so a corner nobody has pinned is byte-identical. When set, the search
     may only use that candidate and refuses by name otherwise, and a pin
     on a 4-valent ring (which has no triangular member) is refused too.
-    """
+
+    The member's own placement is read by `corner_member_pin`, which runs
+    the SAME search -- there is one definition of where the member is."""
+    grids, cells, _pin, why = _corner_inputs(strips, tol, pin)
+    return grids, cells, why
+
+
+def corner_member_pin(strips, tol=CORNER_DEFAULT_TOL, pin=None):
+    """(patch, corner) or (None, reason) -- where the TRIANGULAR 4th
+    member of a 3-valent ring is built.
+
+    The same automatic search `corner_inputs` runs, so the answer cannot
+    disagree with the member the corner actually builds.  The rolling
+    construction (#119) needs it: the rolling leader is cut on the seams
+    of the patch that CARRIES the member, so the cut and the member are
+    always about the same patch."""
+    _grids, _cells, member_pin, why = _corner_inputs(strips, tol, pin)
+    if why is not None:
+        return None, why
+    if member_pin is None:
+        return None, ("this ring carries no triangular member (a "
+                      "3-valent ring does)")
+    return member_pin, None
+
+
+def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
+    """`corner_inputs` plus the member's own placement.
+
+    Returns (grids, corner_cells, member_pin, None) or
+    (None, None, None, reason).  `member_pin` is the `(patch, corner)`
+    the triangular 4th member was built at (None on a 4-valent ring)."""
     strips = list(strips)
     is_tri = (len(strips) == 3)
     if is_tri:
@@ -287,19 +323,20 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
     else:
         ordered, why = corner_ring(strips)
     if ordered is None:
-        return None, None, why
+        return None, None, None, why
     grids = []
     corner_cells = {}
+    member_pin = None
     for s in ordered:
         pa = getattr(s, "PatchA", None)
         pb = getattr(s, "PatchB", None)
         if pa is None or pb is None:
-            return None, None, "blend %s has no patches" % s.Name
+            return None, None, None, "blend %s has no patches" % s.Name
         e_a, ss_a = side_and_end(s, pa, tol)
         e_b, ss_b = side_and_end(s, pb, tol)
         if not e_a or not e_b:
-            return None, None, ("blend %s: no shared edge between %s and %s"
-                                % (s.Name, pa.Name, pb.Name))
+            return None, None, None, ("blend %s: no shared edge between %s "
+                                      "and %s" % (s.Name, pa.Name, pb.Name))
         # The two patches can parameterize their shared seam in the same
         # direction (identity) or opposite (reversed) -- it depends on
         # the geometry and on each patch's stored cycle, not on the edge
@@ -312,15 +349,16 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
         bca = band_cells(pa, e_a, ss_a)
         bcb = band_cells(pb, e_b, ss_b)
         if len(bca) != 1 or len(bcb) != 1:
-            return None, None, ("blend %s: its band must cover exactly 1 cell "
-                                "per side (got %d/%d)"
-                                % (s.Name, len(bca), len(bcb)))
+            return None, None, None, ("blend %s: its band must cover exactly "
+                                      "1 cell per side (got %d/%d)"
+                                      % (s.Name, len(bca), len(bcb)))
         li_map = {}
         for pth, e, bc in ((pa, e_a, bca), (pb, e_b, bcb)):
             iu_c, iv_c, nu, nv = CornerBlend._corner_cell(pth, ordered, tol)
             if iu_c is None or iv_c is None:
-                return None, None, ("patch %s: corner cell at the 4-patch "
-                                    "junction not found" % pth.Name)
+                return None, None, None, ("patch %s: corner cell at the "
+                                          "4-patch junction not found"
+                                          % pth.Name)
             iu_b, iv_b = divmod(bc[0], nv)
             # corner-end row: 3 if the corner cell sits above the band
             # cell along the band axis, else 0
@@ -331,15 +369,15 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
             corner_cells[pth.Name] = (pth, iu_c, iv_c, nu, nv)
         if li_map[pa.Name] != (3 - li_map[pb.Name] if identity is False
                                else li_map[pb.Name]):
-            return None, None, ("blend %s: its two patches disagree about "
-                                "which end is the junction (twisted input)"
-                                % s.Name)
+            return None, None, None, ("blend %s: its two patches disagree "
+                                      "about which end is the junction "
+                                      "(twisted input)" % s.Name)
         poles = list(getattr(s, "Poles", None) or [])
         weights = list(getattr(s, "Weights", None) or [])
         if len(poles) != 24 or len(weights) != 24:
-            return None, None, ("blend %s: expected a 24-pole grid, got %d "
-                                "poles / %d weights"
-                                % (s.Name, len(poles), len(weights)))
+            return None, None, None, ("blend %s: expected a 24-pole grid, "
+                                      "got %d poles / %d weights"
+                                      % (s.Name, len(poles), len(weights)))
         grids.append(orient_junction_row(poles, weights, li_map[pa.Name]))
     if is_tri:
         patches = []
@@ -355,29 +393,30 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
         pinned, pin_why = ((None, None) if pin is None
                            else _resolve_member_pin(pin, patches))
         if pin is not None and pinned is None:
-            return None, None, pin_why
+            return None, None, None, pin_why
         ring = None
         for base_grids in (list(grids),
                            _orient_ring_columns(grids, ordered)):
-            ring = _tri_ring_member(base_grids, ordered, patches,
-                                    corner_cells, pinned)
+            ring, member_pin = _tri_ring_member(base_grids, ordered, patches,
+                                                corner_cells, pinned)
             if ring is not None:
                 break
         if ring is None:
             if pinned is not None:
-                return None, None, ("could not build the triangular 4th "
-                                    "member at the pinned corner %s[%d]"
-                                    % (pinned[0].Name, pinned[1]))
-            return None, None, "could not build triangular 4th member"
+                return None, None, None, ("could not build the triangular 4th "
+                                          "member at the pinned corner %s[%d]"
+                                          % (pinned[0].Name, pinned[1]))
+            return None, None, None, "could not build triangular 4th member"
         grids = ring
     else:
         if pin is not None:
-            return None, None, ("the triangular-member pin applies only to "
-                                "a 3-valent corner; this ring has 4 strips")
+            return None, None, None, ("the triangular-member pin applies "
+                                      "only to a 3-valent corner; this ring "
+                                      "has 4 strips")
         grids, why = _assemble_square_ring(grids, ordered)
         if grids is None:
-            return None, None, why
-    return grids, corner_cells, None
+            return None, None, None, why
+    return grids, corner_cells, member_pin, None
 
 
 def corner_from_strips(strips, tol=CORNER_DEFAULT_TOL, pin=None):
@@ -416,6 +455,26 @@ def ensure_member_pin(obj):
         obj.addProperty("App::PropertyInteger", "MemberCorner", "Inputs",
                         "grid corner index (0..3) of the pinned triangular "
                         "4th member").MemberCorner = 0
+
+
+def fill_of_member(doc, member):
+    """The `Surface::Filling` whose boundary is this member's shape, or
+    None.
+
+    THE MEMBER DOES NOT LINK TO THE FILL.  A link would make the member
+    DEPEND on the fill, while the fill depends on the member (its
+    boundary edges) -- a cycle, and FreeCAD's recompute order inside a
+    cycle is arbitrary: measured, the member then ends up touched after
+    every pass and the document never settles (#125).  So the fill is
+    FOUND by its boundary instead, which is the same direction the
+    dependency already runs."""
+    for o in doc.Objects:
+        if getattr(o, "TypeId", "") != "Surface::Filling":
+            continue
+        for entry in (getattr(o, "BoundaryEdges", None) or []):
+            if entry and entry[0] is member:
+                return o
+    return None
 
 
 class CornerBlend:
@@ -626,6 +685,10 @@ class RollingMemberFace:
                         "the ring's blends").Strips = list(strips)
         obj.addProperty("App::PropertyLink", "Corner", "Inputs",
                         "the corner fill this face belongs to").Corner = corner
+        obj.addProperty("App::PropertyStringList", "BoundaryEdges",
+                        "Outputs",
+                        "the sub-shapes the member's face fill takes: the "
+                        "member's three REAL boundary curves").BoundaryEdges
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs",
                         "the triangular member's 24 poles").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "Outputs",
@@ -643,6 +706,69 @@ class RollingMemberFace:
             if 'Restore' not in fp.State and list(getattr(fp, "Strips", []) or []):
                 fp.touch()
                 fp.recompute()
+
+    def _refresh_fill(self, fp):
+        """Re-point the FILL's boundary at this object's own edges (#119).
+
+        WHY THIS IS NEEDED.  The fill's boundary edges live on THIS
+        object's shape -- the member's own three real edges -- and a
+        REPLACED shape breaks their sub-names: FreeCAD re-resolves a
+        link's sub-elements against the new shape, the old names do not
+        resolve ("?Edge1"), and the fill is left Touched+Invalid, so the
+        document never settles again after a band-edge edit.  (The
+        shipped corner fill, which is opt-in, has the same latent defect:
+        its boundary lives on the ring strips.)
+
+        So the fill is re-pointed here, right after the new shape is in
+        place: the fill is then rebuilt in the same recompute pass (it
+        depends on this object, so it comes after it).
+
+        The re-pointing is done ONLY when the links are actually broken.
+        A property write on the fill TOUCHES it, and a touched fill is
+        rebuilt -- and left dirty again -- for nothing, so a member that
+        recomputes several times in one pass (it does: the ring's cells
+        change more than once) must not touch the fill more than once.
+
+        The member's COLLAPSED row is a degenerate edge -- its two ends
+        are the apex -- and a degenerate edge is not a curve a fill can
+        take, so the fill's boundary is the member's three REAL edges.
+        """
+        fill = fill_of_member(fp.Document, fp)
+        if fill is None:
+            return
+        real = list(getattr(fp, "BoundaryEdges", None) or [])
+        if len(real) < 3:
+            return
+        current = []
+        try:
+            current = list(getattr(fill, "BoundaryEdges", None) or [])
+        except Exception:
+            current = []
+        if (len(current) == 1 and current[0][0] is fp
+                and list(current[0][1]) == real):
+            # already pointing at these edges -- but the fill may still
+            # be dirty from the rebuild it just did, and the document
+            # must settle, so it is purged here.
+            try:
+                fill.purgeTouched()
+            except Exception:
+                pass
+            return
+        try:
+            fill.BoundaryEdges = [(fp, name) for name in real]
+            fill.BoundaryFaces = ["Face1"] * len(real)
+            # and rebuild it NOW: the fill depends on this object, and
+            # while this object is still executing the dependency is not
+            # up to date, so the document's own pass would skip it -- the
+            # fill would stay dirty (and its surface stale) and the
+            # document would never settle.
+            fill.touch()
+            fill.recompute(True)
+            fill.purgeTouched()
+        except Exception as exc:
+            FreeCAD.Console.PrintError(
+                "Silk: the member face's fill could not be re-pointed at "
+                "%s: %s\n" % (fp.Name, exc))
 
     def execute(self, fp):
         if 'Restore' in fp.State:
@@ -669,6 +795,7 @@ class RollingMemberFace:
             fp.Shape = Part.Shape()
             return
         poles, weights = member
+        old_poles = list(getattr(fp, "Poles", None) or [])
         fp.Poles = poles
         fp.Weights = weights
         fp.Legs = AN.drawGrid(fp.Poles, 6)
@@ -688,7 +815,54 @@ class RollingMemberFace:
         if not shape or not hasattr(shape, "Faces") or not shape.Faces:
             fp.Shape = Part.Shape()
             return
-        fp.Shape = shape
+        # A REPLACED shape breaks the fill's sub-names (see
+        # `_refresh_fill`), and this object is recomputed several times
+        # in one pass -- so the shape is only replaced when the member's
+        # NET actually changed.  An unchanged net means an unchanged
+        # surface, and the fill's links stay good.
+        same_net = (len(old_poles) == len(poles) and old_poles
+                    and all((a - b).Length <= 1e-12
+                            for a, b in zip(old_poles, poles)))
+        if same_net and getattr(fp, "Shape", None) is not None \
+                and fp.Shape.Faces:
+            self._purge(fp)
+            return
+        # THE SHAPE IS A COMPOUND: the silk face AND the member's three
+        # REAL boundary curves.  The compound is not decoration -- it is
+        # what makes the FILL's boundary stable.  A fill's boundary is a
+        # LINK to a sub-shape, and a FACE's sub-names are resolved
+        # through the shape's element map: a replaced face breaks them
+        # ("?Edge1"), the fill cannot resolve its own boundary and goes
+        # Invalid for good.  A COMPOUND's children are named BY POSITION
+        # ("Edge1", "Edge2", ...), so the names survive the replacement
+        # -- measured: the fill stays Up-to-date across a band-edge edit
+        # that replaces the shape under it.
+        real = [e for e in shape.Edges if e.Length > 1e-9]
+        if len(real) >= 3:
+            fp.Shape = Part.Compound([shape] + real)
+            fp.BoundaryEdges = ["Edge%d" % (i + 1) for i in range(len(real))]
+        else:
+            fp.Shape = shape
+            fp.BoundaryEdges = []
+        # the fill's boundary lives on the shape just replaced: re-point
+        # it, or it breaks (see `_refresh_fill`).
+        self._refresh_fill(fp)
+        # A rebuilt member must not leave the document dirty: the shape,
+        # the poles and the boundary names written above touch it again.
+        self._purge(fp)
+
+    @staticmethod
+    def _purge(fp):
+        """Clear the touch flag this execute raised.
+
+        The properties written above (the poles, the weights, the legs,
+        the shape, the boundary names) touch the object again, and a
+        document that stays dirty is a document that never settles
+        (#125).  The CornerBlend does the same."""
+        try:
+            fp.purgeTouched()
+        except Exception:
+            pass
 
 
 def member_grid(grids):
