@@ -70,8 +70,22 @@ OUT_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "Resources", "Test_files", "_inspect")
 
-LEADER = 0.25          # the video's number: 0.25 along the seam
-OTHER_LEADER = 0.5     # the second leader the shape is measured at
+LEADER = 0.25          # the video's number: 0.25 along the seam (the
+                       # corner stage writes it into the band edge; a leader
+                       # CUT needs to clear the 0.1 band, see
+                       # `SilkMachinery.leader_cut_problem`)
+OTHER_LEADER = 0.9375  # the symmetric partner: 1/16 measured from the FAR
+                       # end (file 29's pair is 0.0625 / 0.9375)
+# THE REFERENCE, measured from the maintainer's own finished corner
+# (`upstream/master:…/Silk_CopyPasta_27_First_Corner_Rolled.FCStd`, its
+# `CubicSurface_66_013` and `CubicSurface_64_052` shapes read with
+# `Part.Shape().read`): how far the TRIANGLE's interior sits from the QUAD,
+# in mm and as a fraction of the corner's own bounding-box diagonal.
+# This is the instrument that separates "two surfaces" from "one surface
+# with the other inside it": a bounding box cannot (upstream's quad bbox
+# contains its tri bbox too).
+UPSTREAM_TRI_QUAD_MM = (8.0, 31.0)
+UPSTREAM_CORNER_DIAGONAL_MM = 50.0
 MEMBER_RGB = (0.20, 0.45, 0.95)
 CORNER_RGB = (0.92, 0.55, 0.15)
 FILL_RGB = (0.30, 0.70, 0.95)
@@ -185,6 +199,62 @@ def cut_residual(corner, strips):
     return out
 
 
+def two_surface_report(corner, member, fill):
+    """THE TWO-SURFACE MEASUREMENT (#119): how far the TRIANGLE's interior
+    sits from the QUAD, in mm and as a fraction of the corner's own extent.
+
+    What it answers.  The owner's complaint is that the corner reads as ONE
+    surface -- the member's face lands INSIDE the corner fill, so the two
+    surfaces do not tile the corner, one wraps the other.  A bounding box
+    cannot see that (the maintainer's own quad bbox contains his tri bbox
+    too); the distance from the tri's interior to the quad can: measured on
+    the maintainer's finished corner it is 8.0-31.0 mm over a 50 mm corner
+    (16-62 %), while a wrapped tri reads a fraction of a percent.
+
+    Returns the sample distances, their max, and that max as a fraction of
+    the corner's bounding-box diagonal (the reference scale).
+    """
+    out = {"face": None, "samples_mm": [], "max_mm": None,
+           "extent_mm": None, "max_fraction": None,
+           "reference_mm": list(UPSTREAM_TRI_QUAD_MM),
+           "reference_fraction": [UPSTREAM_TRI_QUAD_MM[0]
+                                  / UPSTREAM_CORNER_DIAGONAL_MM,
+                                  UPSTREAM_TRI_QUAD_MM[1]
+                                  / UPSTREAM_CORNER_DIAGONAL_MM]}
+    # THE SILK MEMBER'S OWN FACE IS THE STABLE INSTRUMENT, not the FreeCAD
+    # filling: a `Surface::Filling` face carries its UNTRIMMED surface, so
+    # `valueAt` on it walks off the face and the distance reads garbage
+    # (measured: 1.7e+12 mm).  The fill and the member are the same surface
+    # here -- their boundary residual reads ~1e-16 mm in the report above --
+    # so the member measures the surface the owner looks at.
+    face_shape = None
+    if member is not None and getattr(member, "Shape", None) is not None \
+            and member.Shape.Faces:
+        face_shape = member.Shape
+        out["face"] = member.Name
+    elif fill is not None and getattr(fill, "Shape", None) is not None \
+            and fill.Shape.Faces:
+        face_shape = fill.Shape
+        out["face"] = fill.Name
+    if face_shape is None or corner is None or not corner.Shape.Faces:
+        return out
+    bb = corner.Shape.BoundBox
+    extent = (FreeCAD.Vector(bb.XLength, bb.YLength, bb.ZLength)).Length
+    out["extent_mm"] = extent
+    quad = corner.Shape
+    samples = []
+    f = face_shape.Faces[0]
+    for i in range(1, 8):
+        for j in range(1, 8):
+            p = f.valueAt(i / 8.0, j / 8.0)
+            samples.append(quad.distToShape(Part.Vertex(p))[0])
+    out["samples_mm"] = samples
+    out["max_mm"] = max(samples) if samples else None
+    if extent:
+        out["max_fraction"] = out["max_mm"] / extent
+    return out
+
+
 def member_report(corner, member, fill):
     """THE MEMBER'S FACE (STAGE 1): the FreeCAD filling that replaces the
     spiderweb -- its continuity against the silk face it replaces, and
@@ -286,6 +356,27 @@ def render(rolling_doc, corner, member, fill, shipped_doc, shipped_corner,
     _shot(rolling_doc, view, "rollingdef", "1_shaded", names, rec)
     if face_names:
         _shot(rolling_doc, view, "rollingdef", "2_member", face_names, rec)
+    # #119: the QUAD alone, the TRI alone, and the QUAD WITH ITS CONTROL
+    # GRID ON -- the owner's ask, so the corner's net can be seen to be a
+    # proper 6x6 grid and not a spiderweb.  Same camera as everything else.
+    _shot(rolling_doc, view, "rollingdef", "6_quad_alone",
+          [corner.Name], rec)
+    if face_names:
+        _shot(rolling_doc, view, "rollingdef", "7_tri_alone", face_names,
+              rec)
+    try:
+        corner.ShowGrid = True
+        corner.ViewObject.Visibility = True
+        view.redraw()
+        rec.setdefault("paths", {})["8_quad_grid"] = os.path.join(
+            OUT_DIR, "rollingdef_8_quad_grid.png")
+        view.saveImage(rec["paths"]["8_quad_grid"],
+                       IMAGE_SIZE[0], IMAGE_SIZE[1], BACKGROUND)
+    finally:
+        try:
+            corner.ShowGrid = False
+        except Exception:
+            pass
     # the shipped corner, from the same camera
     _quiesce(shipped_doc)
     shipped_corner.ViewObject.ShapeColor = CORNER_RGB
@@ -372,6 +463,28 @@ def print_report(rows, floor=None, fallback=None):
               "member: %s mm"
               % (_fmt(m.get("junction_c0")), _fmt(m.get("to_member"))))
     print()
+    print("TWO SURFACES OR ONE?  how far the TRIANGLE's interior sits from "
+          "the QUAD")
+    print("    (the instrument that separates them: the maintainer's own "
+          "corner reads")
+    print("     %.1f-%.1f mm = %.0f-%.0f %% of its %.0f mm diagonal; a "
+          "triangle INSIDE the quad"
+          % (UPSTREAM_TRI_QUAD_MM[0], UPSTREAM_TRI_QUAD_MM[1],
+             100.0 * UPSTREAM_TRI_QUAD_MM[0] / UPSTREAM_CORNER_DIAGONAL_MM,
+             100.0 * UPSTREAM_TRI_QUAD_MM[1] / UPSTREAM_CORNER_DIAGONAL_MM,
+             UPSTREAM_CORNER_DIAGONAL_MM))
+    print("     reads a fraction of a percent of its own extent)")
+    print("    %-26s %-14s %-12s %s"
+          % ("configuration", "face measured", "max mm", "max / extent"))
+    for r in rows:
+        t = r.get("two_surface") or {}
+        if not t.get("max_mm"):
+            print("    %-26s (no member face)" % r["label"])
+            continue
+        print("    %-26s %-14s %-12.4g %.2f %%"
+              % (r["label"], t.get("face"), t["max_mm"],
+                 100.0 * (t.get("max_fraction") or 0.0)))
+    print()
     print("SEAM CONTINUITY, the corner against the strips it feeds")
     for r in rows:
         print("    %s:" % r["label"])
@@ -399,7 +512,11 @@ def print_report(rows, floor=None, fallback=None):
                        ("3_shipped", "shaded, the SHIPPED corner"),
                        ("4_gauss", "Gaussian curvature of the rolling corner"),
                        ("5_gauss_shipped",
-                        "Gaussian curvature of the SHIPPED corner")):
+                        "Gaussian curvature of the SHIPPED corner"),
+                       ("6_quad_alone", "shaded, the QUAD alone"),
+                       ("7_tri_alone", "shaded, the TRI alone"),
+                       ("8_quad_grid",
+                        "the QUAD with its control grid ON")):
         print("    %-46s %s" % (label, rows[0].get("paths", {}).get(key)))
 
 
@@ -432,7 +549,8 @@ def main(out_dir=None):
                "near_ratio": (s["near_ratio_min"], s["near_ratio_max"]),
                "cuts": cut_residual(c, strips),
                "seams": seam_gaps(c, strips),
-               "member": member_report(c, member, fill)}
+               "member": member_report(c, member, fill),
+               "two_surface": two_surface_report(c, member, fill)}
         rows.append(row)
 
     rec = render(rdoc, corner, *members_of(rdoc, "Roll"),

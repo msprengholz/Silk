@@ -323,3 +323,99 @@ import Tests.rolling_corner_default_visual as v; v.main()
 fraction does not move (52/1024 in every configuration: it is the
 degenerate apex's), and the setback still rides along with the leader
 (one band edge per axis end).  Neither is fixed here.
+
+---
+
+## The leader becomes its own cut: the corner is TWO patches (#119, session 2)
+
+**WHAT WAS WRONG.**  The 66 was built from the ring's cells, as upstream
+does — the wiring was never the problem.  The problem was that the leader
+was written into the BAND EDGE, so on the member's patch the leader and
+the setback were ONE number.  Both blends adjacent to the member then
+terminated their junction rows at the SAME point (the patch's far cell
+corner), the ring's 4th corner coincided with the 3rd, the 66 came out with a
+whole collapsed side — and its surface swept over the member's own cell
+instead of stopping at it.  Measured: the member's interior lay
+0.0002–0.017 mm from the 66 (0.1–10 % of the corner extent) = inside it.
+
+**THE REFERENCE, MEASURED** (upstream's own finished corner, file 27, the
+classes read from the FCStd's stored `.brp` shapes with `Part.Shape().read`):
+his 66 has **36 distinct poles**, its v=0 side IS the triangle's flowing row,
+and his triangle's interior sits **8.0–31.0 mm from the quad = 16–62 %** of
+the corner's 50 mm diagonal.  NOTE: his quad's bounding box CONTAINS his
+tri's bounding box too (the tri pokes out by only 0.79 mm in y, 0.07 mm in
+z), so a bbox test cannot separate the two cases — the distance instrument is
+the one that can.
+
+**WHAT LANDED.**
+
+1. `SilkPatch` gains `ULeader1/2`, `VLeader1/2` — a cut of its own, ADDITIVE
+   and default-off (sentinels per slot, so a patch without one reads exactly
+   the two band edges it always read; the shipped construction stays
+   **0.00e+00** on poles and weights).
+2. `SilkMachinery` reads it: `axis_cuts`, `build_intervals`, `axis_intervals`,
+   `axis_has_cuts`, `corner_cell_index`, `corner_cells`, `band_extent`,
+   `band_cells`, plus `leader_cut_problem`.  The CORNER CELL is the interval
+   BETWEEN the setback and the leader; a leader that does not clear its band
+   edge is INERT and named.  `Tests/test_leader_cut.py` pins the identity,
+   the new cell, the one-cell band invariant and the refusal.
+3. `RollingMemberFace` names its boundary edges by position in the SHAPE's
+   edge list, not in the list of non-degenerate edges: the old numbering
+   handed the fill the collapsed edge as its second side whenever that edge
+   was not the last one (`Edge1 meets both of its loop neighbours at the SAME
+   end`).
+
+**THE TWO-SURFACE ARRANGEMENT WAS BUILT AND MEASURED — AND IT FOLDS, so it is
+NOT shipped.**  What was tried: write the leader cut on the MEMBER patch (not
+both patches of a seam — cutting both breaks the ring at the other patch,
+where its own two blends stop meeting: `corner_grid` refuses with "the two
+grids share no corner"), and feed the member to the ring REVERSED, so its
+real row is the ring row at V = 3 like every strip's.
+
+| cube corner, leader 0.25 | before (leader in the band edge) | the two-surface arrangement |
+|---|---|---|
+| 66 area | 0.011007 | **0.063310** |
+| 66 collapsed side | **yes** (a whole row on one point) | **no** |
+| tri (member) area | 0.003578 | 0.020609 |
+| tri bbox | (0,0,0)→(0.0625,0.0625,0) | (0.1,0.1,0)→(0.25,0.25,0) |
+| tri interior → quad | 0.0002–0.017 mm (0.1–10 %) | **0.01478 mm max = 4.02 %** |
+| seam k_gap (exact) | 9.6e-13 /mm | **56.65 /mm** |
+| the cut's C0 | 5.6e-17 mm | 5.6e-17 mm |
+| **normal-field flips** (n=39/81/150) | **0** | **25 / 53 / 96** |
+| fine mesh self-intersects | no | **yes** |
+| shipped fallback | 0.00e+00 | 0.00e+00 |
+
+The two surfaces DO tile (overlap `0.00000000`, `distToShape` 0.0, the tri is
+the far cell and the quad the ring around it — renders
+`Resources/Test_files/_inspect/after_*.png`, produced from the experimental
+wiring named above: the leader cut written on the member patch, and
+`SilkCorner._MEMBER_ROW_ORDER_LEADER` used for that patch.  They are NOT
+reachable from the committed tree; re-apply those two switches to
+reproduce), but the member-side interior rows are extrapolated from the
+member's own rows and the cap folds.
+`SilkMachinery.smooth_degenerate_cap` re-solves rows on a COLLAPSED side, and
+this arrangement has none there — the fix is a member-side re-solve, which is
+the next piece of work, not a knob.
+
+**THEREFORE, TODAY.**  The corner stage still writes the leader into the BAND
+EDGE: byte-identical to before this session on every existing path, the cube
+corner's cap still fold-free, the pins unchanged.  The leader CUT and its cell
+rule are in place, tested, and waiting for that re-solve; the seam `k_gap` the
+two-surface arrangement leaves (56.65 /mm) and the tri → quad distance (4.0 %
+against the maintainer's 16–62 %) are the other two numbers to close.
+
+**ALSO MEASURED, leader 0.9375** (the symmetric partner of 1/16 from the far
+end): tri → quad 0.03078 mm = 2.32 %, k_gap 492.9 /mm, saddle 39.6 %,
+tri bbox (0.1,0.1,0)→(0.9375,0.9375,0).
+
+**WHAT IS STILL OPEN.**
+
+* The member-side re-solve (the fold above) — the one thing between the
+  machinery and the owner's two-patch corner.
+* The seam `k_gap`: the cut is on the member patch only, so the strips'
+  corner-side boundary is skewed.  Matching the leader on both patches needs
+  two cuts per axis end on the OTHER patches as well.
+* The saddle fraction (5.1 % → 32 % with the cut, still the degenerate
+  apex's cells): the rotational LARGE/SMALL pattern the video shows is still
+  out of reach with one leader per seam.
+* #126 (the corner-cell refusal on the owner's own model) is untouched.

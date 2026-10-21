@@ -295,6 +295,12 @@ def loop_order(edges, tol=None):
 NO_BAND_1 = 0.0
 NO_BAND_2 = 1.0
 
+# The LEADER cut's sentinels (#119), the same rule per slot: the slot's own
+# endpoint means "no leader cut at that end". Defined here with the band
+# edge's so every default argument below can read them at import time.
+NO_LEADER_1 = 0.0
+NO_LEADER_2 = 1.0
+
 
 def band_edge(value):
     """`value` as a band edge, or None when this end carries none.
@@ -320,12 +326,170 @@ def axis_splits(s1, s2):
     return sorted(set(edges))
 
 
-def build_intervals(s1, s2):
-    """The intervals one axis is cut into by its two named edges."""
-    splits = axis_splits(s1, s2)
-    if not splits:
+def build_intervals(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2):
+    """The intervals one axis is cut into: its two band edges plus, when
+    they are set, its two leader cuts (#119). A patch with no leader reads
+    exactly what a two-edge axis always read."""
+    cuts = axis_cuts(s1, s2, l1, l2)
+    if not cuts:
         return [(0.0, 1.0)]
-    return list(zip([0.0] + splits, splits + [1.0]))
+    return list(zip([0.0] + cuts, cuts + [1.0]))
+
+
+def axis_intervals(p, letter):
+    """The intervals ONE PATCH's axis is cut into, band edges and leader
+    cuts together -- the reading every caller that has the patch in hand
+    wants, so none of them can forget the leader."""
+    s1, s2 = split_pair(p, letter)
+    l1, l2 = leader_pair(p, letter)
+    return build_intervals(s1, s2, l1, l2)
+
+
+def axis_has_cuts(p, letter):
+    """True when that axis is subdivided at all (band edge or leader)."""
+    s1, s2 = split_pair(p, letter)
+    l1, l2 = leader_pair(p, letter)
+    return bool(axis_cuts(s1, s2, l1, l2))
+
+
+def leader_cut_problem(p):
+    """None when every leader cut on `p` actually CUTS, else the reason.
+
+    A leader says where the band is cut back from the junction corner, so it
+    only means something BEYOND the band edge at its own end (`axis_cuts`).
+    Inside the band the band edge already cuts further out, and the corner
+    cell the corner stage builds would then be the band's own cell -- a
+    member surface lying on top of the blend it is supposed to sit beside.
+    Naming that here means the corner stage falls back to the shipped corner
+    with a reason instead of building a corner nobody meant."""
+    name = getattr(p, "Name", "?")
+    for letter in ("U", "V"):
+        s1, s2 = split_pair(p, letter)
+        l1, l2 = leader_pair(p, letter)
+        cuts = axis_cuts(s1, s2, l1, l2)
+        for end, lead in ((1, band_edge(l1)), (2, band_edge(l2))):
+            if lead is None or lead in cuts:
+                continue
+            return ("%s's %s axis: the leader cut %g does not clear its "
+                    "%sSplit%d band edge (%g), so it would cut INSIDE the "
+                    "band -- the corner cell has to be the region between "
+                    "the two."
+                    % (name, letter, lead, letter, end,
+                       getattr(p, "%sSplit%d" % (letter, end), 0.0)))
+    return None
+
+
+def ensure_leader_cuts(obj):
+    """Give `obj` the four LEADER cut properties if it has none (#119).
+
+    Same shape as `SilkPatch._ensure_split_properties`: the property has to
+    exist before anything can read or write it, and the case that needs this
+    is a patch built before the leader cut existed (a restored document, a
+    legacy `Patch44`). They are created at their SENTINELS, so such a patch
+    comes back with no leader -- the identity, today's geometry, cell for
+    cell."""
+    for letter in ("U", "V"):
+        for n, sentinel in ((1, NO_LEADER_1), (2, NO_LEADER_2)):
+            name = "%sLeader%d" % (letter, n)
+            if not hasattr(obj, name):
+                obj.addProperty(
+                    "App::PropertyFloat", name, "S1 - Subdivision",
+                    "leader cut at the parametric-%d end of the %s axis: the "
+                    "band is cut back from that end's junction corner here; "
+                    "%g = no leader at that end" % (n - 1, letter, sentinel))
+                setattr(obj, name, sentinel)
+
+
+# The re-entrancy guard for `normalize_leader_on_set`'s own corrective write
+# (the module-level counterpart of the Patch's `_normalizing_splits`): one
+# user write, one settle, never a second pass through onChanged.
+_normalizing_leaders = [False]
+
+
+def normalize_leader_on_set(obj, prop):
+    """Put one axis's LEADER pair into canonical form after a write to
+    `prop` (#119).
+
+    The same two lossless rules the band edges get, from the same function:
+    a value outside [0, 1] becomes its OWN slot's sentinel, and two real cuts
+    stored out of order are swapped. A correction is reported unless the
+    document is restoring, and the geometry is identical either way -- this
+    is about which end the stored names claim."""
+    letter = prop[0]
+    slot = int(prop[-1]) - 1
+    before = leader_pair(obj, letter)
+    after = normalize_edge_pair(before[0], before[1])
+    if before == (after[0], after[1]):
+        return
+    if _normalizing_leaders[0]:
+        return
+    _normalizing_leaders[0] = True
+    try:
+        setattr(obj, prop, after[slot])
+        if after[1 - slot] != before[1 - slot]:
+            setattr(obj, "%sLeader%d" % (letter, 2 - slot), after[1 - slot])
+    finally:
+        _normalizing_leaders[0] = False
+    if after[2] and 'Restore' not in getattr(obj, "State", []):
+        import FreeCAD
+        FreeCAD.Console.PrintError(
+            "Silk: %s: %s = %g -- %s, so the axis now stores %sLeader1 = %g "
+            "and %sLeader2 = %g.\n"
+            % (getattr(obj, "Name", "?"), prop, before[slot], after[2],
+               letter, after[0], letter, after[1]))
+
+
+# ---- the LEADER cut (#119, additive) ------------------------------------
+#
+# One more cut per axis end, and it means something DIFFERENT from the band
+# edge: the band edge is the user's SETBACK (how wide the blend is), the
+# leader is where the band is cut back from the junction corner (how far
+# the corner fill reaches along the seam). The maintainer has them as two
+# separate cuts, and the corner's two-patch look needs both: the triangular
+# member's cell is the region BETWEEN the setback and the leader, so its two
+# neighbours' rows meet it at two DIFFERENT corners instead of the one point
+# a corner cell can offer.
+#
+# ADDITIVE and default-off: a patch that has never carried a leader reads
+# exactly the two band edges it always read, so every existing document
+# builds byte-identically (0.00e+00 poles and weights). The sentinels follow
+# the band edge's own rule -- each property's OWN endpoint -- so
+# `band_edge()` is the leader reading too, one rule for both cuts.
+
+
+def leader_pair(p, letter):
+    """`(Leader1, Leader2)` of axis `letter` ("U" / "V") of object `p`.
+
+    Read by NAME, like `split_pair`. An object with no leader properties at
+    all (one built before #119, a legacy `Patch44`, a test stub) reads as
+    "no leader cut at either end", which is the identity."""
+    return (float(getattr(p, letter + "Leader1", NO_LEADER_1)),
+            float(getattr(p, letter + "Leader2", NO_LEADER_2)))
+
+
+def axis_cuts(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2):
+    """Every cut position one axis carries, ascending: its two band edges
+    and its two leader cuts, sentinel slots dropped.
+
+    The band edges alone are `axis_splits`; this is the set the INTERVALS
+    come from, so a leader subdivides the axis exactly the way a band edge
+    does (the same `build_subgrids`, the same exact knot line).
+
+    A LEADER ONLY CUTS WHEN IT CLEARS THE BAND EDGE AT ITS OWN END (#119):
+    the leader says where the band is cut back from the junction corner, so
+    a leader INSIDE the band has nothing to cut -- the band edge already
+    cuts further out, and admitting the value would only add an empty sliver
+    and take the band's one-cell invariant with it. Below that bound the
+    leader is therefore INERT, which is the identity: the axis reads exactly
+    the two band edges it always read."""
+    edges = [band_edge(s1), band_edge(s2)]
+    b1, b2 = band_edge(s1), band_edge(s2)
+    led1, led2 = band_edge(l1), band_edge(l2)
+    if led1 is not None and (b1 is None or led1 > b1):
+        edges.append(led1)
+    if led2 is not None and (b2 is None or led2 < b2):
+        edges.append(led2)
+    return sorted(set(v for v in edges if v is not None))
 
 
 def split_pair(p, letter):
@@ -386,10 +550,16 @@ def band_at_end(s1, s2, ss):
     return band_edge(s1) if ss == 0 else band_edge(s2)
 
 
-def build_subgrids(base_surface, u_pair, v_pair):
+def build_subgrids(base_surface, u_pair, v_pair,
+                   u_leader=(NO_LEADER_1, NO_LEADER_2),
+                   v_leader=(NO_LEADER_1, NO_LEADER_2)):
     """Subdivide base_surface by the two named edges on each axis.
 
-    `u_pair` / `v_pair` are `(Split1, Split2)` — see `split_pair`.
+    `u_pair` / `v_pair` are `(Split1, Split2)` — see `split_pair`;
+    `u_leader` / `v_leader` are the optional LEADER cuts (#119, see
+    `leader_pair`). A leader subdivides the axis exactly the way a band edge
+    does (one more exact knot line), and a patch that carries none subdivides
+    cell for cell as it always did.
 
     Returns (subgrids, subgrid_weights, subsurfaces, sub_legs):
       - subgrids:        flat 16-pole arrays, one per cell;
@@ -410,11 +580,11 @@ def build_subgrids(base_surface, u_pair, v_pair):
     subgrid_weights = []
     subsurfaces = []
     sub_legs = []
-    if not (axis_splits(*u_pair) or axis_splits(*v_pair)):
+    if not (axis_cuts(*u_pair, *u_leader) or axis_cuts(*v_pair, *v_leader)):
         return subgrids, subgrid_weights, subsurfaces, sub_legs
     shapes = []
-    for u0, u1 in build_intervals(*u_pair):
-        for v0, v1 in build_intervals(*v_pair):
+    for u0, u1 in build_intervals(*u_pair, *u_leader):
+        for v0, v1 in build_intervals(*v_pair, *v_leader):
             seg = base_surface.copy()
             seg.segment(u0, u1, v0, v1)
             seg_poles = seg.getPoles()
@@ -595,9 +765,46 @@ def side_of_edge(pa, pb, edge, tol=0.01):
 # cells, and the band refusal names it (see band_diagnosis).
 
 
-def corner_cells(s1, s2, n_intervals):
-    """Interval indices along one axis that are CORNER cells — reserved
-    for the four-cell corner blend op (#28) and excluded from a band.
+def corner_cell_index(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2, end=None):
+    """`(index, n_intervals, end)` of the CORNER cell at the junction end of
+    one axis, or `(None, n_intervals, end)` when the axis cannot name one.
+
+    THE CORNER CELL is the interval the corner fill and the triangular
+    member are built from. It is the interval that ENDS at the LEADER cut
+    when that end carries one (#119) -- the region between the setback and
+    the leader -- and the end interval itself when it does not, which is
+    the single rule that reduces to the pre-#119 behaviour exactly (`end`
+    is then 0 or n-1, the set `corner_cells` has always returned).
+
+    `end` is the parametric end the junction is at; None asks the axis,
+    which answers only when exactly one end carries a band edge (both ends,
+    or neither, is the ambiguity `band_extent` refuses by name)."""
+    ivs = build_intervals(s1, s2, l1, l2)
+    n = len(ivs)
+    if end is None:
+        b1, b2 = band_edge(s1), band_edge(s2)
+        if b1 is not None and b2 is None:
+            end = 0
+        elif b2 is not None and b1 is None:
+            end = 1
+        else:
+            return None, n, None
+    lead = band_edge(l1) if end == 0 else band_edge(l2)
+    if lead is None:
+        return (0 if end == 0 else n - 1), n, end
+    # the leader must clear the band edge at this end to be a cut at all
+    # (`axis_cuts`); when it does, the corner cell is the interval BETWEEN
+    # the two -- the setback on one side, the leader on the other.
+    edge = band_edge(s1) if end == 0 else band_edge(s2)
+    if (edge is not None and not (lead > edge if end == 0 else lead < edge)):
+        return (0 if end == 0 else n - 1), n, end
+    return (1 if end == 0 else n - 2), n, end
+
+
+def corner_cells(s1, s2, n_intervals, l1=NO_LEADER_1, l2=NO_LEADER_2):
+    """Interval indices along one axis that a band must NOT cover -- the
+    corner region at the junction end, reserved for the corner blend op
+    (#28) and the rolling corner's member (#119).
 
     The exclusion follows the two NAMED edges, one per end:
 
@@ -610,16 +817,35 @@ def corner_cells(s1, s2, n_intervals):
         Split2) has no band attached to it, so its end cell is not a
         corner cell.
 
+    #119 adds one thing, and only when a LEADER cut is set at that end: the
+    corner cell is then the interval that ends at the leader (the region
+    between the setback and the leader), and the band starts AFTER it, so
+    every interval from the junction end up to and including that one is
+    excluded. With no leader the two readings are the same set, which is
+    why the pre-#119 behaviour is untouched.
+
     This is what #61 generalized ("is there a 0.1? drop the first cell /
     a 0.9? drop the last"), with the values read from the ends they
     belong to rather than compared against the middle of the axis, so a
     user width like 0.2 or 0.85 needs no special case and #81's [0.2,
     0.4] is just two ends with two edges."""
     out = set()
-    if band_edge(s1) is not None:
-        out.add(0)
-    if band_edge(s2) is not None:
-        out.add(n_intervals - 1)
+    if band_edge(s1) is None and band_edge(s2) is None:
+        return out
+    idx, n, end = corner_cell_index(s1, s2, l1, l2)
+    if idx is None:
+        # the axis carries a band edge at BOTH ends (or at an end the
+        # leader arithmetic cannot place): each end gets its own end cell,
+        # exactly as before.
+        if band_edge(s1) is not None:
+            out.add(0)
+        if band_edge(s2) is not None:
+            out.add(n_intervals - 1)
+        return out
+    if end == 0:
+        out |= set(range(0, idx + 1))
+    else:
+        out |= set(range(idx, n))
     return out
 
 
@@ -640,23 +866,30 @@ def band_cells(p, ea, ss):
     """
     us = split_pair(p, "U")
     vs = split_pair(p, "V")
-    nu = len(build_intervals(*us))
-    nv = len(build_intervals(*vs))
+    ul = leader_pair(p, "U")
+    vl = leader_pair(p, "V")
+    nu = len(build_intervals(*us, *ul))
+    nv = len(build_intervals(*vs, *vl))
     if ea[0] == "U":  # seam along U: band fixes V interval, spans U cells
         b = (nv - 1) if ss else 0
-        keep_u = set(range(nu)) - corner_cells(us[0], us[1], nu)
+        keep_u = set(range(nu)) - corner_cells(us[0], us[1], nu, *ul)
         return [a * nv + b for a in sorted(keep_u)]
     # seam along V: band fixes U interval, spans V cells
     a = (nu - 1) if ss else 0
-    keep_v = set(range(nv)) - corner_cells(vs[0], vs[1], nv)
+    keep_v = set(range(nv)) - corner_cells(vs[0], vs[1], nv, *vl)
     return [a * nv + b for b in sorted(keep_v)]
 
 
 def _edges_str(p, letter):
-    """`USplit1 = 0.1, USplit2 = 0.9` — one axis as the data tab shows it."""
+    """`USplit1 = 0.1, USplit2 = 0.9` — one axis as the data tab shows it,
+    with the leader cut named when the axis carries one (#119)."""
     s1, s2 = split_pair(p, letter)
-    return "%s = %g, %s = %g" % (letter + "Split1", s1,
-                                 letter + "Split2", s2)
+    l1, l2 = leader_pair(p, letter)
+    out = "%s = %g, %s = %g" % (letter + "Split1", s1, letter + "Split2", s2)
+    if band_edge(l1) is not None or band_edge(l2) is not None:
+        out += "; leader %s = %g, %s = %g" % (letter + "Leader1", l1,
+                                              letter + "Leader2", l2)
+    return out
 
 
 def band_diagnosis(p, ea, ss):
@@ -668,19 +901,24 @@ def band_diagnosis(p, ea, ss):
     name = getattr(p, "Name", "?")
     us = split_pair(p, "U")
     vs = split_pair(p, "V")
-    nu, nv = len(build_intervals(*us)), len(build_intervals(*vs))
+    ul = leader_pair(p, "U")
+    vl = leader_pair(p, "V")
+    nu, nv = (len(build_intervals(*us, *ul)),
+              len(build_intervals(*vs, *vl)))
     if ea[0] == "U":  # seam along U: band fixes a V interval, spans U
         band_letter, along_letter, n_along = "V", "U", nu
         along = us
-        band_ivs = build_intervals(*vs)
+        along_l = ul
+        band_ivs = build_intervals(*vs, *vl)
     else:             # seam along V: band fixes a U interval, spans V
         band_letter, along_letter, n_along = "U", "V", nv
         along = vs
-        band_ivs = build_intervals(*us)
+        along_l = vl
+        band_ivs = build_intervals(*us, *ul)
     # the band is the first (side 0) or the last (side 1) interval
     band_iv = band_ivs[0] if ss == 0 else band_ivs[-1]
     width = band_iv[1] - band_iv[0]
-    excluded = sorted(corner_cells(along[0], along[1], n_along))
+    excluded = sorted(corner_cells(along[0], along[1], n_along, *along_l))
     left = n_along - len(excluded)
     if band_at_end(*split_pair(p, band_letter), ss) is None:
         fix = ("the band axis has no edge at this end, so its band cell is "
@@ -753,30 +991,31 @@ def band_extent(p, ea, ss):
     corner (0 or 1).
 
     The band is ONE cell (#82), so the along-seam axis has exactly one
-    corner cell at the junction end and the band's own along-seam extent
-    is the interval next to it.  An axis with a corner cell at BOTH ends
-    (or none) cannot say which end the junction is at -- refused by name
-    rather than guessed."""
+    corner region at the junction end and the band's own along-seam extent
+    is the one interval that is left.  An axis whose band edge sits at BOTH
+    ends (or neither) cannot say which end the junction is at -- refused by
+    name rather than guessed.
+
+    #119: with a LEADER cut at the junction end the corner region is TWO
+    intervals (the end sliver and the cell between the setback and the
+    leader), so the junction end is read from the BAND EDGE's own end --
+    that is what says where the band reaches -- and the exclusion is the
+    set `corner_cells` returns.  With no leader that is the same one
+    interval, and the same two refusals, as before."""
     along_letter, band_letter = seam_axis_roles(ea)
     along_pair = split_pair(p, along_letter)
+    along_l = leader_pair(p, along_letter)
     band_pair = split_pair(p, band_letter)
-    along_ivs = build_intervals(*along_pair)
-    band_ivs = build_intervals(*band_pair)
-    corners = corner_cells(*along_pair, len(along_ivs))
+    band_l = leader_pair(p, band_letter)
+    along_ivs = build_intervals(*along_pair, *along_l)
+    band_ivs = build_intervals(*band_pair, *band_l)
+    corners = corner_cells(*along_pair, len(along_ivs), *along_l)
+    idx, _n, corner_end = corner_cell_index(*along_pair, *along_l)
     name = getattr(p, "Name", "?")
-    if len(corners) != 1:
-        return None, ("the band on %s has %d corner cells on its %s axis, "
-                      "so it does not reach exactly one junction corner"
-                      % (name, len(corners), along_letter))
-    idx = next(iter(corners))
+    if idx is None or corner_end is None:
+        return None, ("the band on %s does not reach exactly one junction "
+                      "corner on its %s axis" % (name, along_letter))
     corner_set = set(corners)
-    if idx == 0:
-        corner_end = 0
-    elif idx == len(along_ivs) - 1:
-        corner_end = 1
-    else:
-        return None, ("the band on %s has its corner cell in the middle of "
-                      "the %s axis" % (name, along_letter))
     if not band_ivs:
         return None, "the band on %s has no interval" % name
     keep = [i for i in range(len(along_ivs)) if i not in corner_set]

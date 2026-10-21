@@ -119,24 +119,73 @@ creates them anymore.
   is the DEFAULT** (#119; the owner, 2026-10-21: *"the rolling corner fill
   should be the default fill!"*). The switch lives in the OPS LAYER
   (`SilkWorkflowOps.create_corner_blend(..., construction=...)`):
-  `"rolling"` (the default) = the 66 over the ring's CUT cells (the
-  band's corner-side cut IS the rolling leader) plus the small triangular
-  member whose FACE is a FreeCAD `Surface::Filling` (the owner's
-  replacement of the spiderweb; the silk member behind it is hidden);
-  `"shipped"` (the fallback) = the 66 with the spiderweb member, byte for
-  byte the construction of before #119. No new button: the wizard's corner
-  step and the toolbar command both call the ops layer.
+  `"rolling"` (the default) = the 66 over the ring's cells plus the small
+  triangular member whose FACE is a FreeCAD `Surface::Filling` (the
+  owner's replacement of the spiderweb; the silk member behind it is
+  hidden); `"shipped"` (the fallback) = the 66 with the spiderweb member,
+  byte for byte the construction of before #119. No new button: the
+  wizard's corner step and the toolbar command both call the ops layer.
+- **The rolling leader is a CUT OF ITS OWN** (#119, additive):
+  `ULeader1/2`, `VLeader1/2` on the member's patch, defaulting to the
+  sentinels — so a patch that never carries one reads exactly the two band
+  edges it always read and every existing document builds byte-identically
+  (0.00e+00). The band edge stays the user's SETBACK. A leader that does
+  not CLEAR the band edge at its own end is INERT (`axis_cuts`), and the
+  corner stage refuses it by name (`leader_cut_problem`) and keeps the
+  shipped corner — which is why the default leader is **0.25**, the video's
+  number, and not 1/16: at the default 0.1 band a 1/16 leader has nothing
+  to cut.
+- **The two-surface corner needs the leader to clear the setback**, and
+  that is what makes the member's cell the region BETWEEN the two: the two
+  blends of the member's patch then end their ring rows at
+  (setback, leader) and (leader, setback) — two DIFFERENT points — instead
+  of the one point a corner cell can offer. Measured on the cube corner at
+  leader 0.25: the 66 no longer pinches (no collapsed side), 0.0633 mm²
+  against the tri's 0.0206 mm², the tri a distinct second cell
+  (0.1..0.25)². The price, measured: the seam `k_gap` is **56.65 /mm**
+  (exact) instead of the shipped 9.6e-13, because the cut is on the member
+  patch ONLY — the other patch of a seam keeps its plain band edges, since
+  its own two blends still have to meet at its far cell corner (cutting
+  both patches breaks that pair outright: *"the two grids share no
+  corner"*).
 - **The rolling construction refuses where the cut cannot be placed** — a
   patch with TWO junctions on the seam-parallel axis shares the band edge,
   so the leader has no home. The refusal is ATOMIC (the cut is planned
   before it is written), so the corner stage falls back to the shipped
-  construction there, and says so by name.
+  construction there, and says so by name. #126 (the corner-cell refusal on
+  the owner's own model) is untouched.
 - A `Surface::Filling` whose boundary lives on a Silk object needs that
   object's shape to be a **COMPOUND** (the face + the boundary curves):
   a fill's boundary is a LINK to a sub-shape, and a FACE's sub-names are
   resolved through the shape's element map — a replaced face breaks them
   ("?Edge1") and the fill goes Invalid for good. A compound's children are
-  named BY POSITION, so the names survive the replacement.
+  named BY POSITION, so the names survive the replacement. The names are
+  positions in the SHAPE'S edge list (`Edge%d` of `shape.Edges`), not in the
+  list of non-degenerate edges: a renumbered survivors list hands the fill
+  the collapsed edge whenever that edge is not the last one (#119).
+- **The LEADER CUT exists and the corner stage does not use it yet (#119).**
+  `SilkPatch` carries `ULeader1/2`, `VLeader1/2` — a SECOND cut per axis end,
+  additive and default-off (sentinels per slot, so a patch without one reads
+  exactly the two band edges it always read; every existing document is
+  byte-identical). `SilkMachinery` reads it (`axis_cuts`, `build_intervals`,
+  `axis_intervals`, `corner_cell_index`, `corner_cells`, `band_extent`,
+  `band_cells`), the corner cell is then the interval BETWEEN the setback and
+  the leader, a leader that does not clear its band edge is INERT
+  (`axis_cuts`) and named (`leader_cut_problem`), and `Tests/test_leader_cut.py`
+  pins all of it. **What it buys, measured:** with the leader-bounded cell the
+  ring assembles with the member's REAL row as its ring row, so the 66 stops
+  at the member's cell instead of sweeping over it — 0.0633 mm² against the
+  member's 0.0206 mm², no collapsed side, the two surfaces TILING the corner
+  (renders: `Resources/Test_files/_inspect/after_*.png`). **Why it is not
+  shipped:** that arrangement FOLDS — the member-side interior rows,
+  extrapolated from the member's own rows, flip the normal field 25/53/96
+  times at n = 39/81/150 and the fine mesh self-intersects;
+  `smooth_degenerate_cap` fixes a COLLAPSED side and this arrangement has
+  none there. The corner stage therefore keeps writing the leader into the
+  BAND EDGE (today's behaviour) until the member side has a re-solve, and the
+  seam `k_gap` it leaves (56.65 /mm in the two-surface arrangement, against
+  the shipped 9.6e-13) is part of the same open question. Numbers:
+  `docs/research/silk-rolling-corner-66.md`.
 - Builds the real subgrid chain — `SubGrid33_2Grid64` ×4 →
   `ControlGrid66_4Sub` → `CubicSurface_66` — ported into `SilkMachinery`
   (`corner_ring`, `corner_grid`, `subgrid33_2grid64`, `control_grid66_4sub`)

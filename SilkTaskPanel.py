@@ -109,7 +109,8 @@ from SilkBlend import BLEND_TYPES
 from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge, \
     create_corner_blend
 from SilkMachinery import patch_side, side_of_edge, build_intervals, \
-    corner_cells, split_pair, axis_splits, band_at_end, loop_order
+    corner_cells, split_pair, axis_splits, band_at_end, loop_order, \
+    leader_pair, NO_LEADER_1, NO_LEADER_2
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -2680,21 +2681,27 @@ def write_band_split(entry, which, value):
     return True
 
 
-def _band_cell_count(along_pair, band_pair, etype, ss):
+def _band_cell_count(along_pair, band_pair, etype, ss,
+                     along_leader=(NO_LEADER_1, NO_LEADER_2)):
     """How many subgrid cells the band covers, from a CANDIDATE axis
     layout -- the arithmetic of SilkMachinery.band_cells, expressed on
     `(Split1, Split2)` pairs instead of on a live patch so a width can be
     checked before it is written.
 
+    `along_leader` is the seam-parallel axis's LEADER cut pair (#119): it
+    adds intervals exactly the way a band edge does, so the count is only
+    right when it is handed over. The default is "no leader", which is what
+    a patch without one reads.
+
     Only the shared pure helpers are used (build_intervals, corner_cells);
     Tests/test_task_panel.py pins this against the real band_cells on a
     patch after the write, so the two can never drift apart silently.
     """
-    n_along = len(build_intervals(*along_pair))
+    n_along = len(build_intervals(*along_pair, *along_leader))
     n_band = len(build_intervals(*band_pair))
     if etype[0] == "U":     # seam along U: band fixes a V interval
         return n_along - len(corner_cells(along_pair[0], along_pair[1],
-                                          n_along))
+                                          n_along, *along_leader))
     return n_band - len(corner_cells(band_pair[0], band_pair[1], n_band))
 
 
@@ -2753,7 +2760,8 @@ def band_cell_problem(entry, which, value=None):
     band_pair[end] = _stored_from_width(float(value), ss) \
         if value is not None else band_pair[end]
     along_pair = split_pair(p, along_letter)
-    n = _band_cell_count(along_pair, band_pair, etype, ss)
+    n = _band_cell_count(along_pair, band_pair, etype, ss,
+                         leader_pair(p, along_letter))
     if n != 1:
         # the axis the CELL COUNT came from: the seam-parallel one for a
         # seam along U, the band one otherwise.

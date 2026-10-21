@@ -38,7 +38,8 @@ import ArachNURBS as AN
 
 from SilkBlend import band_cells, side_and_end, seam_direction, BLEND_TYPES, \
     ensure_grid_toggle, migrate_shaded_display
-from SilkMachinery import (build_intervals, split_pair, corner_ring,
+from SilkMachinery import (build_intervals, axis_intervals, split_pair,
+    leader_pair, band_edge, corner_cell_index, corner_ring,
     corner_grid, orient_junction_row, corner_ring_3,
     control_grid64_3_1, reverse_grid_rows, set_grid_display)
 
@@ -62,6 +63,50 @@ CORNER_DEFAULT_TOL = 0.01
 # `SubGrid33_2Grid64` uses `default_tol` = 1e-6; the corner poles are
 # exact, so a tight tolerance is right and cannot match two corners.
 CORNER_TOL = 1e-6
+
+# The order the triangular member's two row orientations are tried in
+# (#119).  `control_grid64_3_1` collapses row 3 -- upstream's own layout,
+# where row 3 IS the selected corner -- so the member's REAL row (the curve
+# that flows round the corner, the one the ring's other members meet) sits on
+# row 0 in the net as built.  The ring convention puts every member's
+# junction-end row at V = 3 (`orient_junction_row` does it for the strips),
+# so the member is tried REVERSED first: that is the orientation in which the
+# ring reads its real row.  Read as-built, a ring hands its collapsed row to
+# the 6x6, one whole side of the corner fill becomes a point, and the fill
+# sweeps over the member's own cell instead of sitting beside it (measured
+# #119: the member's face lies 0.0002-0.017 mm off the corner fill, i.e.
+# inside it).
+#
+# AS-BUILT IS THE ORDER FOR EVERY CORNER WITHOUT A LEADER CUT, and that is
+# what keeps every pre-#119 corner pole-identical -- measured, not assumed:
+# the cube corner's shipped cap relies on the collapsed row sitting at V = 3,
+# where `smooth_degenerate_cap` re-solves the interior rows (25/53/96
+# normal-field flips and a self-intersecting cap when the order is forced the
+# other way).  The reversed order is used exactly where the leader cut makes
+# the member's real row its ring row, i.e. on a patch that carries one.
+_MEMBER_ROW_ORDER_LEADER = (True, False)
+_MEMBER_ROW_ORDER = (False, True)
+
+
+def _member_row_order(pth):
+    """The order the member's row orientations are tried in: AS BUILT.
+
+    #119 tried the other order on a patch that carries a leader cut, so the
+    member's REAL row (which the leader-bounded cell puts on the cell's
+    mixed corners) would be the ring row at V = 3 like every strip's.  That
+    arrangement DOES produce the owner's two-patch corner -- the 66 stops at
+    the member's cell instead of sweeping over it -- and it was measured and
+    rendered: the 66 comes out at 0.0633 mm2 against the member's 0.0206,
+    with no collapsed side.  IT IS NOT SHIPPED, because it FOLDS: the
+    member-side interior rows, extrapolated from the member's own rows, flip
+    the normal field 25/53/96 times at n = 39/81/150 and the fine mesh
+    self-intersects -- `smooth_degenerate_cap` fixes the COLLAPSED side, and
+    this arrangement has none there.  The two-surface corner therefore waits
+    on a member-side re-solve, and until it has one the as-built order (the
+    collapsed row at V = 3, the cap smoothing's own case) is what builds.
+    #119's research note carries the numbers.
+    """
+    return _MEMBER_ROW_ORDER
 
 
 # ---- the pure corner derivation (#91) ------------------------------------
@@ -87,8 +132,8 @@ def _corner_cell_net(p, cell):
     pth, iu_c, iv_c, _nu, nv = cell
     if pth is not p:
         return None, None
-    us = build_intervals(*split_pair(p, "U"))
-    vs = build_intervals(*split_pair(p, "V"))
+    us = axis_intervals(p, "U")
+    vs = axis_intervals(p, "V")
     if not (0 <= iu_c < len(us) and 0 <= iv_c < len(vs)):
         return None, None
     getter = getattr(getattr(p, "Proxy", None), "getSubgrid", None)
@@ -240,7 +285,7 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
         poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
         if poles_c is None:
             return None, None
-        for rev in (False, True):
+        for rev in _member_row_order(pth):
             mp, mw = control_grid64_3_1(poles_c, weights_c, corner)
             if mp is None:
                 continue
@@ -257,7 +302,7 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
         if poles_c is None:
             continue
         for corner in range(4):
-            for rev in (False, True):
+            for rev in _member_row_order(pth):
                 mp, mw = control_grid64_3_1(poles_c, weights_c, corner)
                 if mp is None:
                     continue
@@ -389,15 +434,26 @@ def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
         # patch the user handed create_blend first), so the member search
         # runs once as stored -- the documented rings assemble there --
         # and, only if that cannot, once with the ring's columns
-        # normalized.
+        # normalized.  The ring's DIRECTION is tried the same way (#119):
+        # which of the two strips touching the member's patch comes first is
+        # not a free choice a caller makes, it is what the ring order gave,
+        # and the member's two real ring corners are read (V3, U0) and
+        # (V3, U5) -- so a ring traversed the other way can present them
+        # swapped.  Stored order FIRST, so a corner that already assembles
+        # keeps its exact poles.
         pinned, pin_why = ((None, None) if pin is None
                            else _resolve_member_pin(pin, patches))
         if pin is not None and pinned is None:
             return None, None, None, pin_why
         ring = None
-        for base_grids in (list(grids),
-                           _orient_ring_columns(grids, ordered)):
-            ring, member_pin = _tri_ring_member(base_grids, ordered, patches,
+        stored = list(grids)
+        flipped = _orient_ring_columns(grids, ordered)
+        reversed_order = list(reversed(ordered))
+        for base_grids, ord_ in ((stored, ordered),
+                                 (flipped, ordered),
+                                 (list(reversed(stored)), reversed_order),
+                                 (list(reversed(flipped)), reversed_order)):
+            ring, member_pin = _tri_ring_member(base_grids, ord_, patches,
                                                 corner_cells, pinned)
             if ring is not None:
                 break
@@ -560,13 +616,17 @@ class CornerBlend:
         the V-direction seam gives the U side.
 
         `nu` / `nv` are the interval counts of the two named band edges
-        each (#82) -- `len(splits) + 1` used to say "how many splits does
-        this axis carry", and what an axis carries is now, per end, the
-        question "does this end have an edge?". So the count is the
-        number of EDGES on the axis plus one, read off the two properties
-        by name."""
-        nu = len(build_intervals(*split_pair(p, "U")))
-        nv = len(build_intervals(*split_pair(p, "V")))
+        plus the leader cuts (#82 / #119) -- `len(splits) + 1` used to say
+        "how many splits does this axis carry", and what an axis carries is
+        now, per end, the question "does this end have an edge, and a leader
+        cut beyond it?".
+
+        THE CORNER CELL (#119): when the junction end carries a LEADER cut,
+        the corner cell is the interval that ENDS at that cut -- the region
+        between the setback and the leader -- because that is the region the
+        corner fill leaves over once the band is cut back. Without a leader
+        it is the end interval, exactly as before."""
+        nu, nv = len(axis_intervals(p, "U")), len(axis_intervals(p, "V"))
         iu_c = iv_c = None
         for s in strips:
             other = s.PatchB if s.PatchA is p else s.PatchA
@@ -580,10 +640,15 @@ class CornerBlend:
             e, ss = side_and_end(s, p, tol)
             if not e:
                 continue
+            letter = "V" if e[0] == "U" else "U"
+            s1, s2 = split_pair(p, letter)
+            l1, l2 = leader_pair(p, letter)
+            idx, _n, _end = corner_cell_index(s1, s2, l1, l2,
+                                              int(e[1]))
             if e[0] == "U":
-                iv_c = nv - 1 if e[1] == "1" else 0
+                iv_c = idx
             else:
-                iu_c = nu - 1 if e[1] == "1" else 0
+                iu_c = idx
         return iu_c, iv_c, nu, nv
 
     def _refuse(self, fp, why):
@@ -837,10 +902,18 @@ class RollingMemberFace:
         # ("Edge1", "Edge2", ...), so the names survive the replacement
         # -- measured: the fill stays Up-to-date across a band-edge edit
         # that replaces the shape under it.
-        real = [e for e in shape.Edges if e.Length > 1e-9]
+        #
+        # THE NAMES ARE POSITIONS IN `shape.Edges`, NOT IN `real` (#119).
+        # "EdgeN" on a compound resolves to the N-th EDGE OF THE SHAPE, so
+        # a run that keeps only the non-degenerate edges and numbers them
+        # 1..n names the wrong curve whenever the collapsed edge is not the
+        # last one: measured on the leader-cut cell, the fill was handed the
+        # collapsed edge as its second side and refused by name ("Edge1
+        # meets both of its loop neighbours at the SAME end of itself").
+        real = [(i, e) for i, e in enumerate(shape.Edges) if e.Length > 1e-9]
         if len(real) >= 3:
-            fp.Shape = Part.Compound([shape] + real)
-            fp.BoundaryEdges = ["Edge%d" % (i + 1) for i in range(len(real))]
+            fp.Shape = Part.Compound([shape] + [e for _i, e in real])
+            fp.BoundaryEdges = ["Edge%d" % (i + 1) for i, _e in real]
         else:
             fp.Shape = shape
             fp.BoundaryEdges = []

@@ -62,7 +62,9 @@ import ArachNURBS as AN
 from popup import tipsDialog
 
 from SilkMachinery import build_subgrids, build_display, \
-    normalize_edge_pair, split_pair, axis_splits, NO_BAND_1, NO_BAND_2, \
+    normalize_edge_pair, normalize_leader_on_set, ensure_leader_cuts, \
+    split_pair, axis_splits, axis_cuts, axis_has_cuts, leader_pair, \
+    NO_BAND_1, NO_BAND_2, NO_LEADER_1, NO_LEADER_2, \
     loop_order, set_grid_display
 
 import os, Silk_dummy
@@ -121,6 +123,16 @@ class Patch:
         obj.USplit2 = NO_BAND_2
         obj.VSplit1 = NO_BAND_1
         obj.VSplit2 = NO_BAND_2
+        # #119: the LEADER cut, one more cut per axis end and a different
+        # thing from the band edge -- the band edge is the user's SETBACK
+        # (how wide the blend is), the leader is how far the band is cut
+        # back from the junction corner. The rolling corner needs both: the
+        # triangular member's cell is the region BETWEEN them. ADDITIVE and
+        # default-off: a patch that never carries one reads exactly the two
+        # band edges it always read, so every existing document builds
+        # byte-identically. Same sentinel rule (each property's OWN
+        # endpoint), so `band_edge()` reads a leader too.
+        ensure_leader_cuts(obj)
         obj.addProperty("App::PropertyBool", "ShowSurface", "S2 - Display",
                         "show the surface").ShowSurface = True
         obj.addProperty("App::PropertyBool", "ShowGrid", "S2 - Display",
@@ -196,6 +208,7 @@ class Patch:
         # comes back with no bands: the neutral state, exactly what the
         # human asked for ("no backwards compatibility is needed").
         self._ensure_split_properties(obj)
+        ensure_leader_cuts(obj)
         obj.recompute()
 
     @staticmethod
@@ -246,6 +259,11 @@ class Patch:
                 self._normalize_splits_on_set(fp, prop)
             except Exception:
                 pass   # never let housekeeping break the object
+        if prop in ("ULeader1", "ULeader2", "VLeader1", "VLeader2"):
+            try:
+                normalize_leader_on_set(fp, prop)
+            except Exception:
+                pass   # never let housekeeping break the object
         if prop == "ShowGrid":
             # A DISPLAY toggle must not leave the object dirty: FreeCAD
             # sets the Touched flag on every property write, so the next
@@ -270,6 +288,7 @@ class Patch:
         # `ShowSubgrids` DO stay: they decide what `build_display` puts in
         # the shape, so they need the build.
         if prop in ("USplit1", "USplit2", "VSplit1", "VSplit2",
+                    "ULeader1", "ULeader2", "VLeader1", "VLeader2",
                     "ShowSurface", "ShowSubgrids", "reverse"):
             if getattr(self, "_normalizing_splits", False):
                 # This onChanged IS the corrective write _normalize_splits_on_set
@@ -293,7 +312,9 @@ class Patch:
                 # this object's Touched flag only AFTER onChanged returns, so
                 # without it the pass below would skip the patch itself.
                 doc = fp.Document
-                if (prop in ("USplit1", "USplit2", "VSplit1", "VSplit2")
+                if (prop in ("USplit1", "USplit2", "VSplit1", "VSplit2",
+                             "ULeader1", "ULeader2", "VLeader1",
+                             "VLeader2")
                         and doc):
                     doc.recompute()
                 else:
@@ -379,8 +400,7 @@ class Patch:
         set)."""
         if self._base_surface is None:
             return
-        has_subgrids = bool(axis_splits(*split_pair(fp, "U"))
-                             or axis_splits(*split_pair(fp, "V")))
+        has_subgrids = bool(axis_has_cuts(fp, "U") or axis_has_cuts(fp, "V"))
         base_legs = AN.drawGrid(list(fp.Poles), 4) if fp.Poles else []
         sub_legs = self._sub_legs if has_subgrids else []
         build_display(fp, self._base_surface.toShape(), self._subsurfaces,
@@ -863,9 +883,12 @@ class Patch:
         # NAME (#82): each edge belongs to the end that names it.
         u_pair = split_pair(fp, "U")
         v_pair = split_pair(fp, "V")
-        has_subgrids = bool(axis_splits(*u_pair) or axis_splits(*v_pair))
+        u_leader = leader_pair(fp, "U")
+        v_leader = leader_pair(fp, "V")
+        has_subgrids = bool(axis_cuts(*u_pair, *u_leader)
+                            or axis_cuts(*v_pair, *v_leader))
         self._subgrids, self._subgrid_weights, self._subsurfaces, sub_legs = \
-            build_subgrids(surf, u_pair, v_pair)
+            build_subgrids(surf, u_pair, v_pair, u_leader, v_leader)
         self._sub_legs = sub_legs   # cached for _rebuild_display (#59)
         if has_subgrids:
             fp.Legs = sub_legs
