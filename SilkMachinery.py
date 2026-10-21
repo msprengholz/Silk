@@ -457,6 +457,21 @@ def normalize_leader_on_set(obj, prop):
 # `band_edge()` is the leader reading too, one rule for both cuts.
 
 
+def leader_cut_prop(letter, end):
+    """The property that names the LEADER CUT of one END of one axis:
+    `ULeader1` is the parametric-0 end's, `ULeader2` the parametric-1
+    end's -- the band edge's own rule (`SilkBlend.band_edge_prop`), one
+    naming expression per cut so a writer cannot put a leader in the slot a
+    reader looks at the other end for.
+
+    The two cuts are separate properties because they are separate numbers
+    (#119): the band edge is the SETBACK, the leader is how far the band is
+    cut back from the junction corner, and the rolling construction writes
+    the leader here rather than into the band edge -- which is what stops
+    the setback from riding along with it."""
+    return "%sLeader%d" % (letter, end + 1)
+
+
 def leader_pair(p, letter):
     """`(Leader1, Leader2)` of axis `letter` ("U" / "V") of object `p`.
 

@@ -218,22 +218,30 @@ def test_band_edit_still_reaches_blend_and_corner(doc):
     The corner is the proof that the chain is intact end to end: it is
     built from the ring's strips, so it can only move when the strips
     moved.
+
+    WHICH STRIPS READ AN EDGE IS THE CONSTRUCTION'S ANSWER (#128).  The edit
+    is made on a patch that carries ONE cut per axis end (`PatchB`), where
+    the band edge is still the blend's own setback -- so both of its strips
+    must follow.  On the MEMBER patch the rolling construction cut a second
+    edge (the leader), and the band's cells start AT the leader, so its
+    setback moves the member's cell and the corner and no strip: that is
+    measured in the second half rather than asserted away.
     """
     errors, checks = [], []
     model, corner = _cube_corner(doc)
-    pA = model["patches"]["PatchA"]
+    pB = model["patches"]["PatchB"]
     bAB = model["strips"]["B_AB"]
-    bCA = model["strips"]["B_CA"]
+    bBC = model["strips"]["B_BC"]
 
-    before = {n: _poles(s) for n, s in (("B_AB", bAB), ("B_CA", bCA),
+    before = {n: _poles(s) for n, s in (("B_AB", bAB), ("B_BC", bBC),
                                         ("Corner", corner))}
     area_before = corner.Shape.Area
 
     # a user-style band-edge edit on the patch that two ring strips read
-    pA.VSplit1 = 0.2
+    pB.VSplit1 = 0.2
     doc.recompute()
 
-    for name, s in (("B_AB", bAB), ("B_CA", bCA), ("Corner", corner)):
+    for name, s in (("B_AB", bAB), ("B_BC", bBC), ("Corner", corner)):
         after = _poles(s)
         moved = sum(1 for a, b in zip(before[name], after) if a != b)
         if not moved:
@@ -253,6 +261,29 @@ def test_band_edit_still_reaches_blend_and_corner(doc):
         errors.append("document dirty after the edit pass: %s" % left)
     else:
         checks.append("document settles right after the edit")
+
+    # the MEMBER patch's setback reaches the corner the same way (its band's
+    # cells start at the leader, so no strip follows it -- reported, not
+    # hidden)
+    pA = model["patches"]["PatchA"]
+    corner_before = _poles(corner)
+    area_before = corner.Shape.Area
+    strips_before = {n: _poles(s) for n, s in (("B_AB", bAB), ("B_CA",
+                                                              model["strips"]["B_CA"]))}
+    pA.VSplit1 = 0.15
+    doc.recompute()
+    corner_moved = sum(1 for a, b in zip(corner_before, _poles(corner))
+                       if a != b)
+    checks.append("the member patch's setback: the corner moved %d/36 poles, "
+                  "area %.6f -> %.6f; the strips' poles moved %s"
+                  % (corner_moved, area_before, corner.Shape.Area,
+                     {n: sum(1 for a, b in zip(strips_before[n], _poles(s))
+                             if a != b)
+                      for n, s in (("B_AB", bAB),
+                                   ("B_CA", model["strips"]["B_CA"]))}))
+    if not corner_moved or abs(corner.Shape.Area - area_before) < 1e-9:
+        errors.append("the member patch's own setback did not reach the "
+                      "corner -- the member's cell is not being rebuilt")
 
     # and it stays settled
     for i in range(2):

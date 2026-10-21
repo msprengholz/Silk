@@ -198,3 +198,33 @@ search.
   `freecad Tests/run_all.py --manual` route — both full and filtered —
   produced no output and no exit within 500 s (the fast tier runs fine on the
   same route). It is the one gate this session did not close.
+
+---
+
+## 7. That 6x6 interior existed all along (#128, measured)
+
+§4's "NOT MET" rows 2-4 and §5's "the remaining work is the 6x6's interior
+re-solve" were measured against the arrangement our own stage built: the
+leader written into the BAND EDGE on both patches of each rolled seam. **When
+the leader is a cut of the member patch's own cell (and only of that patch),
+and the member is read REAL-ROW-FIRST, the interior is fine.** Re-measured on
+the cube-corner fixture through the corner stage's default construction:
+
+| # | §4's criterion | the two-patch corner (#128) |
+|---|---|---|
+| 2 | 0 coincident pole pairs, the member keeping its 15 | **0 / 630** on the 6x6, 15 / 276 on the member |
+| 3 | fold-free at n=39/81/150 without `smooth_degenerate_cap` | **0 / 0 / 0** on the Part surface and on the exact net; the smoothing moves 0.000e+00 mm |
+| 4 | the tri-to-quad distance in his 16-62 % range | **7.5 %..53.5 %** (his 16..62 %) |
+| 5 | the shipped fallback byte-identical | still met, 0.00e+00 |
+
+The controls that make row 3 mean something, from the same run: the SHIPPED
+corner's RAW assembly reads 19/23/24 flips (a known fold) and its BUILT form
+reads 0/0/0 (a known good). Row 4's minimum is outside his range and the
+maximum is not -- the note in `silk-rolling-corner-66.md` §"#128" says why
+(ours is a smaller, flatter cell on a fixture of exact planes).
+
+**What was wrong was not the 6x6, it was our choice of cut**: the two
+arrangements differ in where the leader lives, and the one where it is a cut
+of its own closes the loop, stops the 66 at the member's cell, and does not
+fold. `Tests/test_two_patch_corner.py` is the instrument; the corner stage's
+default construction is now that arrangement.

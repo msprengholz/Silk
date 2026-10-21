@@ -587,3 +587,85 @@ from the nets his file stores, read offline).  Measured on the same run: our
 66 0.078693 mm² at leader 0.25 and 0.262572 mm² at 0.5; our tri 0.057246 /
 0.228984; the reference's 66 5187.829202 mm² and its tri 1439.902924 mm² —
 all with 0 normal-field flips at n = 39/81/150.
+
+---
+
+# #128: the two-patch corner IS built, and it does not fold
+
+**What this is.** The arrangement #119 measured and rejected as "it FOLDS" was
+re-measured, on the arrangement the maintainer's own file actually carries:
+**the leader cut on the MEMBER PATCH ONLY**, the other two patches of the ring
+keeping one cut per axis end, and the member read REAL-ROW-FIRST.  It was
+built through the corner stage (the DEFAULT construction) and measured with
+the shipped instruments, with the SHIPPED corner working as a two-way
+calibration in the same run.  The measurement module is
+`Tests/test_two_patch_corner.py` (MANUAL); the render is
+`Tests/two_patch_corner_visual.py`.
+
+```
+python3 Tests/run_all.py --manual two_patch_corner        # the table
+flock /tmp/silk_rpc.lock -c "python3 Tests/two_patch_corner_visual.py"
+                                                          # the pictures
+```
+
+## The table (cube-corner fixture, leader 0.25, setback 0.1)
+
+| # | reading | the two-patch corner (default) | his, offline | the shipped corner |
+|---|---|---|---|---|
+| a | `ring_corner_gap` per patch | member patch `('U', 0.1, 0.25)` = OPEN; the other two `None`; `corner_inputs` ASSEMBLES, built net == derivation 0.000e+00 | -- | all three `None` |
+| b | coincident pole pairs, 6x6 | **0 / 630** | 0 | 15 / 630 |
+| b | coincident pole pairs, member | 15 / 276 (its own collapsed row, inside the loop) | 15 / 276 | 15 / 276 |
+| c | normal-field flips, n = 39/81/150, Part surface **and** exact net, NO smoothing | **0 / 0 / 0** | 0 / 0 / 0 | RAW 19/23/24 (known fold); BUILT 0/0/0 |
+| c | `smooth_degenerate_cap` movement | **0.000e+00 mm** (a no-op: no collapsed side) | -- | 5.6e-02 mm |
+| d | tri interior → quad, % of the corner's 0.250 mm extent | **7.5 % .. 53.5 %** (0.01874 .. 0.13374 mm) | 16 % .. 62 % | 0.1 % .. 10 % |
+| d | areas | 66 0.046713 mm², tri 0.020609 mm² | 5187.83 / 1439.90 mm² | 0.011007 / 0.003578 |
+| e | seam `k_gap`, exact | **7.808e-15 .. 1.642e-14 /mm** | -- | 9.594e-13 .. 1.4e-13 |
+| e | seam `k_gap`, sampled | 0.006679 .. 0.009349 /mm (floor 0) | -- | 0.00238 .. 0.004563 |
+| e | the cut's C0 | **1.388e-17 .. 5.551e-17 mm** | -- | 1.4e-17 .. 2.9e-17 |
+| f | settled document (#125) | 0 Touched after the build; three passes 0.0001 s each; the 6x6 poles move **0.000e+00 mm**; a settled pass re-dirties nothing | -- | same |
+| g | filtered corner runs (wall clock) | `--manual corner_choices` 49.3 s → **27.9 s**; `cube_corner_3valent` 19.7 s → **14.9 s**; `rolling_corner_66` 11.1 s → 9.9 s; the whole fast tier 227 tests 93 s → 98 s | -- | -- |
+
+**Why (g) got faster, and it is not a measurement artefact:** the smoothing is
+a 625-site least-squares (`smooth_degenerate_cap`) that every 3-valent corner
+used to run; on the two-patch 6x6 there is no collapsed side, so it returns
+the input.  The corner stage also writes TWO cut properties instead of four
+band edges, so the patches recompute less.
+
+**The one place we are outside his range is (d), and it is not a fold:** his
+tri-to-quad figure starts at 16 %, ours at 7.5 %.  The reading is a MINIMUM
+over the tri's interior samples, so it says how close the tri comes to the
+quad's surface at its nearest interior point; ours is a flatter, smaller cell
+(0.15² against his 0.1875² of a 50 mm corner) on a fixture whose patches are
+exact planes.  The MAXIMUM -- the figure that says the two surfaces are
+distinct bodies rather than one surface folded over itself -- is 53.5 %
+against his 62 %.
+
+## What changed in the code, in one paragraph each
+
+**The cut.**  The rolling construction writes the leader as the MEMBER
+PATCH's own `ULeader1/2` / `VLeader1/2` (`SilkMachinery.leader_cut_prop`),
+not into the band edge, and on the member patch only.  So the setback stays
+the user's and the other patches keep one cut per axis end.  Both cuts go
+through one arithmetic (`SilkWorkflowOps._seam_cut_home`, the mirror at the 1
+end included), and the corner stage REFUSES by name when the planned writes
+do not cut the member patch's cell back on BOTH axes -- a leader that rests on
+the setback is inert, and the arrangement it leaves either refuses or comes
+out with 4 coincident pole pairs (measured).
+
+**The row order.**  `SilkCorner._member_row_order` now answers from the patch:
+REAL-ROW-FIRST when the patch carries a real second cut
+(`ring_corner_gap(pth) is not None`), AS-BUILT otherwise.  Every corner whose
+patch has one cut per axis end is untouched, byte for byte.
+
+**The record.**  `CornerBlend.Construction` says what the stage built
+(`rolling` / `shipped`); the panel offers the choice (default rolling,
+build-time, read-only once the corner exists) and its status line names the
+construction that was built AND the refusal's own wording when the rolling
+one was refused -- the fallback used to live on the console only.
+
+**What is still not his:** the setback/leader pair is OUR cell structure's
+two properties, so an axis's leader is expressed at the junction end of that
+axis, not as a position on the seam curve; and the corner stage cannot build
+the rolling construction on a 4-valent ring at all (no member patch, so
+nowhere to cut).  The `k_gap` and the C0 say the seams are exact; nothing
+here says the corner is G2 (it is not, and #97/#102/#106 stand).

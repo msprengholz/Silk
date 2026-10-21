@@ -229,10 +229,12 @@ def test_manual_measurement_scripts_reachable(doc):
     # #120: this one had a `main()` and NO marker -- the probe the
     # review found.  It is reachable by the same contract as the rest.
     import Tests.g2_corner_fill_probe as fillprobe
+    # #128: the two-patch corner's render, beside the maintainer's own.
+    import Tests.two_patch_corner_visual as twopatch
     errs = []
     checks = []
     for mod in (demo, cm, solve, edge, fill, roll, visual, rolling, ringref,
-                rss, fillprobe):
+                rss, fillprobe, twopatch):
         ok = callable(getattr(mod, "main", None))
         checks.append("%s.main callable: %s" % (mod.__name__, ok))
         if not ok:

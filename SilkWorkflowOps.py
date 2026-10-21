@@ -464,6 +464,7 @@ def create_corner_blend(*strips, name="CornerBlend", pin=None,
                                                  leaders=leaders,
                                                  member_face=member_face)
             if corner is not None:
+                _record_construction(corner, CORNER_CONSTRUCTION_ROLLING)
                 return corner
             # The rolling construction REFUSED BY NAME (it has printed
             # the reason).  The shipped construction is the FALLBACK, and
@@ -473,7 +474,11 @@ def create_corner_blend(*strips, name="CornerBlend", pin=None,
             # seam-parallel axis cannot carry that cut (the band edge is
             # shared by two junctions).  The rolling construction leaves
             # the model untouched when it refuses, so the fallback below
-            # is the shipped corner, byte for byte.
+            # is the shipped corner, byte for byte.  WHICH construction
+            # was built is recorded on the corner (`Construction`), so a
+            # caller -- the panel above all -- can say so instead of
+            # reporting a plain "corner created" for a corner that is not
+            # the one asked for.
             FreeCAD.Console.PrintMessage(
                 "Silk: the rolling corner cannot be built on these %d "
                 "blends, so this corner keeps the shipped construction.\n"
@@ -519,8 +524,75 @@ def create_corner_blend(*strips, name="CornerBlend", pin=None,
         # last doc.recompute() below is the no-op confirmation.
         obj.MemberPatch = pin[0]
         obj.MemberCorner = int(pin[1])
+    # The shipped construction is the one written here (the rolling one
+    # records itself at its own return above), so a corner the panel built
+    # because the rolling construction refused says WHICH one it is.  This
+    # object has not been computed yet, so the record must not clear its
+    # touch flag -- the recompute below is what builds it.
+    _record_construction(obj, CORNER_CONSTRUCTION_SHIPPED, settle=False)
     doc.recompute()
     return obj
+
+
+def _member_cell_cut_problem(patch, planned):
+    """None when the writes in `planned` cut `patch`'s cell back on BOTH of
+    its axes, else the reason as one clause.
+
+    The rolling construction's whole geometry is the cell between the setback
+    and the leader: the member's real row is the segment between that cell's
+    two mixed corners, and the two strips that share the patch end their ring
+    rows on them (`SilkMachinery.ring_corner_gap`).  A leader that does not
+    clear its setback is INERT (`SilkMachinery.axis_cuts`), so the cell on
+    that axis stays the band's own cell and only ONE of the row's ends is a
+    ring corner -- measured on the cube corner, that arrangement builds a 6x6
+    with 4 coincident pole pairs (or refuses outright, depending on which
+    axis it is).
+
+    Read off the INTERVALS the writes will produce, not off the values: the
+    "is it a real cut" question is `axis_cuts`' answer and this must not
+    answer it a second way."""
+    from SilkMachinery import (build_intervals, split_pair, leader_pair,
+                              leader_cut_prop)
+    after = {(p, prop): value for p, prop, _cur, value in planned}
+    for letter in ("U", "V"):
+        s1, s2 = split_pair(patch, letter)
+        l1, l2 = leader_pair(patch, letter)
+        l1 = after.get((patch, leader_cut_prop(letter, 0)), l1)
+        l2 = after.get((patch, leader_cut_prop(letter, 1)), l2)
+        plain = len(build_intervals(s1, s2))
+        cut = len(build_intervals(s1, s2, l1, l2))
+        if cut == plain:
+            return ("its %s axis carries no leader cut that clears the "
+                    "setback (%s = %g, %s = %g, and a leader at or inside "
+                    "the band edge cuts nothing); the cell has to be cut "
+                    "back on both axes"
+                    % (letter, leader_cut_prop(letter, 0), l1,
+                       leader_cut_prop(letter, 1), l2))
+    return None
+
+
+def _record_construction(corner, construction, settle=True):
+    """Write which construction `corner` is onto the object.
+
+    The corner stage is the only place that knows, and the panel, the
+    toolbar command and `apply_corner_choices` all have to agree with it
+    (`SilkCorner.corner_construction` is the reader).
+
+    `settle` clears the touch flag the write raises.  It is True when the
+    corner is ALREADY BUILT (the rolling path returns a corner it recomputed
+    itself, and a property written after that would leave the document dirty
+    for nothing -- #125), and False on a FRESH object, which must reach the
+    caller's own `doc.recompute()` still Touched or it is never built at
+    all."""
+    from SilkCorner import ensure_construction
+    ensure_construction(corner)
+    if corner.Construction != construction:
+        corner.Construction = construction
+        if settle:
+            try:
+                corner.purgeTouched()
+            except Exception:
+                pass
 
 
 def _create_rolling_corner_blend(strips, name="CornerBlend", pin=None,
@@ -535,11 +607,16 @@ def _create_rolling_corner_blend(strips, name="CornerBlend", pin=None,
 
     WHAT IT BUILDS, in the maintainer's order:
 
-      1. the CUT: the rolling leader is written into the band edge that
-         carries it (the band's corner-side cut, on both patches of the
-         seam), and the patches re-cut their base surfaces there.  The
-         cut is a knot line of both nets, so the two pieces meet exactly.
-      2. the 66: the corner fill over the ring's CUT cells.
+      1. the CUT: the rolling leader is written as the member patch's own
+         LEADER CUT (its seam-parallel axis, at the junction end), and the
+         patch re-cuts its base surface there.  The cut is a knot line of
+         the net, so the pieces meet exactly, and the band edge is left
+         alone -- the setback and the leader are two numbers, as they are in
+         the maintainer's model.  The other patches of the ring are NOT cut:
+         the member patch is the only patch whose two ring corners may be two
+         different points (`SilkMachinery.ring_corner_gap`).
+      2. the 66: the corner fill over the ring's CUT cells -- the member's
+         patch contributes the cell BETWEEN its setback and its leader.
       3. the small triangular member BESIDE it, whose FACE is a
          `CubicSurface_64` over the member net by default -- the
          construction the maintainer's own files store -- or, when
@@ -913,48 +990,44 @@ def create_rolling_corner(strips, patch, leader=ROLLING_LEADER, order=1,
 #   * so the corner fill's boundary against each blend is the blend's
 #     CUT EDGE, i.e. it sits AT THE LEADER.
 #
-# IN SILK'S OWN CELL STRUCTURE THE LEADER IS THE PATCH'S NAMED BAND EDGE
-# on the seam-parallel axis: that edge is where the band's own cell
-# starts (the band's along-seam extent begins there) and the patch's
-# base surface is segmented there (the same cut the maintainer's file
-# carries).  This build therefore MOVES that edge -- the cut -- and the
-# corner fill follows it.  Two consequences are reported rather than
-# hidden:
+# IN SILK'S OWN CELL STRUCTURE THE LEADER IS A CUT OF THE PATCH: the
+# patch's LEADER CUT on the seam-parallel axis, at the junction end
+# (`ULeader1` / `VLeader2` -- `SilkMachinery.leader_cut_prop`), which is the
+# property #119 added for exactly this separation.  The band edge stays the
+# user's SETBACK.  The corner fill then follows the leader because the
+# member's cell becomes the region BETWEEN the two cuts, so the two strips
+# that share the member's patch end their junction rows at TWO DIFFERENT
+# points -- the member's real row runs between them -- and the 66 stops at
+# the member's cell instead of sweeping over it (#127).
 #
-#   * Silk's patch carries ONE band edge per axis end (#82), and that
-#     edge is at once the setback of the perpendicular seam and the
-#     leader of this one.  Moving the leader therefore also moves that
-#     setback: the two cannot be told apart in Silk's cell structure.
-#     The maintainer's model has TWO edges per axis (the setback and
-#     the leader) and does not have this coupling.
-#   * the corner fill's SHAPE only follows the leader when the leader
-#     is moved on SOME of the ring's seams.  A uniform leader scales
-#     the whole corner and the shape is unchanged -- measured: the
-#     curvature spread is 1.036938 both ways (the subgrid chain's
-#     extrapolation is scale-invariant).
+# THE CUT IS ON THE MEMBER PATCH ONLY.  It has to be: the member patch is the
+# one patch where two ring pairs meet, so it is the one patch whose two ring
+# corners are legitimately two different points (the two ends of the member's
+# row).  On any other patch a second cut splits the corner cell's far corner
+# in two and the pair no longer meets (`SilkMachinery.ring_corner_gap` names
+# the two numbers; the corner stage refuses with that sentence).  The member
+# patch is also where the maintainer cuts: his corner patch carries the
+# setback AND the leader, and his two blends' cells run out to the leader.
+#
+# The face of the tri is the member's own `control_grid64_3_1` net -- its
+# REAL row on the ring, its collapsed row inside the loop -- and the member
+# is read REAL-ROW-FIRST on that patch (`SilkCorner._member_row_order`).
 
+def _seam_cut_home(strip, patch, leader, prop_of, tol=None):
+    """(property name, value to write, why) -- where THIS seam's rolling
+    leader lives on `patch`, through the property naming `prop_of`.
 
-def _leader_home(strip, patch, leader, tol=None):
-    """(property name, value to write, why) -- the patch property that
-    carries the ROLLING LEADER of this seam: the band edge on the
-    seam-PARALLEL axis, at the junction end, and the value to write
-    into it.
+    One arithmetic for both cuts: the leader is a fraction of the seam
+    measured FROM THE JUNCTION CORNER, and a cut value is a position on the
+    axis measured from the axis's own 0 end, so a junction at the 1 end
+    mirrors the leader (`1 - leader`).  What differs between the two cuts is
+    only the PROPERTY: the band edge (`SilkBlend.band_edge_prop`, the shipped
+    construction's cut) or the leader cut (`SilkMachinery.leader_cut_prop`,
+    the rolling construction's).
 
-    That edge IS the maintainer's leader: his band's cells start there,
-    his base surfaces are cut there, and the corner fill's boundary sits
-    on it.
-
-    THE VALUE.  The leader is a fraction of the seam measured FROM THE
-    JUNCTION CORNER (`ROLLING_LEADER`'s parameter space, one statement
-    for the whole module); a split value is a position on the axis
-    measured from the axis's own 0 end.  The two agree only when the
-    junction is at the 0 end of the axis -- so a junction at the 1 end
-    mirrors the leader (`1 - leader`), which is what `leader_cut` does
-    for the same quantity on the split blend's own cut.
-
-    `None` (with the reason) when the seam cannot say which end of
-    which axis carries it."""
-    from SilkBlend import side_and_end, band_edge_prop
+    `None` (with the reason) when the seam cannot say which end of which
+    axis carries it."""
+    from SilkBlend import side_and_end
     from SilkMachinery import band_extent, seam_axis_roles
     tol = getattr(strip, "tolerance", 0.01) if tol is None else tol
     e, ss = side_and_end(strip, patch, tol)
@@ -967,7 +1040,34 @@ def _leader_home(strip, patch, leader, tol=None):
         return None, None, ext[1]
     corner_end = ext[2]
     value = float(leader) if corner_end == 0 else 1.0 - float(leader)
-    return band_edge_prop(along_letter, corner_end), value, None
+    return prop_of(along_letter, corner_end), value, None
+
+
+def _leader_home(strip, patch, leader, tol=None):
+    """(property name, value to write, why) -- the patch property that
+    carries the ROLLING LEADER of this seam in the SHIPPED construction:
+    the BAND EDGE on the seam-PARALLEL axis, at the junction end.
+
+    That is where the construction of before #119 cut, and it is still the
+    home `apply_corner_choices` uses on a corner whose construction is
+    `"shipped"` -- the leader must go where that construction reads it.
+    The rolling construction writes the LEADER CUT instead
+    (`_leader_cut_home`), which is the same arithmetic in a different
+    property.  See `_seam_cut_home` for the value."""
+    from SilkBlend import band_edge_prop
+    return _seam_cut_home(strip, patch, leader, band_edge_prop, tol)
+
+
+def _leader_cut_home(strip, patch, leader, tol=None):
+    """(property name, value to write, why) -- where the ROLLING
+    construction's leader lives: the patch's LEADER CUT on the seam-parallel
+    axis at the junction end (`ULeader1` / `ULeader2`).
+
+    The band edge is left alone, so the SETBACK no longer rides along with
+    the leader: the two are separate numbers on separate properties, which is
+    the maintainer's own model (setback 1/16, leader 0.25)."""
+    from SilkMachinery import leader_cut_prop
+    return _seam_cut_home(strip, patch, leader, leader_cut_prop, tol)
 
 
 def _ring_of(strips):
@@ -1001,28 +1101,52 @@ def corner_ring_patches(strips):
     return patches, None
 
 
-def seam_leader(strip, patch, tol=None):
+def seam_leader(strip, patch, tol=None, construction=None):
     """`(leader, None)` or `(None, why)`: the rolling leader `patch`'s side
     of `strip` is cut at today.
 
-    Read back through the SAME expression the writer uses (`_leader_home`),
-    so what a panel shows is what the corner stage would write: the
-    seam-parallel BAND edge at the junction end, expressed again as a
-    fraction of the seam measured from the junction corner. A side whose
-    axis carries no band edge yet reads (None, why) -- there is no cut to
-    report."""
+    Read back through the SAME expression the writer uses, so what a panel
+    shows is what the corner stage would write, expressed as a fraction of
+    the seam measured from the junction corner.  WHICH expression depends on
+    the construction, because the two constructions cut in different places:
+
+      * `"rolling"` -- the patch's own LEADER CUT (`_leader_cut_home`), the
+        cut the corner follows; a patch that carries none (every patch but
+        the member's) reads (None, why), because that seam is not rolled;
+      * `"shipped"` -- the BAND EDGE (`_leader_home`), which is where the
+        construction of before #119 cut;
+      * None (the default) reads whichever cut `patch` actually carries: a
+        REAL leader cut when it has one (`ring_corner_gap` says whether the
+        cut clears its band edge), else the band edge.  That is the reading
+        for a corner whose construction was not recorded, and it cannot
+        mistake one for the other: a corner does not carry both."""
     from SilkMachinery import band_edge
-    prop, sentinel, why = _leader_home(strip, patch, 0.0, tol)
+    construction = (str(construction) if construction is not None else None)
+    if construction == "rolling":
+        home = _leader_cut_home
+    elif construction == "shipped":
+        home = _leader_home
+    else:
+        home = _leader_cut_home if _has_leader_cut(patch) else _leader_home
+    prop, sentinel, why = home(strip, patch, 0.0, tol)
     if prop is None:
         return None, why
     stored = band_edge(getattr(patch, prop, 0.0) or 0.0)
     if stored is None:
-        return None, ("%s.%s carries no band edge" % (patch.Name, prop))
-    # `sentinel` is what `_leader_home` writes for a leader of 0: 0.0 when
-    # the junction sits at the axis's 0 end, 1.0 when it sits at the 1 end
+        return None, ("%s.%s carries no cut" % (patch.Name, prop))
+    # `sentinel` is what the home writes for a leader of 0: 0.0 when the
+    # junction sits at the axis's 0 end, 1.0 when it sits at the 1 end
     # (the leader is then mirrored). It is the orientation of the value,
     # and the only thing that has to be undone here.
     return (stored if sentinel == 0.0 else 1.0 - stored), None
+
+
+def _has_leader_cut(patch):
+    """True when `patch` carries a leader cut that CLEARS its band edge --
+    the rolling construction's own cut (`SilkMachinery.ring_corner_gap` is
+    exactly that predicate, and it is the ring's loop rule besides)."""
+    from SilkMachinery import ring_corner_gap
+    return ring_corner_gap(patch) is not None
 
 
 def apply_corner_choices(strips, pin=None, leaders=None):
@@ -1031,6 +1155,14 @@ def apply_corner_choices(strips, pin=None, leaders=None):
     `pin` is `(ring patch or its Name, corner index 0..3)` -- where the
     triangular member is built (#117); `leaders` is
     `{blend or its Name: leader}`, the rolling leader per seam.
+
+    WHERE A SEAM'S LEADER LANDS is the corner's CONSTRUCTION's answer
+    (`SilkCorner.corner_construction`): the rolling construction cuts the
+    member patch's own leader cut and CLEARS a cut left on a patch that is no
+    longer the member's (a second cut on a patch that carries a ring pair
+    splits the pair's shared corner), the shipped construction writes the
+    band edge of both patches of the seam.  A seam the member patch does not
+    touch has no cut under the rolling construction, and says so.
 
     The choices are properties of a BUILT corner (the member's placement and
     the ring's cut positions), so this refuses by name when the ring has no
@@ -1055,6 +1187,8 @@ def apply_corner_choices(strips, pin=None, leaders=None):
     patches, why = corner_ring_patches(ordered)
     if patches is None:
         return None, why
+    from SilkCorner import corner_construction
+    construction, _cnote = corner_construction(corner)
     plan = []
     target = None
     if pin is not None:
@@ -1063,6 +1197,39 @@ def apply_corner_choices(strips, pin=None, leaders=None):
         if target is None:
             return None, why
         ensure_member_pin(corner)
+    # WHERE THE LEADERS GO depends on the construction (`seam_leader` reads
+    # back through the same two expressions):
+    #   rolling -- the member patch's own LEADER CUT, for the seams OF that
+    #              patch, and no cut anywhere else (a second cut on a patch
+    #              that carries a ring PAIR splits that pair's shared corner
+    #              in two, so a cut left behind on a patch that is no longer
+    #              the member's is CLEARED here);
+    #   shipped -- the BAND EDGE of both patches of the seam, which is where
+    #              the construction of before #119 cuts.
+    member_patch = None
+    if construction == CORNER_CONSTRUCTION_ROLLING:
+        member_patch = target[0] if target is not None else None
+        if member_patch is None:
+            member_patch = getattr(corner, "MemberPatch", None)
+        if member_patch is None:
+            from SilkCorner import corner_member_pin, CORNER_DEFAULT_TOL
+            found, _why = corner_member_pin(ordered, CORNER_DEFAULT_TOL)
+            member_patch = found[0] if found is not None else None
+        if member_patch is None:
+            return None, ("the rolling corner cannot place its leader: no "
+                          "patch of this ring carries the triangular "
+                          "member")
+        from SilkMachinery import NO_LEADER_1, NO_LEADER_2, leader_cut_prop
+        for p in patches:
+            if p is member_patch:
+                continue
+            for letter in ("U", "V"):
+                for end, sentinel in ((0, NO_LEADER_1), (1, NO_LEADER_2)):
+                    prop = leader_cut_prop(letter, end)
+                    if abs(float(getattr(p, prop, sentinel) or sentinel)
+                           - sentinel) < 1e-12:
+                        continue
+                    plan.append((p, prop, sentinel))
     seam_writes = []
     for ref, value in (leaders or {}).items():
         name = getattr(ref, "Name", None) or str(ref)
@@ -1083,6 +1250,25 @@ def apply_corner_choices(strips, pin=None, leaders=None):
         if not 0.0 < value < 1.0:
             return None, ("the leader %g for seam %s is not a position inside "
                           "the seam curve (0, 1)" % (value, strip.Name))
+        if construction == CORNER_CONSTRUCTION_ROLLING:
+            if member_patch not in (getattr(strip, "PatchA", None),
+                                    getattr(strip, "PatchB", None)):
+                FreeCAD.Console.PrintMessage(
+                    "Silk: seam %s is not one of %s's seams, so its leader "
+                    "is not used (the rolling cut lives on the patch that "
+                    "carries the triangular member)\n"
+                    % (strip.Name, member_patch.Name))
+                continue
+            prop, write, why = _leader_cut_home(strip, member_patch, value)
+            if prop is None:
+                return None, ("seam %s: %s" % (strip.Name, why))
+            if abs(float(getattr(member_patch, prop, 0.0) or 0.0) - write) \
+                    < 1e-12:
+                seam_writes.append((strip.Name, value))
+                continue
+            plan.append((member_patch, prop, write))
+            seam_writes.append((strip.Name, value))
+            continue
         for p in (getattr(strip, "PatchA", None),
                   getattr(strip, "PatchB", None)):
             if p is None:
@@ -1094,6 +1280,16 @@ def apply_corner_choices(strips, pin=None, leaders=None):
                 continue
             plan.append((p, prop, write))
         seam_writes.append((strip.Name, value))
+    if construction == CORNER_CONSTRUCTION_ROLLING:
+        # The same condition the corner stage refuses on, decided BEFORE the
+        # first write: a leader that does not cut the member's cell back on
+        # both axes leaves a 6x6 with coincident poles (or a refusal deeper
+        # down), and Apply must not be a way around it.
+        why = _member_cell_cut_problem(
+            member_patch, [(p, prop, None, write) for p, prop, write in plan])
+        if why is not None:
+            return None, ("the rolling leader cannot cut the member's cell: "
+                          "%s" % why)
     if not plan and target is None:
         return corner, None
     for p, prop, write in plan:
@@ -1233,6 +1429,20 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
             "Silk: the rolling corner needs the ring's 3 or 4 blends "
             "(got %d). Nothing was created.\n" % len(strips))
         return None
+    if len(strips) == 4:
+        # THE ROLLING CUT LIVES ON THE MEMBER PATCH, and a 4-valent ring has
+        # no member: its fourth side is a real blend.  The cut cannot go
+        # anywhere else either -- a second cut on a patch that carries a ring
+        # PAIR splits that pair's shared corner in two, so the four strips
+        # would stop meeting (`SilkMachinery.ring_corner_gap`).  A 4-valent
+        # ring therefore takes the shipped construction, and this says so
+        # rather than cutting a cell the ring cannot close around.
+        FreeCAD.Console.PrintError(
+            "Silk: the rolling corner is a 3-valent construction -- its cut "
+            "lives on the patch that carries the triangular member -- and "
+            "this ring has 4 strips. Nothing was created; a 4-valent corner "
+            "takes the shipped construction.\n")
+        return None
     if patch is None:
         FreeCAD.Console.PrintError(
             "Silk: the rolling corner needs the pinned patch (the one whose "
@@ -1293,6 +1503,18 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
             return None
     roll = [s for s in strips if s.Name in per_seam] + \
            [s for s in roll if s.Name not in per_seam]
+    # A seam the member patch does not touch has no cut to write: the rolling
+    # leader is a cut of the MEMBER PATCH's cell, and the other patches keep
+    # one cut per axis end (their two strips have to meet at one point).
+    # Said out loud rather than dropped, so a caller that named such a seam
+    # learns why its leader did not land.
+    for s in roll:
+        if patch in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
+            continue
+        FreeCAD.Console.PrintMessage(
+            "Silk: seam %s is not one of %s's seams, so its rolling leader "
+            "is not used (the cut lives on the patch that carries the "
+            "triangular member).\n" % (s.Name, getattr(patch, "Name", "?")))
     # the RING contract, BEFORE the cut: a selection that is not a ring
     # around one junction is refused by name, and the patches' band
     # edges are not written either (the cut is a change to the user's
@@ -1310,8 +1532,12 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
             "%s. Nothing was created.\n" % (len(strips), ring_why))
         return None
 
-    # 1. the CUT: write the leader into the band edge that carries it, on
-    #    both patches of the seam (the seam's cut is one curve).
+    # 1. the CUT: the member patch's own LEADER CUT, one per seam of that
+    #    patch, at the junction end of the seam's axis.  The band edges are
+    #    NOT touched -- the setback is the user's, and the leader is its own
+    #    number -- and no other patch of the ring is cut (only the member
+    #    patch may carry two cuts; a second cut on a patch that carries a
+    #    ring PAIR splits that pair's shared corner in two).
     #
     #    ATOMIC: the writes are PLANNED first and only then applied, so
     #    a refusal ("the band on this patch has two corner cells on its
@@ -1321,20 +1547,34 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
     #    be the shipped corner, byte for byte.
     planned = []
     for s in roll:
+        if patch not in (getattr(s, "PatchA", None),
+                         getattr(s, "PatchB", None)):
+            continue
         seam_leader = per_seam.get(s.Name, leader)
-        for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
-            if p is None:
-                continue
-            prop, value, why = _leader_home(s, p, seam_leader)
-            if prop is None:
-                FreeCAD.Console.PrintError(
-                    "Silk: the rolling leader cannot be placed: %s. The "
-                    "rolling construction was not built.\n" % why)
-                return None
-            cur = float(getattr(p, prop, 0.0) or 0.0)
-            if abs(cur - value) < 1e-12:
-                continue
-            planned.append((p, prop, cur, value))
+        prop, value, why = _leader_cut_home(s, patch, seam_leader)
+        if prop is None:
+            FreeCAD.Console.PrintError(
+                "Silk: the rolling leader cannot be placed: %s. The "
+                "rolling construction was not built.\n" % why)
+            return None
+        cur = float(getattr(patch, prop, 0.0) or 0.0)
+        if abs(cur - value) < 1e-12:
+            continue
+        planned.append((patch, prop, cur, value))
+    # THE CELL MUST BE CUT BACK ON BOTH AXES.  The member's real row runs
+    # between the two ring corners, which are that cell's two MIXED corners:
+    # `(leader, setback)` and `(setback, leader)`.  With the leader on ONE
+    # axis only, the row's two ends are not the ring's two corners, and the
+    # assembly either refuses or comes out DEGENERATE -- measured on the cube
+    # corner with a leader of 0.1 on one axis only (i.e. resting on the
+    # 0.1 setback): 4 coincident pole pairs.  Decided BEFORE the write, so a
+    # refused rolling corner leaves the model as it was.
+    why = _member_cell_cut_problem(patch, planned)
+    if why is not None:
+        FreeCAD.Console.PrintError(
+            "Silk: the rolling leader cannot cut the member's cell: %s. The "
+            "rolling construction was not built.\n" % why)
+        return None
     written = []
     for p, prop, cur, value in planned:
         setattr(p, prop, value)
@@ -1344,15 +1584,14 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
         doc.recompute()
     for pname, prop, old, new in written:
         FreeCAD.Console.PrintMessage(
-            "Silk: the rolling leader moved %s.%s from %g to %g (the band's "
-            "corner-side cut, measured from the junction corner; Silk's "
-            "cell structure ties it to the perpendicular seam's setback as "
-            "well)\n"
+            "Silk: the rolling leader moved %s.%s from %g to %g (the member "
+            "patch's own cut, measured from the junction corner; the band "
+            "edge stays the setback)\n"
             % (pname, prop, old, new))
 
     def _undo_cut():
-        """Put the band edges back: the rolling corner did not build, so
-        the user's model must not keep the cut."""
+        """Put the cut back: the rolling corner did not build, so the
+        user's model must not keep the leader."""
         for p, prop, cur, _value in planned:
             try:
                 setattr(p, prop, cur)

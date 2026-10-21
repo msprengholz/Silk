@@ -78,36 +78,55 @@ CORNER_TOL = 1e-6
 # #119: the member's face lies 0.0002-0.017 mm off the corner fill, i.e.
 # inside it).
 #
-# AS-BUILT IS THE ORDER FOR EVERY CORNER WITHOUT A LEADER CUT, and that is
-# what keeps every pre-#119 corner pole-identical -- measured, not assumed:
-# the cube corner's shipped cap relies on the collapsed row sitting at V = 3,
-# where `smooth_degenerate_cap` re-solves the interior rows (25/53/96
-# normal-field flips and a self-intersecting cap when the order is forced the
-# other way).  The reversed order is used exactly where the leader cut makes
-# the member's real row its ring row, i.e. on a patch that carries one.
+# AS-BUILT IS THE ORDER FOR EVERY CORNER WHOSE PATCH CARRIES ONE CUT PER
+# AXIS END, and that is what keeps every pre-#119 corner pole-identical --
+# measured, not assumed: the cube corner's shipped cap relies on the collapsed
+# row sitting at V = 3, where `smooth_degenerate_cap` re-solves the interior
+# rows (25/53/96 normal-field flips and a self-intersecting cap when the ring
+# row is the member's real one).  The REAL-ROW-FIRST order is used exactly
+# where the patch carries a REAL second cut, i.e. where the rolling leader is
+# its own cut and the member's cell is the region between the setback and the
+# leader (`_member_row_order` states which, and why).
 _MEMBER_ROW_ORDER_LEADER = (True, False)
 _MEMBER_ROW_ORDER = (False, True)
 
 
 def _member_row_order(pth):
-    """The order the member's row orientations are tried in: AS BUILT.
+    """The order the member's row orientations are tried in for `pth`.
 
-    #119 tried the other order on a patch that carries a leader cut, so the
-    member's REAL row (which the leader-bounded cell puts on the cell's
-    mixed corners) would be the ring row at V = 3 like every strip's.  That
-    arrangement DOES produce the owner's two-patch corner -- the 66 stops at
-    the member's cell instead of sweeping over it -- and it was measured and
-    rendered: the 66 comes out at 0.0633 mm2 against the member's 0.0206,
-    with no collapsed side.  IT IS NOT SHIPPED, because it FOLDS: the
-    member-side interior rows, extrapolated from the member's own rows, flip
-    the normal field 25/53/96 times at n = 39/81/150 and the fine mesh
-    self-intersects -- `smooth_degenerate_cap` fixes the COLLAPSED side, and
-    this arrangement has none there.  The two-surface corner therefore waits
-    on a member-side re-solve, and until it has one the as-built order (the
-    collapsed row at V = 3, the cap smoothing's own case) is what builds.
-    #119's research note carries the numbers.
+    TWO ORDERS, AND WHICH ONE IS RIGHT IS A PROPERTY OF THE PATCH.
+
+    AS BUILT (`_MEMBER_ROW_ORDER`) is every corner whose patch carries ONE
+    cut per axis end.  The member's cell is then the patch's corner cell and
+    its collapsed row -- the apex the corner fill pinches at -- lies on the
+    ring's shared corner.  That is the shipped corner, and it is what every
+    pre-#119 corner reads: the cube corner's cap relies on it, where
+    `smooth_degenerate_cap` re-solves the interior rows beside the collapse
+    (25/53/96 normal-field flips and a self-intersecting cap when the order
+    is forced the other way).
+
+    THE MEMBER'S REAL ROW (`_MEMBER_ROW_ORDER_LEADER`) is the patch that
+    carries a REAL SECOND CUT -- a leader cut that clears its own band edge
+    (`SilkMachinery.ring_corner_gap` is the predicate: it is None exactly
+    when the patch carries one cut per axis end).  There the corner cell is
+    the region BETWEEN the setback and the leader, so the member's two ring
+    corners are that cell's two MIXED corners -- `(leader, setback)` and
+    `(setback, leader)` -- and the row that runs between them is the
+    member's REAL row, not its collapsed one.  Read as-built, the ring would
+    hand the 6x6 the collapsed row (one whole side on a point) and the fill
+    would sweep over the member's own cell; read REAL-ROW-FIRST, the member's
+    real row is the ring row at V = 3 like every strip's and the 66 stops at
+    the member's cell.  Measured on the cube-corner fixture: the 66 comes out
+    with 0 coincident pole pairs, NO collapsed side, 0 normal-field flips at
+    n = 39/81/150 without any smoothing, and the member's interior sits
+    7.5 %..53.5 % of the corner's extent from the 66 -- the maintainer's own
+    two-surface corner.  (`Tests/test_two_patch_corner.py`.)
+
+    The order is tried, not assumed: a patch whose real-row reading does not
+    assemble still falls through to the other one.
     """
-    return _MEMBER_ROW_ORDER
+    return (_MEMBER_ROW_ORDER_LEADER if ring_corner_gap(pth) is not None
+            else _MEMBER_ROW_ORDER)
 
 
 # ---- the pure corner derivation (#91) ------------------------------------
@@ -365,9 +384,11 @@ def _ring_gap_reason(patches):
     only when the band edge and the along start (the leader cut, when there
     is one) are the same number at each end of the patch's two axes.  The
     shipped construction writes ONE cut per axis end and therefore passes;
-    a patch carrying a REAL leader cut does not, and the ring's pairs then
-    report "the two grids share no corner" without saying why.  This puts
-    the why into that refusal.
+    a patch carrying a REAL leader cut does not -- EXCEPT the patch that
+    carries the triangular member, whose two ring corners are legitimately
+    two different points (they are the two ends of the member's row, #127).
+    A cut left on any OTHER patch is what opens the ring, and this puts the
+    why into that refusal.
     """
     for pth in patches:
         gap = ring_corner_gap(pth)
@@ -376,7 +397,9 @@ def _ring_gap_reason(patches):
             return ("; the ring's corner is OPEN on %s: its %s axis carries a "
                     "band edge of %g and a leader cut of %g, and a ring "
                     "pair's shared corner needs those two to be one number "
-                    "(#127)" % (pth.Name, letter, across, along))
+                    "(#127) -- only the patch that carries the triangular "
+                    "member may carry both"
+                    % (pth.Name, letter, across, along))
     return ""
 
 
@@ -542,6 +565,49 @@ def ensure_member_pin(obj):
                         "4th member").MemberCorner = 0
 
 
+def ensure_construction(obj):
+    """Which construction the corner stage BUILT, recorded on the corner.
+
+    `Construction` is `"rolling"` (the 66 over the member patch's cut cell
+    plus the triangular member beside it), `"shipped"` (the fallback: the 66
+    with the spiderweb member, byte for byte the construction of before
+    #119) or EMPTY -- a corner built before this was recorded, which is the
+    shipped machinery, and which reads as such (`corner_construction`).
+
+    It is recorded because the construction is not recoverable from the
+    geometry alone and three callers need to say which one they got: the
+    panel (so a refused rolling corner says so instead of reporting a plain
+    "corner created"), the toolbar command, and `apply_corner_choices`,
+    which must write a seam's leader where THAT construction reads it (the
+    band edge for the shipped one, the member patch's leader cut for the
+    rolling one).
+
+    Read-only in the data tab: it is a statement about how the object was
+    built, not an input."""
+    if not hasattr(obj, "Construction"):
+        obj.addProperty("App::PropertyString", "Construction", "Inputs",
+                        "the construction the corner stage built: 'rolling' "
+                        "(the 66 over the member patch's cut cell plus the "
+                        "triangular member) or 'shipped' (the fallback)")
+        obj.Construction = ""
+        obj.setEditorMode("Construction", 2)
+
+
+def corner_construction(obj):
+    """`(construction, note)` of a corner object: which construction it is,
+    and whether that is a RECORDED fact or the default reading.
+
+    A corner that carries no `Construction` (built before it was recorded,
+    or restored from such a document) reads as `"shipped"` -- the machinery
+    of before #119, which is what those corners are."""
+    stored = str(getattr(obj, "Construction", "") or "")
+    if stored in ("rolling", "shipped"):
+        return stored, None
+    return "shipped", ("%s carries no recorded construction, so it is read "
+                        "as the shipped one (the machinery of before the "
+                        "rolling corner)" % getattr(obj, "Name", "?"))
+
+
 def fill_of_member(doc, member):
     """The `Surface::Filling` whose boundary is this member's shape, or
     None.
@@ -577,6 +643,9 @@ class CornerBlend:
         # today's automatic search) and MemberCorner its grid corner index
         # 0..3. Both are inert until MemberPatch is set.
         ensure_member_pin(obj)
+        # Which construction this corner is (the corner stage records it
+        # when it builds; an object built here directly has none yet).
+        ensure_construction(obj)
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs",
                         "corner grid poles (6x6)").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "Outputs",
@@ -600,6 +669,7 @@ class CornerBlend:
         ensure_grid_toggle(obj)
         migrate_shaded_display(obj)
         ensure_member_pin(obj)
+        ensure_construction(obj)
 
     def onChanged(self, fp, prop):
         if prop in ("Strips", "tolerance", "MemberPatch", "MemberCorner"):
@@ -1156,8 +1226,11 @@ class CreateCornerBlend:
         if corner is None:
             return  # the resolver already printed its refusal
         if corner.Name not in known:
+            from SilkCorner import corner_construction
+            built, _note = corner_construction(corner)
             FreeCAD.Console.PrintMessage(
-                "Corner blend created: %s\n" % corner.Name)
+                "Corner blend created: %s (%s construction)\n"
+                % (corner.Name, built))
         # else: the resolver returned the EXISTING corner (no-op) -- its
         # own message already reached the user; do not double-report.
 

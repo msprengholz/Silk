@@ -1,19 +1,29 @@
-"""The corner stage's two OWNER CHOICES, measured (#117 / #119 follow-up).
+"""The corner stage's OWNER CHOICES, measured (#117 / #119 follow-up / #128).
 
-The corner stage used to decide two things on the owner's behalf and give him
-no way to say otherwise:
+The corner stage used to decide things on the owner's behalf and give him no
+way to say otherwise, and the owner's own complaint was: *"why can i
+implement a 3 sided corner, but not select to be rolling immediately?"*
 
+  * WHICH CONSTRUCTION it builds -- the rolling one (the 66 over the member
+    patch's cut cell plus the small triangular surface beside it, the
+    maintainer's two-patch corner) or the shipped one (the 66 with the
+    spiderweb member).  Both are reachable from the ops layer
+    (`create_corner_blend(construction=...)`) and from the panel's selector,
+    the rolling one is the default, and WHICH ONE WAS BUILT is recorded on
+    the corner (`Construction`) so a fallback cannot pass for the real thing.
   * WHICH patch of the ring carries the small triangular surface (the
     triangular 4th member). `MemberPatch` / `MemberCorner` exist (#117), but
     they were only written on the SHIPPED construction's corner -- the
-    rolling construction (the DEFAULT since #119) handed its resolved pin to
-    the cutting step and never wrote it onto the corner it built, so the
-    corner's own `execute()` re-derived the member with the automatic search
-    and the 66 and the tri could disagree about where the member is.
+    rolling construction handed its resolved pin to the cutting step and
+    never wrote it onto the corner it built, so the corner's own `execute()`
+    re-derived the member with the automatic search and the 66 and the tri
+    could disagree about where the member is.
   * HOW FAR ALONG each seam the band is cut back -- the rolling leader --
     per SEAM. `create_corner_blend(leaders={...})` carries one value per
     seam, and the panel mounts one editor per seam of the ring, so the choice
     reaches every patch of the ring rather than only the one the stage picked.
+    The leader is the MEMBER PATCH's own cut (`ULeader1/2`, `VLeader1/2`),
+    the band edge staying the setback (#128).
 
 WHAT IS MEASURED HERE, on the cube-corner fixture
 (`Tests/cube_corner_model.py`, three exact planar squares meeting at one
@@ -25,25 +35,37 @@ say both things:
       follows the patch:
 
         member on   leader 0.25            leader 0.50            bbox max (l=0.25)
-        PatchA[0]     0.057246              0.228984             (0.25, 0.25, 0)
-        PatchB[0]     0.057246              0.228984             (0, 0.25, 0.25)
-        PatchC[0]     0.057246              0.228984             (0.25, 0, 0.25)
+        PatchA[0]     0.020609              0.146550             (0.25, 0.25, 0)
+        PatchB[0]     0.020609              0.146550             (0, 0.25, 0.25)
+        PatchC[0]     0.020609              0.146550             (0.25, 0, 0.25)
 
-      The three areas are EQUAL at one leader -- the three cells are the same
-      square on three planes, which is the fixture's symmetry, not a pin that
-      failed to move (the placements differ, which is what the pin moves).
+      The area is the cell BETWEEN the 0.1 setback and the leader, so it is
+      `(leader - 0.1)^2`-shaped: 0.15^2 = 0.0225 at 0.25 and 0.4^2 = 0.16 at
+      0.5, less the bilinear corner cut.  The three areas are EQUAL at one
+      leader -- the three cells are the same square on three planes, which is
+      the fixture's symmetry, not a pin that failed to move (the placements
+      differ, which is what the pin moves).
 
   (B) ONE LEADER PER SEAM, i.e. an asymmetric roll. Now the three cells are
       three different rectangles, and the area follows the member patch too:
 
-        member on   {B_AB:.5, B_BC:.25, B_CA:.1}   {B_AB:.9, B_BC:.5, B_CA:.2}
-        PatchA[0]            0.045797                      0.164868
-        PatchB[0]            0.114492                      0.412170
-        PatchC[0]            0.022898                      0.091593
+        member on   {B_AB:.5, B_BC:.25, B_CA:.2}   {B_AB:.9, B_BC:.5, B_CA:.3}
+        PatchA[0]            0.036637                      0.146550
+        PatchB[0]            0.054956                      0.293099
+        PatchC[0]            0.013739                      0.073275
 
       Every cell of (B) differs from its neighbours, so "the owner can choose
       which patch carries the tri" is measured on the geometry, not on a
       property write.
+
+      EVERY LEADER THAT CUTS THE MEMBER PATCH MUST CLEAR THE SETBACK.  The
+      cell between the setback and the leader is the member's own cell, on
+      BOTH of the patch's axes; a leader resting on the 0.1 band edge is
+      inert (`SilkMachinery.axis_cuts`), the cell on that axis stays the
+      band's, and the assembly either refuses or comes out with 4 coincident
+      pole pairs.  The stage now refuses that BY NAME instead ("the rolling
+      leader cannot cut the member's cell: its V axis carries no leader cut
+      that clears the setback"), and the fallback is the shipped corner.
 
 Also pinned: the tri's face is a `CubicSurface_64` by DEFAULT (the
 construction the maintainer's own files store) and the FreeCAD fill is the
@@ -231,8 +253,8 @@ def test_the_leader_and_the_member_patch_set_the_tri_area(doc):
                      "pin's effect is the member's PLACEMENT above, not the "
                      "area" if spread <= 1e-9 else "they differ"))
 
-    asymmetric = [{"B_AB": 0.5, "B_BC": 0.25, "B_CA": 0.1},
-                  {"B_AB": 0.9, "B_BC": 0.5, "B_CA": 0.2}]
+    asymmetric = [{"B_AB": 0.5, "B_BC": 0.25, "B_CA": 0.2},
+                  {"B_AB": 0.9, "B_BC": 0.5, "B_CA": 0.3}]
     for leaders in asymmetric:
         got = {}
         for name in PATCH_NAMES:
@@ -371,6 +393,28 @@ def test_apply_writes_the_choices_onto_an_existing_corner(doc):
         FreeCAD.closeDocument(foreign.Name)
         if doc.Name in FreeCAD.listDocuments():
             FreeCAD.setActiveDocument(doc.Name)
+
+    # a leader that cannot cut the member's cell is refused ATOMICALLY: the
+    # rolling corner follows that cut, so Apply must not be a way around the
+    # condition the corner stage refuses on
+    from SilkMachinery import leader_pair
+    before = {n: leader_pair(doc.getObject(n), "U")
+              for n in PATCH_NAMES}
+    blocked, why = apply_corner_choices(
+        strips, leaders={"B_AB": 0.1, "B_BC": 0.25, "B_CA": 0.25})
+    after = {n: leader_pair(doc.getObject(n), "U") for n in PATCH_NAMES}
+    checks.append("an inert leader on the member patch: %r -> %r; the cuts "
+                  "are unchanged: %s"
+                  % (blocked, (why or "")[:110], before == after))
+    if blocked is not None:
+        errors.append("Apply accepted a leader that cannot cut the member's "
+                      "cell")
+    elif not why or "cannot cut the member's cell" not in why:
+        errors.append("the refusal does not reuse the component's wording: %r"
+                      % (why,))
+    if before != after:
+        errors.append("a refused Apply wrote a cut anyway: %s -> %s"
+                      % (before, after))
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -473,6 +517,125 @@ def test_the_panel_exposes_the_member_pin_and_a_leader_per_seam(doc):
                           "(%r -> %r)" % (where, where2))
     finally:
         _close_panel(panel)
+        if doc.Name in FreeCAD.listDocuments():
+            FreeCAD.setActiveDocument(doc.Name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_the_panel_offers_the_construction_and_shows_the_refusal(doc):
+    """THE OWNER'S OWN COMPLAINT (#128): *"why can i implement a 3 sided
+    corner, but not select to be rolling immediately?"*
+
+    Three things the panel must do, each measured on the real panel:
+
+      * offer the CONSTRUCTION, defaulting to the rolling one, while the ring
+        has no corner yet;
+      * build what was chosen, and RECORD it on the object (`Construction`);
+      * say WHICH construction was built when the chosen one was refused --
+        the corner stage falls back to the shipped one, and until #128 that
+        fallback lived on the console only, so the panel said "corner
+        created" and the user got the other construction.
+
+    The refusal is produced the honest way: a leader that rests on the
+    patch's own 0.1 setback cannot cut the member's cell back, so the rolling
+    construction refuses by name and the fallback builds.
+    """
+    from Tests.test_task_panel import _open_panel, _close_panel, _click
+    import SilkTaskPanel as TP
+    from Tests.cube_corner_model import build_cube_corner_model
+    from SilkCorner import corner_construction
+
+    errors, checks = [], []
+    build_cube_corner_model(doc)
+    strips = [doc.getObject(n) for n in STRIP_NAMES]
+    panel = _open_panel(doc)
+    try:
+        panel.sections.open(TP.SECTION_CORNER)
+        for s in strips:
+            _click(s)
+        combo = panel.corner_construction
+        choices = [combo.itemText(i) for i in range(combo.count())]
+        checks.append("the construction selector: %s, showing %r, enabled %s"
+                      % (choices, combo.currentText(), combo.isEnabled()))
+        if sorted(choices) != sorted(["rolling", "shipped"]):
+            errors.append("the selector does not offer both constructions: %s"
+                          % (choices,))
+        if combo.currentText() != TP.CORNER_CONSTRUCTION_DEFAULT:
+            errors.append("the selector does not default to the stage's "
+                          "default (%r), it shows %r"
+                          % (TP.CORNER_CONSTRUCTION_DEFAULT,
+                             combo.currentText()))
+        if not combo.isEnabled():
+            errors.append("the selector is disabled while the ring has no "
+                          "corner -- the construction can never be chosen")
+
+        # (1) the default build: rolling, said so on the status line
+        built = panel.panel_confirm()
+        corner = doc.getObject("CornerBlend")
+        construction, _note = (corner_construction(corner)
+                               if corner is not None else (None, None))
+        checks.append("confirm (default): built=%s, construction=%r, status %r"
+                      % (built, construction, panel.status_text()))
+        if corner is None:
+            errors.append("the default confirm built no corner")
+        elif construction != "rolling":
+            errors.append("the default confirm built the %r construction"
+                          % (construction,))
+        if "rolling" not in panel.status_text():
+            errors.append("the status line does not name the construction "
+                          "that was built: %r" % panel.status_text())
+        if combo.isEnabled():
+            errors.append("the selector stayed editable after the corner was "
+                          "built -- the construction is a build choice")
+    finally:
+        _close_panel(panel)
+        if doc.Name in FreeCAD.listDocuments():
+            FreeCAD.setActiveDocument(doc.Name)
+
+    # (2) a REFUSED rolling corner: the panel names the refusal and the
+    # construction that was built instead
+    sdoc = FreeCAD.newDocument("_corner_refusal")
+    panel2 = None
+    try:
+        FreeCAD.setActiveDocument(sdoc.Name)
+        build_cube_corner_model(sdoc)
+        sstrips = [sdoc.getObject(n) for n in STRIP_NAMES]
+        panel2 = _open_panel(sdoc)
+        panel2.sections.open(TP.SECTION_CORNER)
+        for s in sstrips:
+            _click(s)
+        # a leader that rests on the setback cannot cut the member's cell
+        for spin in panel2._corner_leader_spins.values():
+            spin.setValue(0.1)
+        built = panel2.panel_confirm()
+        corner = sdoc.getObject("CornerBlend")
+        construction, _note = (corner_construction(corner)
+                               if corner is not None else (None, None))
+        status = panel2.status_text()
+        checks.append("a refused rolling corner: built=%s, construction=%r, "
+                      "status %r" % (built, construction, status))
+        if corner is None:
+            errors.append("a refused rolling corner built nothing at all")
+        else:
+            if construction != "shipped":
+                errors.append("the refused rolling corner did not fall back "
+                              "to the shipped one (%r)" % (construction,))
+            if "shipped" not in status:
+                errors.append("the status line does not say which "
+                              "construction was built: %r" % status)
+            if "refused" not in status:
+                errors.append("the status line does not name the refusal: %r"
+                              % status)
+            word = "the rolling leader cannot cut the member's cell"
+            if word not in status:
+                errors.append("the status line does not reuse the component's "
+                              "own refusal wording (%r missing): %r"
+                              % (word, status))
+    finally:
+        if panel2 is not None:
+            _close_panel(panel2)
+        if sdoc.Name in FreeCAD.listDocuments():
+            FreeCAD.closeDocument(sdoc.Name)
         if doc.Name in FreeCAD.listDocuments():
             FreeCAD.setActiveDocument(doc.Name)
     return {"pass": not errors, "errors": errors, "checks": checks}

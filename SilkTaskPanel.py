@@ -108,7 +108,9 @@ from SilkEdge import classify_sketches
 from SilkBlend import BLEND_TYPES
 from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge, \
     create_corner_blend, apply_corner_choices, corner_ring_patches, \
-    existing_corner, seam_leader, ROLLING_LEADER
+    existing_corner, seam_leader, ROLLING_LEADER, CORNER_CONSTRUCTIONS, \
+    CORNER_CONSTRUCTION_ROLLING, CORNER_CONSTRUCTION_SHIPPED, \
+    CORNER_CONSTRUCTION_DEFAULT
 from SilkMachinery import patch_side, side_of_edge, build_intervals, \
     corner_cells, split_pair, axis_splits, band_at_end, loop_order, \
     leader_pair, NO_LEADER_1, NO_LEADER_2
@@ -259,41 +261,49 @@ CORNER_LEADER_COLUMN_WIDTH = 78
 CORNER_LEADER_ROW_HEIGHT = 26
 CORNER_LEADER_TIP = (
     "The rolling leader of THIS seam: where the band is cut back, measured "
-    "from the junction corner along the seam. It is written into the "
-    "seam-parallel band edge of both patches of the seam, which is what "
-    "the corner stage reads. A value equal to the patch's own band edge "
-    "rolls nothing, so the seams the corner does not cut stay as they are.")
+    "from the junction corner along the seam. The ROLLING construction "
+    "writes it as the member patch's own leader cut (its band edge stays "
+    "the setback), so only the seams of the patch that carries the "
+    "triangular surface are cut; the SHIPPED construction writes it into "
+    "the seam-parallel band edge of both patches of the seam. A value equal "
+    "to the patch's own band edge rolls nothing.")
 
 
-def corner_cut_seed(strips):
+def corner_cut_seed(strips, construction=None):
     """The leader each seam of `strips` is cut at RIGHT NOW, per seam name.
 
     What a corner that already exists carries, read back through the writer's
-    own expression (`seam_leader`). A seam whose patches carry no band edge
-    on that axis has no cut to report, so it seeds with `ROLLING_LEADER` --
-    the value the stage writes when it rolls a seam for the first time."""
+    own expression (`seam_leader`, which knows both constructions: the
+    member patch's leader cut for the rolling one, the band edge for the
+    shipped one). A seam that carries no cut has none to report, so it seeds
+    with `ROLLING_LEADER` -- the value the stage writes when it rolls a seam
+    for the first time."""
     out = {}
     for s in strips:
         here = None
         for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
             if p is None:
                 continue
-            here, _why = seam_leader(s, p)
+            here, _why = seam_leader(s, p, construction=construction)
             if here is not None:
                 break
         out[s.Name] = ROLLING_LEADER if here is None else here
     return out
 
 
-def corner_leader_seed(strips, pin=None):
+def corner_leader_seed(strips, pin=None, construction=None):
     """The leader each seam of `strips` will be cut at, per seam name.
 
-    What the corner stage WILL write, not what it happens to find: the
-    seams of the patch that carries the triangular member are cut at
-    `ROLLING_LEADER`, every other seam keeps the cut its patches already
-    carry (so writing that value again is a no-op). That is what makes the
-    panel's untouched state the stage's default instead of a second opinion
-    about it.
+    What the corner stage WILL write, not what it happens to find.  Under
+    the ROLLING construction every seam seeds with `ROLLING_LEADER` unless it
+    already carries a leader cut: the cut lives on the member patch, so the
+    seams of the OTHER patches are not cut at all and the value shown for
+    them is the one the stage would use if the member moved there.  (Seeding
+    them with their band edge -- which reads like a `seam_leader` -- would
+    hand the stage an INERT leader for a seam that becomes the member's, and
+    the rolling cut must clear the setback on both axes of that patch.)
+    Under the SHIPPED construction the leader IS the band edge, so a seam
+    seeds with the edge it already carries and writing it again is a no-op.
 
     `pin` is the member's placement the page asks for; None asks the stage's
     own search (`SilkCorner.corner_member_pin`), because with no pin the
@@ -306,6 +316,17 @@ def corner_leader_seed(strips, pin=None):
             pin = None
     out = {}
     for s in strips:
+        if construction == "shipped":
+            here = None
+            for p in (getattr(s, "PatchA", None),
+                      getattr(s, "PatchB", None)):
+                if p is None:
+                    continue
+                here, _why = seam_leader(s, p, construction="shipped")
+                if here is not None:
+                    break
+            out[s.Name] = ROLLING_LEADER if here is None else here
+            continue
         if pin is not None and (getattr(s, "PatchA", None) is pin[0]
                                 or getattr(s, "PatchB", None) is pin[0]):
             out[s.Name] = ROLLING_LEADER
@@ -314,7 +335,7 @@ def corner_leader_seed(strips, pin=None):
         for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
             if p is None:
                 continue
-            here, _why = seam_leader(s, p)
+            here, _why = seam_leader(s, p, construction="rolling")
             if here is not None:
                 break
         out[s.Name] = ROLLING_LEADER if here is None else here
@@ -1103,9 +1124,35 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         row.addWidget(self.corner_remove_btn)
         lay.addLayout(row)
         lay.addWidget(self._instruction(
-            "The corner stage's two choices are yours: which patch carries "
-            "the small triangular surface, and how far along each seam the "
-            "band is cut back (the rolling leader)."))
+            "The corner stage's three choices are yours: the CONSTRUCTION "
+            "(rolling or shipped), which patch carries the small triangular "
+            "surface, and how far along each seam the band is cut back (the "
+            "rolling leader)."))
+        # WHICH CONSTRUCTION (#128): the rolling corner (the 66 over the
+        # member patch's cut cell plus the triangular member beside it) is
+        # the DEFAULT; the shipped corner is the fallback, and it is the
+        # only one a 4-valent ring can take. A choice made when the corner
+        # is BUILT, so it is read-only once the corner exists -- the panel
+        # then shows the construction the corner stage actually built.
+        construction_row = QtWidgets.QHBoxLayout()
+        construction_row.addWidget(QtWidgets.QLabel("Construction:"))
+        self.corner_construction = QtWidgets.QComboBox()
+        for name in CORNER_CONSTRUCTIONS:
+            self.corner_construction.addItem(name)
+        self.corner_construction.setToolTip(
+            "rolling (the default): the corner fill over the member patch's "
+            "cut cell, plus the small triangular surface beside it -- the "
+            "maintainer's two-patch corner.\n"
+            "shipped: the corner fill with the spiderweb member, the "
+            "construction of before -- the fallback, and the only one a "
+            "4-patch (4-valent) junction can take.")
+        self.corner_construction.setCurrentIndex(
+            max(self.corner_construction.findText(CORNER_CONSTRUCTION_DEFAULT),
+                0))
+        self.corner_construction.currentIndexChanged.connect(
+            lambda _i: self._render_corner_choices())
+        construction_row.addWidget(self.corner_construction, 1)
+        lay.addLayout(construction_row)
         # WHICH PATCH carries the triangular member (#117).
         member_row = QtWidgets.QHBoxLayout()
         member_row.addWidget(QtWidgets.QLabel("Triangular member on:"))
@@ -2340,6 +2387,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         for widget in (self.corner_member_patch, self.corner_member_corner,
                        self.corner_leader_table, self.corner_apply_btn):
             widget.setEnabled(live)
+        self._render_corner_construction(ring, patches)
 
         names = [s.Name for s in ring]
         if names == getattr(self, "_corner_leader_names", None):
@@ -2355,9 +2403,12 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         if not ring:
             seeds = {}
         elif existing_corner(ring) is not None:
-            seeds = corner_cut_seed(ring)
+            from SilkCorner import corner_construction
+            built, _note = corner_construction(existing_corner(ring))
+            seeds = corner_cut_seed(ring, construction=built)
         else:
-            seeds = corner_leader_seed(ring, self._corner_pin(patches))
+            seeds = corner_leader_seed(ring, self._corner_pin(patches),
+                                       construction=self.corner_construction_choice())
         self.corner_leader_table.setRowCount(len(ring))
         self._corner_leader_spins = {}
         for row, s in enumerate(ring):
@@ -2377,6 +2428,54 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             spin.setToolTip(CORNER_LEADER_TIP)
             self.corner_leader_table.setCellWidget(row, 2, spin)
             self._corner_leader_spins[s.Name] = spin
+
+    def _render_corner_construction(self, ring, patches):
+        """Mount the CONSTRUCTION selector: the owner's choice of the corner
+        stage's construction, and the corner stage's own answer once one
+        exists.
+
+        The construction is chosen WHEN THE CORNER IS BUILT (the rolling one
+        also builds the triangular member beside it, the shipped one does
+        not), so the selector is editable exactly while the ring has no
+        corner.  With a corner present it shows what the stage BUILT -- read
+        off the object (`SilkCorner.corner_construction`), not off what the
+        user once asked for -- and is read-only, because a corner cannot be
+        re-constructed in place: the panel would have to delete the member
+        and its face, which is not an edit of this corner's choices."""
+        from SilkCorner import corner_construction
+        corner = existing_corner(ring) if ring else None
+        blocked = self.corner_construction.blockSignals(True)
+        try:
+            if corner is not None:
+                built, _note = corner_construction(corner)
+                idx = self.corner_construction.findText(built)
+                self.corner_construction.setCurrentIndex(max(idx, 0))
+                self.corner_construction.setEnabled(False)
+                self.corner_construction.setToolTip(
+                    "%s was built with the %s construction. The "
+                    "construction is chosen when the corner is built -- "
+                    "delete the corner and confirm again to build the "
+                    "other one."
+                    % (corner.Name, built))
+            else:
+                idx = self.corner_construction.findText(
+                    CORNER_CONSTRUCTION_DEFAULT)
+                self.corner_construction.setCurrentIndex(max(idx, 0))
+                self.corner_construction.setEnabled(bool(patches))
+                self.corner_construction.setToolTip(
+                    "rolling (the default): the corner fill over the "
+                    "member patch's cut cell, plus the small triangular "
+                    "surface beside it -- the maintainer's two-patch "
+                    "corner.\n"
+                    "shipped: the corner fill with the spiderweb member, "
+                    "the construction of before -- the fallback, and the "
+                    "only one a 4-patch (4-valent) junction can take.")
+        finally:
+            self.corner_construction.blockSignals(blocked)
+
+    def corner_construction_choice(self):
+        """The construction the page asks for (the combo's own text)."""
+        return self.corner_construction.currentText()
 
     def _corner_pin(self, patches=None):
         """The `(patch, corner)` the page asks for, or None for "(automatic)"
@@ -2435,6 +2534,16 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         (SilkWorkflowOps), with the collection left intact and nothing
         created. A junction that already has a corner is an idempotent no-op
         that names the existing object.
+
+        WHICH CONSTRUCTION WAS BUILT IS SAID ON THE STATUS LINE.  The corner
+        stage falls back to the shipped construction where the rolling one
+        refuses (a patch carrying two junctions on the seam-parallel axis, a
+        4-valent ring), and until now that fallback lived on the console
+        only -- so the panel said "corner created" and the user got the
+        other construction.  The refusal's own wording (the component's line
+        from inside the build) and the construction that was built instead
+        both land here, and the construction is read off the object the
+        stage built (`SilkCorner.corner_construction`), not off the combo.
         """
         strips = self.collected(SECTION_CORNER)
         stale = self.stale_items()
@@ -2443,11 +2552,13 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         doc = self.doc
         before = {o.Name for o in doc.Objects}
         pin, leaders = self.corner_choices()
+        asked = self.corner_construction_choice()
         doc.openTransaction("Silk corner blend")
         try:
             with _ConsoleTap() as tap:
                 corner = create_corner_blend(*strips, pin=pin,
-                                             leaders=leaders or None)
+                                             leaders=leaders or None,
+                                             construction=asked)
         finally:
             doc.commitTransaction()
 
@@ -2465,11 +2576,31 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                                     else "this junction already has a corner "
                                          "blend (%s)" % corner.Name)
             return False
-        self.status_lbl.setText("%s created from %d blends"
-                                % (corner.Name, len(strips)))
-        FreeCAD.Console.PrintMessage("Corner blend created: %s\n"
-                                     % corner.Name)
+        built, _note = self._built_construction(corner)
+        if built != asked:
+            # The refusal is the component's own line; the construction that
+            # was built instead is the object's own record.
+            why = (tap.errors[-1].strip() if tap.errors
+                   else (tap.messages[-1].strip() if tap.messages else ""))
+            self.status_lbl.setText(
+                "%s created from %d blends with the %s construction -- the "
+                "%s construction was refused: %s"
+                % (corner.Name, len(strips), built, asked,
+                   why or "no reason given"))
+        else:
+            self.status_lbl.setText("%s created from %d blends (%s "
+                                    "construction)"
+                                    % (corner.Name, len(strips), built))
+        FreeCAD.Console.PrintMessage("Corner blend created: %s (%s "
+                                     "construction)\n"
+                                     % (corner.Name, built))
         return True
+
+    @staticmethod
+    def _built_construction(corner):
+        """`(construction, note)` of the corner the stage just built."""
+        from SilkCorner import corner_construction
+        return corner_construction(corner)
 
     def _refuse_stale(self, stale):
         item, why = stale[0]

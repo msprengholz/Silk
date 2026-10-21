@@ -62,6 +62,7 @@ EXPECTED_MANUAL = {
     "test_seam_side",
     "test_silkguide",
     "test_task_panel",
+    "test_two_patch_corner",
 }
 
 

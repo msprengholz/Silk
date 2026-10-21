@@ -263,8 +263,8 @@ def test_the_default_corner_is_the_rolling_one(doc):
     construction, and the shipped one is the selectable fallback.
 
     The default (no `construction` argument) must:
-      * move the band's corner-side cut -- the rolling leader -- on the
-        seams of the patch that carries the triangular member,
+      * cut the rolling leader -- as the member patch's own LEADER CUT, its
+        band edge staying the setback (#128),
       * build the small triangular member, whose FACE is its own
         `CubicSurface_64` -- the construction the maintainer's files store
         (#119 follow-up; the FreeCAD filling is the selectable option and is
@@ -327,12 +327,21 @@ def test_the_default_corner_is_the_rolling_one(doc):
     if fill is not None:
         errors.append("the default corner built a FreeCAD member filling "
                       "(%s): the 64 is the default face" % fill.Name)
-    # the leader moved the cut
+    # the leader moved the CUT, and the BAND EDGE is still the setback
     p = doc.getObject("PatchA")
-    checks.append("the cut moved: PatchA.USplit1=%g VSplit1=%g"
-                  % (p.USplit1, p.VSplit1))
-    if abs(p.USplit1 - 0.25) > 1e-12 and abs(p.VSplit1 - 0.25) > 1e-12:
-        errors.append("the default corner did not move the rolling cut")
+    from SilkMachinery import leader_pair, split_pair
+    checks.append("the cut: PatchA band edges %r %r, leader cuts %r %r"
+                  % (split_pair(p, "U"), split_pair(p, "V"),
+                     leader_pair(p, "U"), leader_pair(p, "V")))
+    if 0.25 not in leader_pair(p, "U") or 0.25 not in leader_pair(p, "V"):
+        errors.append("the default corner did not cut the member patch's "
+                      "leader")
+    for name in ("PatchA", "PatchB", "PatchC"):
+        q = doc.getObject(name)
+        if abs(q.USplit1 - 0.1) > 1e-12 or abs(q.VSplit1 - 0.1) > 1e-12:
+            errors.append("the rolling construction moved %s's band edge -- "
+                          "the setback must not ride along with the leader"
+                          % name)
     # and it is NOT the shipped corner
     same = all((a - b).Length < 1e-12 for a, b in
                zip(s_poles, list(corner.Poles)))
@@ -346,61 +355,105 @@ def test_the_default_corner_is_the_rolling_one(doc):
 
 def test_the_leader_is_measured_from_the_junction_corner(doc):
     """The leader is a DISTANCE FROM THE JUNCTION, so a junction at the
-    1 end of an axis mirrors the split value (`1 - leader`).
+    1 end of an axis mirrors the cut value (`1 - leader`).
 
-    The fixture is the 2x2 model (`Tests/corner_model.py`): a 4-valent
-    junction whose patches carry the junction at the 1 end of an axis.
-    The cube-corner fixture has it at the 0 end on every axis, so it
-    cannot see this.
+    Two halves, because one fixture cannot carry both:
+
+      * the GEOMETRY, on the cube corner: the cut the stage writes lies the
+        leader's distance from the junction on the member patch, and the
+        band edge it leaves behind is the setback -- read off the patch's own
+        intervals, not off the property name;
+      * the MIRROR, on the 2x2 model (`Tests/corner_model.py`), whose
+        patches carry the junction at the 1 end of an axis: the arithmetic
+        is the same expression the stage writes with (`_leader_cut_home`),
+        called directly, because a 4-valent ring cannot build a rolling
+        corner at all (#128: its cut lives on the member patch and a
+        4-valent ring has no member).
     """
     errors, checks = [], []
     from SilkBlend import side_and_end
-    from SilkMachinery import band_extent
-    from Tests import corner_model as cm
-    cm.build_corner_model(doc)
-    doc.recompute()
-    doc.recompute()
-    strips = [doc.getObject(n) for n in ("B12", "B24", "B43", "B31")]
-    target = None
-    for s in strips:
-        for p in (s.PatchA, s.PatchB):
-            e, ss = side_and_end(s, p)
-            ext = band_extent(p, e, ss)
-            if ext[0] is not None and ext[2] == 1:
-                target = (s, p)
-                break
-        if target is not None:
-            break
-    if target is None:
-        return {"pass": False,
-                "errors": ["the fixture carries no junction at the 1 end of "
-                            "an axis"],
-                "checks": checks}
-    s, p = target
-    checks.append("the seam %s on %s carries the junction at the 1 end"
-                  % (s.Name, p.Name))
-    res = create_rolling_corner_66(strips, p, leader=0.25, seams=[s],
+    from SilkMachinery import band_extent, leader_pair, split_pair
+
+    # (1) the geometry, on the cube corner
+    _fixture(doc)
+    strips = _strips(doc)
+    patch = doc.getObject("PatchA")
+    rolled = [s for s in strips if s.PatchA is patch or s.PatchB is patch]
+    res = create_rolling_corner_66(strips, patch, leader=0.25, seams=rolled,
                                    name="Roll")
     doc.recompute()
     if res is None:
         return {"pass": False,
                 "errors": ["the rolling corner did not build"],
                 "checks": checks}
-    for q in (s.PatchA, s.PatchB):
-        e2, ss2 = side_and_end(s, q)
-        ext = band_extent(q, e2, ss2)
+    for s in rolled:
+        e2, ss2 = side_and_end(s, patch)
+        ext = band_extent(patch, e2, ss2)
         if ext[0] is None:
-            errors.append("%s: the band's extent cannot be read" % q.Name)
+            errors.append("%s: the band's extent cannot be read" % patch.Name)
             continue
-        (lo, hi), _band, corner_end = ext
-        # the corner's boundary sits at the far end of the band from the
-        # junction: its distance from the junction is the leader
+        (lo, hi), (band_lo, band_hi), corner_end = ext
         away = lo if corner_end == 0 else 1.0 - hi
-        checks.append("%s: the junction at the %d end, the corner's boundary "
-                      "%.4g from it" % (q.Name, corner_end, away))
+        checks.append("%s on %s: the junction at the %d end, the band's cut "
+                      "starts %.4g from it (band edges %r %r, leader cuts "
+                      "%r %r)"
+                      % (s.Name, patch.Name, corner_end, away,
+                         split_pair(patch, "U"), split_pair(patch, "V"),
+                         leader_pair(patch, "U"), leader_pair(patch, "V")))
         if abs(away - 0.25) > 1e-9:
-            errors.append("%s: the corner's boundary is %.4g from the "
-                          "junction, not the leader 0.25" % (q.Name, away))
+            errors.append("%s: the band's cut starts %.4g from the junction, "
+                          "not the leader 0.25" % (s.Name, away))
+        if 0.1 not in split_pair(patch, "U") and 0.1 not in split_pair(
+                patch, "V"):
+            errors.append("%s: the setback is gone from the member patch's "
+                          "band edges" % patch.Name)
+
+    # (2) the mirror, on the 2x2 model's junction at the 1 end
+    from SilkWorkflowOps import _leader_cut_home, seam_leader
+    from Tests import corner_model as cm
+    sdoc = FreeCAD.newDocument("MirrorDoc")
+    try:
+        FreeCAD.setActiveDocument(sdoc.Name)
+        cm.build_corner_model(sdoc)
+        sdoc.recompute()
+        sdoc.recompute()
+        mstrips = [sdoc.getObject(n) for n in ("B12", "B24", "B43", "B31")]
+        target = None
+        for s in mstrips:
+            for p in (s.PatchA, s.PatchB):
+                e, ss = side_and_end(s, p)
+                ext = band_extent(p, e, ss)
+                if ext[0] is not None and ext[2] == 1:
+                    target = (s, p, e)
+                    break
+            if target is not None:
+                break
+        if target is None:
+            errors.append("the 2x2 fixture carries no junction at the 1 end "
+                          "of an axis")
+        else:
+            s, p, e = target
+            prop, value, why = _leader_cut_home(s, p, 0.25)
+            checks.append("the seam %s on %s carries the junction at the 1 "
+                          "end: the cut goes to %s = %g (1 - leader)"
+                          % (s.Name, p.Name, prop, value))
+            if prop is None:
+                errors.append("the cut's home cannot be named: %s" % why)
+            elif abs(value - 0.75) > 1e-12:
+                errors.append("a junction at the 1 end did not mirror the "
+                              "leader: %s = %g, not 0.75" % (prop, value))
+            if prop is not None:
+                setattr(p, prop, value)
+                sdoc.recompute()
+                back, _why = seam_leader(s, p, construction="rolling")
+                checks.append("  read back through `seam_leader`: %r"
+                              % (back,))
+                if back is None or abs(back - 0.25) > 1e-12:
+                    errors.append("the cut reads back as %r, not the leader "
+                                  "0.25 it was written with" % (back,))
+    finally:
+        FreeCAD.closeDocument(sdoc.Name)
+        FreeCAD.setActiveDocument(doc.Name)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 

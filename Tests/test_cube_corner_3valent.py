@@ -24,7 +24,18 @@ patches pass `check_patch` on their own `Edges`, 3 strips pass
 The built corner has 36 poles, one face, a non-empty Shape and an
 idempotent second ask.
 
-MEASURED STATE (ticket-foldfix): upstream's subgrid chain extrapolates
+MEASURED STATE (#128, the DEFAULT construction): the corner stage's default
+is the ROLLING construction, and since #128 that is the maintainer's
+two-patch corner -- the leader is the member patch's own cut, so the member's
+REAL row is the ring row and the 66 stops at the member's cell. On this
+fixture that corner has 0 coincident pole pairs on the 6x6, NO collapsed side,
+and 0 normal-field flips at n=39/81/150 without any smoothing; its numbers
+live in `Tests/test_two_patch_corner.py`, which is the measurement module for
+that construction. The tests below that mention `smooth_degenerate_cap` build
+the SHIPPED 6x6 explicitly (a fixture ring with one cut per axis end), which
+is where a collapsed side exists and the smoothing does the work.
+
+MEASURED STATE (ticket-foldfix, the SHIPPED construction): upstream's subgrid chain extrapolates
 the subgrid interiors PAST the member's collapsed row, which pushed the
 cap's member-side interior beyond the apex and folded it (normal-field
 flips: 19/1521 samples at n=39 on the parity member; the fold was not
@@ -698,13 +709,23 @@ def test_3valent_member_pin_is_opt_in_and_changes_nothing_when_unset(doc):
 
 
 def test_3valent_member_pin_moves_the_member_to_the_named_corner(doc):
-    """#117: setting the pin builds the triangular 4th member at the named
-    ring patch's grid corner. On this fixture the automatic search takes
-    the ring's first patch (PatchA, corner 0); pinning PatchB[0] -- set on
-    the object exactly as the data tab would -- moves the member, and a
-    pin that was IGNORED would leave the poles equal to the automatic
-    build, so the difference is asserted, not just the build."""
+    """#117: the pin builds the triangular 4th member at the named ring
+    patch's grid corner. On this fixture the automatic search takes the
+    ring's first patch (PatchA, corner 0); pinning PatchB[0] moves the
+    member, and a pin that was IGNORED would leave the poles equal to the
+    automatic build, so the difference is asserted, not just the build.
+
+    A PIN CHANGE TAKES THE CUT WITH IT (#128).  The rolling construction's
+    leader is a cut of the MEMBER PATCH's cell, so moving the member to
+    another patch without moving the cut leaves the old patch carrying a
+    real second cut -- and a patch that carries a ring PAIR cannot carry one
+    (`the ring's corner is OPEN on PatchA`).  That refusal is measured here
+    first, and then the one call that moves BOTH (`apply_corner_choices`,
+    the panel's Apply) is measured on the geometry: the corner's poles move
+    away from the automatic build's, and they equal the pinned derivation.
+    """
     import SilkCorner
+    from SilkWorkflowOps import apply_corner_choices
 
     errors, checks = [], []
     ccm.build_cube_corner_model(doc)
@@ -722,26 +743,43 @@ def test_3valent_member_pin_moves_the_member_to_the_named_corner(doc):
     checks.append("automatic (unset pin) build: 36 poles, member at the "
                   "first assembling candidate PatchA[0]")
 
+    # the pin WITHOUT the cut: refused by name, and the ring says which
+    # patch is open
+    grids, _cells, why = SilkCorner.corner_inputs(strips, pin=(patch_b, 0))
+    checks.append("the pin alone (PatchA keeps the cut): %r" % (why,))
+    if grids is not None:
+        errors.append("a pin that leaves the cut on the old member patch "
+                      "assembled -- the ring cannot close there")
+    elif "OPEN on PatchA" not in why:
+        errors.append("the refusal does not name the open ring corner: %r"
+                      % (why,))
+
+    # the pin AND the cut, the way the panel's Apply does it
+    moved, why = apply_corner_choices(
+        strips, pin=(patch_b, 0),
+        leaders={"B_AB": 0.25, "B_BC": 0.25, "B_CA": 0.25})
+    if moved is None:
+        return {"pass": False,
+                "errors": ["apply_corner_choices refused the pin: %s" % why],
+                "checks": checks}
+    doc.recompute()
     grids, _cells, why = SilkCorner.corner_inputs(strips, pin=(patch_b, 0))
     if grids is None:
         return {"pass": False,
-                "errors": ["corner_inputs refused the pin: %s" % why],
+                "errors": ["corner_inputs refused the pinned ring after the "
+                           "cut moved with it: %s" % why],
                 "checks": checks}
     want, _w36, why = corner_grid(grids, SilkCorner.CORNER_TOL)
     if want is None:
         return {"pass": False,
                 "errors": ["corner_grid refused the pinned ring: %s" % why],
                 "checks": checks}
-
-    cb.MemberPatch = patch_b      # the data-tab path; onChanged recomputes
-    cb.MemberCorner = 0
-    doc.recompute()
     db = max((a - b).Length for a, b in zip(cb.Poles, auto))
     dw = max((a - b).Length for a, b in zip(cb.Poles, want))
     faces = len(cb.Shape.Faces) if cb.Shape is not None else 0
-    checks.append("pinned PatchB[0]: %d poles, %d face(s), "
-                  "max|dPole| vs the automatic build %.3e mm (must be != 0), "
-                  "vs the pinned derivation %.3e mm"
+    checks.append("pinned PatchB[0] (the cut moved with it): %d poles, "
+                  "%d face(s), max|dPole| vs the automatic build %.3e mm "
+                  "(must be != 0), vs the pinned derivation %.3e mm"
                   % (len(cb.Poles), faces, db, dw))
     if getattr(cb.MemberPatch, "Name", None) != "PatchB" \
             or int(cb.MemberCorner) != 0:

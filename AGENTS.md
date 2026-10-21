@@ -119,58 +119,61 @@ creates them anymore.
   is the DEFAULT** (#119; the owner, 2026-10-21: *"the rolling corner fill
   should be the default fill!"*). The switch lives in the OPS LAYER
   (`SilkWorkflowOps.create_corner_blend(..., construction=...)`):
-  `"rolling"` (the default) = the 66 over the ring's cells plus the small
-  triangular member beside it; `"shipped"` (the fallback) = the 66 with the
-  spiderweb member, byte for byte the construction of before #119. No new
-  button: the wizard's corner step and the toolbar command both call the ops
-  layer. The tri's FACE is the member's own `CubicSurface_64` by DEFAULT (the
-  construction the maintainer's files store) and a FreeCAD
-  `Surface::Filling` is the selectable option (`member_face="fill"`, the
-  owner's replacement of that surface). The owner's two choices ride the ops
-  layer and the panel: WHICH patch carries the tri (`MemberPatch` /
-  `MemberCorner`, honoured on the rolling path too) and the LEADER PER SEAM
-  (`leaders={seam: value}`, one panel editor per seam of the ring).
-- **The ring LOOP is still OURS** (#119 follow-up, measured): `corner_grid`
-  now accepts the pairings the subgrid algebra produces — the reference's own
-  rings, all 40 of them, come through it at 0.000e+00 (`Tests/
-  test_corner_ring_parity.py`) — but the member's COLLAPSE CORNER IS the
-  ring's shared corner on our cell layout, so no pairing or orientation
-  avoids it: the 6x6 still carries 15 coincident pole pairs and its cap
-  still needs `smooth_degenerate_cap` (unsmoothed: 19/23/24 normal-field
-  flips at n=39/81/150). His zero-coincident 6x6 needs the member's cell to
-  be the region BETWEEN the setback and the leader, and that arrangement
-  opens our ring today (the strips stop sharing corners: "the two grids share
-  no corner"). What is left is which ROWS close the ring — the member-side
-  re-solve, `docs/research/silk-rolling-corner-66.md`.
-- **The rolling leader is a CUT OF ITS OWN** (#119, additive):
-  `ULeader1/2`, `VLeader1/2` on the member's patch, defaulting to the
-  sentinels — so a patch that never carries one reads exactly the two band
-  edges it always read and every existing document builds byte-identically
-  (0.00e+00). The band edge stays the user's SETBACK. A leader that does
-  not CLEAR the band edge at its own end is INERT (`axis_cuts`), and the
-  corner stage refuses it by name (`leader_cut_problem`) and keeps the
-  shipped corner — which is why the default leader is **0.25**, the video's
-  number, and not 1/16: at the default 0.1 band a 1/16 leader has nothing
-  to cut.
-- **The two-surface corner needs the leader to clear the setback**, and
-  that is what makes the member's cell the region BETWEEN the two: the two
-  blends of the member's patch then end their ring rows at
-  (setback, leader) and (leader, setback) — two DIFFERENT points — instead
-  of the one point a corner cell can offer. Measured on the cube corner at
-  leader 0.25: the 66 no longer pinches (no collapsed side), 0.0633 mm²
-  against the tri's 0.0206 mm², the tri a distinct second cell
-  (0.1..0.25)². The price, measured: the seam `k_gap` is **56.65 /mm**
-  (exact) instead of the shipped 9.6e-13, because the cut is on the member
-  patch ONLY — the other patch of a seam keeps its plain band edges, since
-  its own two blends still have to meet at its far cell corner (cutting
-  both patches breaks that pair outright: *"the two grids share no
-  corner"*).
-- **The rolling construction refuses where the cut cannot be placed** — a
-  patch with TWO junctions on the seam-parallel axis shares the band edge,
-  so the leader has no home. The refusal is ATOMIC (the cut is planned
-  before it is written), so the corner stage falls back to the shipped
-  construction there, and says so by name. #126 (the corner-cell refusal on
-  the owner's own model) is untouched.
+  `"rolling"` (the default) = his TWO-PATCH corner — the 66 over the member
+  patch's CUT cell plus the small triangular member beside it, with the 66
+  STOPPING at that cell (#128, measured below); `"shipped"` (the fallback) =
+  the 66 with the spiderweb member, byte for byte the construction of before
+  #119. No new button: the wizard's corner step and the toolbar command both
+  call the ops layer, and the PANEL offers the construction as a selector
+  (build-time choice; read-only once the corner exists) and SAYS WHICH ONE
+  WAS BUILT — a refused rolling corner no longer falls back silently, the
+  status line carries the refusal's own wording (#128).
+  `CornerBlend.Construction` records what the stage built (`"rolling"` /
+  `"shipped"`; empty on an older object = the shipped machinery, read by
+  `SilkCorner.corner_construction`). The tri's FACE is the member's own
+  `CubicSurface_64` by DEFAULT (the construction the maintainer's files
+  store) and a FreeCAD `Surface::Filling` is the selectable option
+  (`member_face="fill"`, the owner's replacement of that surface). The
+  owner's two choices ride the ops layer and the panel: WHICH patch carries
+  the tri (`MemberPatch` / `MemberCorner`, honoured on the rolling path too)
+  and the LEADER PER SEAM (`leaders={seam: value}`, one panel editor per seam
+  of the ring).
+- **THE CORNER IS TWO PATCHES, like his** (#128, measured). The member
+  patch carries TWO cuts per axis — the SETBACK (band edge) and the LEADER
+  (`ULeader1/2`, `VLeader1/2`) — so the member's cell is the region BETWEEN
+  them, its two ring corners are that cell's two MIXED corners, and the
+  member is read REAL-ROW-FIRST (`SilkCorner._member_row_order`, gated on
+  `ring_corner_gap(patch) is not None`). The cube-corner fixture, default
+  build, leader 0.25 / setback 0.1: **0 of 630 coincident pole pairs** on the
+  6x6 (his: 0), no collapsed side, **0 normal-field flips at n=39/81/150
+  without `smooth_degenerate_cap`** (the smoothing is a byte-identical no-op
+  there; the controls that make that reading worth something are in
+  `Tests/test_two_patch_corner.py`: the SHIPPED raw assembly folds 19/23/24
+  and its built form reads 0), the tri's interior **7.5 %..53.5 % of the
+  corner's extent** from the 66 (his 16..62 %), seam `k_gap` 7.8e-15..1.6e-14
+  /mm exact and 0.0067..0.0093 sampled (floor 0), the cut C0 1.4e-17..5.6e-17
+  mm, and the document settles (0 Touched, 0.0001 s a pass, poles move
+  0.000e+00). Areas: 66 0.046713 mm², tri 0.020609 mm². The unchanged-ring
+  facts: `ring_corner_gap` reads OPEN on the member patch ('U', 0.1, 0.25) and
+  CLOSED on the other two — the member patch is the one patch where two
+  different ring corners are CORRECT (#127), and `corner_inputs` assembles.
+- **The setback no longer rides along with the leader.** The rolling cut is
+  the member patch's own property, so the band edge stays the user's setback
+  and only the member patch is cut at all. `apply_corner_choices` writes the
+  leader where the corner's RECORDED construction reads it (the leader cut
+  for `"rolling"`, the band edge for `"shipped"`) and CLEARS a leader cut
+  left on a patch that is no longer the member's — a second cut on a patch
+  that carries a ring PAIR opens that pair's shared corner.
+- **The rolling cut must clear the setback on BOTH axes of the member patch.**
+  A leader resting on the band edge is INERT (`axis_cuts`), the cell on that
+  axis stays the band's, and the assembly either refuses or comes out
+  degenerate (measured: 4 coincident pole pairs). The stage refuses that by
+  name (`the rolling leader cannot cut the member's cell: its V axis carries
+  no leader cut that clears the setback`), atomically, and the fallback is the
+  shipped corner. That is also why the default leader is **0.25**, the video's
+  number, and not 1/16: at the default 0.1 band a 1/16 leader has nothing to
+  cut. A 4-valent ring refuses the rolling construction outright — its cut
+  lives on the member patch and a 4-valent ring has none.
 - A `Surface::Filling` whose boundary lives on a Silk object needs that
   object's shape to be a **COMPOUND** (the face + the boundary curves):
   a fill's boundary is a LINK to a sub-shape, and a FACE's sub-names are
@@ -180,29 +183,20 @@ creates them anymore.
   positions in the SHAPE'S edge list (`Edge%d` of `shape.Edges`), not in the
   list of non-degenerate edges: a renumbered survivors list hands the fill
   the collapsed edge whenever that edge is not the last one (#119).
-- **The LEADER CUT exists and the corner stage does not use it yet (#119).**
-  `SilkPatch` carries `ULeader1/2`, `VLeader1/2` — a SECOND cut per axis end,
-  additive and default-off (sentinels per slot, so a patch without one reads
-  exactly the two band edges it always read; every existing document is
-  byte-identical). `SilkMachinery` reads it (`axis_cuts`, `build_intervals`,
-  `axis_intervals`, `corner_cell_index`, `corner_cells`, `band_extent`,
-  `band_cells`), the corner cell is then the interval BETWEEN the setback and
-  the leader, a leader that does not clear its band edge is INERT
-  (`axis_cuts`) and named (`leader_cut_problem`), and `Tests/test_leader_cut.py`
-  pins all of it. **What it buys, measured:** with the leader-bounded cell the
-  ring assembles with the member's REAL row as its ring row, so the 66 stops
-  at the member's cell instead of sweeping over it — 0.0633 mm² against the
-  member's 0.0206 mm², no collapsed side, the two surfaces TILING the corner
-  (renders: `Resources/Test_files/_inspect/after_*.png`). **Why it is not
-  shipped:** that arrangement FOLDS — the member-side interior rows,
-  extrapolated from the member's own rows, flip the normal field 25/53/96
-  times at n = 39/81/150 and the fine mesh self-intersects;
-  `smooth_degenerate_cap` fixes a COLLAPSED side and this arrangement has
-  none there. The corner stage therefore keeps writing the leader into the
-  BAND EDGE (today's behaviour) until the member side has a re-solve, and the
-  seam `k_gap` it leaves (56.65 /mm in the two-surface arrangement, against
-  the shipped 9.6e-13) is part of the same open question. Numbers:
-  `docs/research/silk-rolling-corner-66.md`.
+- **The LEADER CUT is the rolling construction's own cut** (#119 added it,
+  #128 shipped it). `SilkPatch` carries `ULeader1/2`, `VLeader1/2` — a SECOND
+  cut per axis end, additive and default-off (sentinels per slot, so a patch
+  without one reads exactly the two band edges it always read; every existing
+  document is byte-identical). `SilkMachinery` reads it (`axis_cuts`,
+  `build_intervals`, `axis_intervals`, `corner_cell_index`, `corner_cells`,
+  `band_extent`, `band_cells`), the corner cell is then the interval BETWEEN
+  the setback and the leader, a leader that does not clear its band edge is
+  INERT (`axis_cuts`) and named (`leader_cut_problem`), the property name is
+  one expression (`leader_cut_prop`), and `Tests/test_leader_cut.py` pins all
+  of it. The ROLLING construction writes the leader here, on the member patch
+  only; the SHIPPED construction still writes the band edge (that is where
+  the construction of before #119 cut), and a corner that carries no recorded
+  construction reads as shipped.
 - Builds the real subgrid chain — `SubGrid33_2Grid64` ×4 →
   `ControlGrid66_4Sub` → `CubicSurface_66` — ported into `SilkMachinery`
   (`corner_ring`, `corner_grid`, `subgrid33_2grid64`, `control_grid66_4sub`)
