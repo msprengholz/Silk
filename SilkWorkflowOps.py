@@ -1063,8 +1063,8 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
             prop, value, why = _leader_home(s, p, leader)
             if prop is None:
                 FreeCAD.Console.PrintError(
-                    "Silk: the rolling leader cannot be placed: %s. Nothing "
-                    "was created.\n" % why)
+                    "Silk: the rolling leader cannot be placed: %s. The "
+                    "rolling construction was not built.\n" % why)
                 return None
             cur = float(getattr(p, prop, 0.0) or 0.0)
             if abs(cur - value) < 1e-12:
