@@ -818,8 +818,8 @@ def corner_cell_index(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2, end=None):
 
 def corner_cells(s1, s2, n_intervals, l1=NO_LEADER_1, l2=NO_LEADER_2):
     """Interval indices along one axis that a band must NOT cover -- the
-    corner region at the junction end, reserved for the corner blend op
-    (#28) and the rolling corner's member (#119).
+    corner region at each end, reserved for the corner blend op (#28) and
+    the rolling corner's member (#119).
 
     The exclusion follows the two NAMED edges, one per end:
 
@@ -839,28 +839,39 @@ def corner_cells(s1, s2, n_intervals, l1=NO_LEADER_1, l2=NO_LEADER_2):
     excluded. With no leader the two readings are the same set, which is
     why the pre-#119 behaviour is untouched.
 
+    #126: the two ENDS are read INDEPENDENTLY, one `corner_cell_index` call
+    each.  That is what makes the region come out right on a patch that
+    carries a band edge at BOTH ends of one axis -- two junctions on the
+    same axis, which is the owner's own model (its ring patches carry a
+    third seam on the side opposite the junction) and which a single
+    `end`-less call cannot express: it has to name ONE end, and neither end
+    is more the junction than the other.  Reading per end needs no such
+    name, because the question the exclusion asks is local -- "how far in
+    from THIS end does the corner reach?" -- and it is answered by that
+    end's own cut.  With a leader cut at the junction end and none at the
+    other, the band is then the one cell between them: exactly the cube's
+    answer, and on the demo it is what keeps `band_cells` at ONE cell
+    (`test_rolling_leader_placement`).  A patch with no leader cut reads the
+    very same set it always read.
+
     This is what #61 generalized ("is there a 0.1? drop the first cell /
     a 0.9? drop the last"), with the values read from the ends they
     belong to rather than compared against the middle of the axis, so a
     user width like 0.2 or 0.85 needs no special case and #81's [0.2,
     0.4] is just two ends with two edges."""
     out = set()
-    if band_edge(s1) is None and band_edge(s2) is None:
-        return out
-    idx, n, end = corner_cell_index(s1, s2, l1, l2)
-    if idx is None:
-        # the axis carries a band edge at BOTH ends (or at an end the
-        # leader arithmetic cannot place): each end gets its own end cell,
-        # exactly as before.
-        if band_edge(s1) is not None:
-            out.add(0)
-        if band_edge(s2) is not None:
-            out.add(n_intervals - 1)
-        return out
-    if end == 0:
-        out |= set(range(0, idx + 1))
-    else:
-        out |= set(range(idx, n))
+    for end in (0, 1):
+        if band_edge(s1 if end == 0 else s2) is None:
+            continue
+        idx, n, named = corner_cell_index(s1, s2, l1, l2, end)
+        if idx is None or named is None:
+            # this end's corner cell cannot be placed; its own end interval
+            # is the conservative reading, exactly as before.
+            out.add(0 if end == 0 else n_intervals - 1)
+        elif end == 0:
+            out |= set(range(0, idx + 1))
+        else:
+            out |= set(range(idx, n))
     return out
 
 
@@ -1045,7 +1056,7 @@ def seam_axis_roles(ea):
     return ("U", "V") if ea[0] == "U" else ("V", "U")
 
 
-def band_extent(p, ea, ss):
+def band_extent(p, ea, ss, end=None):
     """((along_lo, along_hi), (band_lo, band_hi), corner_end) or (None, why).
 
     The band's interval ACROSS the seam, the band's interval ALONG the
@@ -1055,15 +1066,25 @@ def band_extent(p, ea, ss):
     The band is ONE cell (#82), so the along-seam axis has exactly one
     corner region at the junction end and the band's own along-seam extent
     is the one interval that is left.  An axis whose band edge sits at BOTH
-    ends (or neither) cannot say which end the junction is at -- refused by
-    name rather than guessed.
+    ends (or neither) cannot say which end the junction is at FROM THE
+    PATCH ALONE -- it is refused by name rather than guessed.
 
     #119: with a LEADER cut at the junction end the corner region is TWO
     intervals (the end sliver and the cell between the setback and the
     leader), so the junction end is read from the BAND EDGE's own end --
     that is what says where the band reaches -- and the exclusion is the
     set `corner_cells` returns.  With no leader that is the same one
-    interval, and the same two refusals, as before."""
+    interval, and the same two refusals, as before.
+
+    #126: `end` is the junction end as the CALLER knows it -- the corner
+    stage, which holds the RING and can read the patch corner the ring's two
+    seams share (`SilkWorkflowOps.seam_junction_end`).  It is used only
+    where the axis cannot name an end itself, which is the owner's own
+    model: a patch with a band edge at BOTH ends of the along-seam axis (two
+    junctions on that axis) is symmetric between them, so the patch says
+    nothing and the ring says which.  A caller that gives an `end` the axis
+    contradicts is refused: two readings, one junction, and picking either
+    would be a guess."""
     along_letter, band_letter = seam_axis_roles(ea)
     along_pair = split_pair(p, along_letter)
     along_l = leader_pair(p, along_letter)
@@ -1074,9 +1095,30 @@ def band_extent(p, ea, ss):
     corners = corner_cells(*along_pair, len(along_ivs), *along_l)
     idx, _n, corner_end = corner_cell_index(*along_pair, *along_l)
     name = getattr(p, "Name", "?")
+    if end is not None:
+        end = int(end)
+        if corner_end is None:
+            corner_end = end
+            # the axis cannot place its corner cell, so read it at the end
+            # the caller named -- the same expression, one argument more.
+            idx, _n, _named = corner_cell_index(*along_pair, *along_l, end)
+        elif corner_end != end:
+            return None, (
+                "the band on %s reaches its band edge at the %d end of its "
+                "%s axis, but the ring reaches the junction at the %d end: "
+                "the two ends are both candidate corners of this seam and "
+                "the patch and the ring disagree about which one is the "
+                "junction" % (name, corner_end, along_letter, end))
     if idx is None or corner_end is None:
         return None, ("the band on %s does not reach exactly one junction "
-                      "corner on its %s axis" % (name, along_letter))
+                      "corner on its %s axis -- both ends carry a band edge "
+                      "(%s = %g, %s = %g), so the two candidate corners "
+                      "are the %s-0 end and the %s-1 end and the patch "
+                      "alone cannot say which one this seam meets; the "
+                      "corner stage reads it off the ring"
+                      % (name, along_letter, along_letter + "Split1",
+                         along_pair[0], along_letter + "Split2",
+                         along_pair[1], along_letter, along_letter))
     corner_set = set(corners)
     if not band_ivs:
         return None, "the band on %s has no interval" % name
@@ -1090,15 +1132,18 @@ def band_extent(p, ea, ss):
     return (along_lo, along_hi), (band_lo, band_hi), corner_end
 
 
-def leader_cut(p, ea, ss, leader):
+def leader_cut(p, ea, ss, leader, end=None):
     """(cut_parameter, corner_end) or (None, why).
 
     Where the seam curve is cut for a leader `leader` (a fraction of the
     seam curve's own parameter, measured from the junction corner).  The
     cut must fall inside the band's own along-seam extent: a leader
     inside the corner cell would cut where the corner blend's own cell
-    lives, and that is refused by name."""
-    ext = band_extent(p, ea, ss)
+    lives, and that is refused by name.
+
+    `end` is `band_extent`'s junction end (#126), for a patch whose axis
+    cannot name one."""
+    ext = band_extent(p, ea, ss, end)
     if ext[0] is None:
         return None, ext[1]
     (along_lo, along_hi), _band, corner_end = ext

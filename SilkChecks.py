@@ -667,7 +667,7 @@ def _pinned_seam(a_c, b_c, ep0, ep1, tol):
     return None
 
 
-def _oracle_corner_cells(s1, s2, n_intervals):
+def _oracle_corner_cells(s1, s2, n_intervals, l1=0.0, l2=1.0):
     """Interval indices along one axis that are CORNER cells — reserved
     for the four-cell corner blend op (#28) and excluded from a band.
 
@@ -692,15 +692,39 @@ def _oracle_corner_cells(s1, s2, n_intervals):
     Written against the NAMES, not against a value threshold, which is
     what removes the pre-#82 guess that made a user's 0.2 or 0.85 fall
     through (#61) and made `[0.2, 0.4]` claim the 1 end had no band (#81).
+
+    #119 / #126, mirrored here the same way: a LEADER cut at an end makes
+    the corner region there the intervals from that end up to and including
+    the one that ends at the leader (the cell between the setback and the
+    leader), and the two ENDS are read INDEPENDENTLY — so a patch carrying a
+    band edge at BOTH ends of one axis (two junctions on it, the owner's own
+    ring patches) keeps the band ONE cell.  Without a leader the reading is
+    the pre-#119 set, cell for cell.
     """
     def has_edge(value):
         v = float(value)
         return 0.0 < v < 1.0
+
+    def index_at_end(end):
+        """The FAR interval of the corner region at `end` — the one ending
+        at the leader cut when that end carries a real one, else the end
+        interval itself.  Mirror of `SilkMachinery.corner_cell_index`."""
+        raw = l1 if end == 0 else l2
+        cuts = _oracle_cuts(s1, s2, l1, l2)
+        if not has_edge(raw) or float(raw) not in cuts:
+            return 0 if end == 0 else n_intervals - 1
+        pos = cuts.index(float(raw))
+        return pos if end == 0 else pos + 1
+
     out = set()
-    if has_edge(s1):
-        out.add(0)
-    if has_edge(s2):
-        out.add(n_intervals - 1)
+    for end in (0, 1):
+        if not has_edge(s1 if end == 0 else s2):
+            continue
+        idx = index_at_end(end)
+        if end == 0:
+            out |= set(range(0, idx + 1))
+        else:
+            out |= set(range(idx, n_intervals))
     return out
 
 
@@ -718,12 +742,47 @@ def _oracle_axis(p, letter):
             float(getattr(p, "VSplit2", 1.0)))
 
 
-def _oracle_intervals(s1, s2):
-    """The intervals one axis is cut into by its two named band edges.
+def _oracle_leader_axis(p, letter):
+    """`(Leader1, Leader2)` of axis `letter` of `p` — the SECOND cut per
+    axis end (#119), mirrored from `SilkMachinery.leader_pair`.
+
+    An object that has neither property (a pre-#119 patch, a legacy
+    `Patch44`, a test stub) reads as "no leader cut at either end", which
+    is the identity: the axis is then cut by its two band edges alone.
+    Read by NAME, like `_oracle_axis`."""
+    if letter == "U":
+        return (float(getattr(p, "ULeader1", 0.0)),
+                float(getattr(p, "ULeader2", 1.0)))
+    return (float(getattr(p, "VLeader1", 0.0)),
+            float(getattr(p, "VLeader2", 1.0)))
+
+
+def _oracle_cuts(s1, s2, l1, l2):
+    """Every cut position one axis carries, ascending — mirror of
+    `SilkMachinery.axis_cuts`: the two band edges plus a leader cut at an
+    end where it CLEARS that end's band edge (a leader inside the band has
+    nothing to cut and is INERT, the identity)."""
+    def edge(value):
+        v = float(value)
+        return v if 0.0 < v < 1.0 else None
+    b1, b2 = edge(s1), edge(s2)
+    led1, led2 = edge(l1), edge(l2)
+    cuts = [v for v in (b1, b2) if v is not None]
+    if led1 is not None and (b1 is None or led1 > b1):
+        cuts.append(led1)
+    if led2 is not None and (b2 is None or led2 < b2):
+        cuts.append(led2)
+    return sorted(set(cuts))
+
+
+def _oracle_intervals(s1, s2, l1=0.0, l2=1.0):
+    """The intervals one axis is cut into by its two named band edges AND,
+    when they are set, its two leader cuts (#119).
 
     Mirrors SilkMachinery.build_intervals rather than importing it (same
-    reason as _oracle_corner_cells)."""
-    s = sorted(set(v for v in (float(s1), float(s2)) if 0.0 < v < 1.0))
+    reason as _oracle_corner_cells).  A patch with no leader reads exactly
+    the intervals it always read."""
+    s = _oracle_cuts(s1, s2, l1, l2)
     if not s:
         return [(0.0, 1.0)]
     return list(zip([0.0] + s, s + [1.0]))
@@ -740,15 +799,18 @@ def _oracle_band_cells(p, etype, ss):
     """
     us = _oracle_axis(p, "U")   # the two named band edges per axis (#82)
     vs = _oracle_axis(p, "V")
-    nu = len(_oracle_intervals(*us))
-    nv = len(_oracle_intervals(*vs))
+    ul = _oracle_leader_axis(p, "U")   # the second cut per end (#119)
+    vl = _oracle_leader_axis(p, "V")
+    nu = len(_oracle_intervals(*us, *ul))
+    nv = len(_oracle_intervals(*vs, *vl))
     if etype[0] == "U":  # seam along U: band fixes V interval, spans U cells
         b = (nv - 1) if ss else 0
-        keep_u = set(range(nu)) - _oracle_corner_cells(us[0], us[1], nu)
+        keep_u = set(range(nu)) - _oracle_corner_cells(us[0], us[1], nu,
+                                                      *ul)
         return [a * nv + b for a in sorted(keep_u)]
     # seam along V: band fixes U interval, spans V cells
     a = (nu - 1) if ss else 0
-    keep_v = set(range(nv)) - _oracle_corner_cells(vs[0], vs[1], nv)
+    keep_v = set(range(nv)) - _oracle_corner_cells(vs[0], vs[1], nv, *vl)
     return [a * nv + b for b in sorted(keep_v)]
 
 
@@ -780,8 +842,10 @@ def _oracle_cell_net(p, idx):
     Returns (None, None) when `idx` is outside the patch's cells.
     """
     proxy = getattr(p, "Proxy", None)
-    us = _oracle_intervals(*_oracle_axis(p, "U"))
-    vs = _oracle_intervals(*_oracle_axis(p, "V"))
+    us = _oracle_intervals(*_oracle_axis(p, "U"),
+                           *_oracle_leader_axis(p, "U"))
+    vs = _oracle_intervals(*_oracle_axis(p, "V"),
+                           *_oracle_leader_axis(p, "V"))
     iu, iv = divmod(int(idx), len(vs))
     getter = getattr(proxy, "getSubgrid", None)
     if getter is not None and iu < len(us) and iv < len(vs):
@@ -1335,8 +1399,10 @@ def _oracle_strip_junction_row(s, strips, tol):
                       % (getattr(s, "Name", None) or s, len(bca), len(bcb)))
     li_map = {}
     for pth, e, bc in ((pa, e_a, bca), (pb, e_b, bcb)):
-        nu = len(_oracle_intervals(*_oracle_axis(pth, "U")))
-        nv = len(_oracle_intervals(*_oracle_axis(pth, "V")))
+        nu = len(_oracle_intervals(*_oracle_axis(pth, "U"),
+                                   *_oracle_leader_axis(pth, "U")))
+        nv = len(_oracle_intervals(*_oracle_axis(pth, "V"),
+                                   *_oracle_leader_axis(pth, "V")))
         iu_c = iv_c = None
         for t in strips:
             te, tss = _oracle_side_and_end(t, pth, tol)

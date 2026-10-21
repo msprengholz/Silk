@@ -284,7 +284,8 @@ def corner_cut_seed(strips, construction=None):
         for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
             if p is None:
                 continue
-            here, _why = seam_leader(s, p, construction=construction)
+            here, _why = seam_leader(s, p, construction=construction,
+                                     ring=strips)
             if here is not None:
                 break
         out[s.Name] = ROLLING_LEADER if here is None else here
@@ -322,7 +323,8 @@ def corner_leader_seed(strips, pin=None, construction=None):
                       getattr(s, "PatchB", None)):
                 if p is None:
                     continue
-                here, _why = seam_leader(s, p, construction="shipped")
+                here, _why = seam_leader(s, p, construction="shipped",
+                                         ring=strips)
                 if here is not None:
                     break
             out[s.Name] = ROLLING_LEADER if here is None else here
@@ -335,7 +337,8 @@ def corner_leader_seed(strips, pin=None, construction=None):
         for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
             if p is None:
                 continue
-            here, _why = seam_leader(s, p, construction="rolling")
+            here, _why = seam_leader(s, p, construction="rolling",
+                                     ring=strips)
             if here is not None:
                 break
         out[s.Name] = ROLLING_LEADER if here is None else here

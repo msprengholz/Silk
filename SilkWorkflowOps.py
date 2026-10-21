@@ -1013,7 +1013,70 @@ def create_rolling_corner(strips, patch, leader=ROLLING_LEADER, order=1,
 # REAL row on the ring, its collapsed row inside the loop -- and the member
 # is read REAL-ROW-FIRST on that patch (`SilkCorner._member_row_order`).
 
-def _seam_cut_home(strip, patch, leader, prop_of, tol=None):
+def seam_junction_end(strip, patch, ring, tol=None):
+    """`(end, None)` or `(None, why)`: which parametric end of `strip`'s
+    SEAM-PARALLEL axis on `patch` carries the junction `ring` rolls.  #126.
+
+    WHY THE PATCH CANNOT ANSWER THIS.  A band's along-seam extent is bounded
+    by the corner cell at the junction end, and a patch has always named
+    that end by the band edge it carries there -- which works while the
+    along-seam axis carries ONE band edge, i.e. while the patch has one
+    junction on that axis.  The owner's own ring patches carry a THIRD seam
+    on the side opposite the junction, so their along-seam axis carries a
+    band edge at BOTH ends and the patch is symmetric between them: nothing
+    in `USplit1/2` says which end THIS ring's junction is at.  So the answer
+    needs the ring -- and NOT the member's placement: the junction is the
+    patch CORNER the patch's two RING seams share, which does not depend on
+    which patch carries the triangular member.
+
+    HOW THE RING ANSWERS IT.  Each seam's boundary side names one coordinate
+    of that corner: side `U0` / `U1` is the row at V = 0 / V = 1, side `V0`
+    / `V1` the column at U = 0 / U = 1 (`SilkBlend.side_and_end`).  Two sides
+    of DIFFERENT families therefore meet at exactly one patch corner, and
+    this seam's along-axis end is the partner side's own number.
+
+    Refused by name, never guessed:
+      * `strip` is not one of `ring`'s seams -- there is no ring to read;
+      * `patch` does not carry exactly two of the ring's seams;
+      * both of the patch's ring seams run along the SAME axis, so the
+        corner is not determined and BOTH ends are candidates -- the reason
+        names them."""
+    from SilkBlend import side_and_end
+    tol = getattr(strip, "tolerance", 0.01) if tol is None else tol
+    ring = list(ring or [])
+    strip_name = getattr(strip, "Name", "?")
+    patch_name = getattr(patch, "Name", "?")
+    if not any(s is strip for s in ring):
+        return None, ("seam %s is not one of this ring's seams, so the ring "
+                      "cannot say which end of its axis its junction is at"
+                      % strip_name)
+    e, _ss = side_and_end(strip, patch, tol)
+    if not e:
+        return None, ("blend %s cannot say which side of %s it takes"
+                      % (strip_name, patch_name))
+    others = []
+    for s in ring:
+        if s is strip or patch not in (getattr(s, "PatchA", None),
+                                       getattr(s, "PatchB", None)):
+            continue
+        ep, _ssp = side_and_end(s, patch, tol)
+        if ep:
+            others.append((s, ep))
+    if len(others) != 1:
+        return None, ("the ring carries %d seams of %s besides %s, and a "
+                      "junction is one corner where exactly two meet"
+                      % (len(others), patch_name, strip_name))
+    partner, ep = others[0]
+    if ep[0] == e[0]:
+        return None, ("both ring seams of %s (%s on %s, %s on %s) run along "
+                      "the same axis, so this seam's junction end is either "
+                      "the 0 end or the 1 end of its %s axis and the ring "
+                      "cannot say which"
+                      % (patch_name, strip_name, e, partner.Name, ep, e[0]))
+    return (0 if ep[1] == "0" else 1), None
+
+
+def _seam_cut_home(strip, patch, leader, prop_of, tol=None, ring=None):
     """(property name, value to write, why) -- where THIS seam's rolling
     leader lives on `patch`, through the property naming `prop_of`.
 
@@ -1025,6 +1088,12 @@ def _seam_cut_home(strip, patch, leader, prop_of, tol=None):
     construction's cut) or the leader cut (`SilkMachinery.leader_cut_prop`,
     the rolling construction's).
 
+    `ring` is the corner's strips.  With it, the junction end is read off the
+    ring (`seam_junction_end`) where the patch's own band edges cannot name
+    one -- the owner's two-junctions-on-one-axis patches (#126).  Without it
+    only the patch is read, which is every patch with one junction on the
+    axis and refuses by name on the others.
+
     `None` (with the reason) when the seam cannot say which end of which
     axis carries it."""
     from SilkBlend import side_and_end
@@ -1034,8 +1103,13 @@ def _seam_cut_home(strip, patch, leader, prop_of, tol=None):
     if not e:
         return None, None, ("blend %s cannot say which side of %s it takes"
                             % (strip.Name, patch.Name))
+    end = None
+    if ring is not None:
+        end, why = seam_junction_end(strip, patch, ring, tol)
+        if end is None:
+            return None, None, why
     along_letter, _band_letter = seam_axis_roles(e)
-    ext = band_extent(patch, e, ss)
+    ext = band_extent(patch, e, ss, end)
     if ext[0] is None:
         return None, None, ext[1]
     corner_end = ext[2]
@@ -1043,7 +1117,7 @@ def _seam_cut_home(strip, patch, leader, prop_of, tol=None):
     return prop_of(along_letter, corner_end), value, None
 
 
-def _leader_home(strip, patch, leader, tol=None):
+def _leader_home(strip, patch, leader, tol=None, ring=None):
     """(property name, value to write, why) -- the patch property that
     carries the ROLLING LEADER of this seam in the SHIPPED construction:
     the BAND EDGE on the seam-PARALLEL axis, at the junction end.
@@ -1053,21 +1127,22 @@ def _leader_home(strip, patch, leader, tol=None):
     `"shipped"` -- the leader must go where that construction reads it.
     The rolling construction writes the LEADER CUT instead
     (`_leader_cut_home`), which is the same arithmetic in a different
-    property.  See `_seam_cut_home` for the value."""
+    property.  `ring` is `_seam_cut_home`'s (#126)."""
     from SilkBlend import band_edge_prop
-    return _seam_cut_home(strip, patch, leader, band_edge_prop, tol)
+    return _seam_cut_home(strip, patch, leader, band_edge_prop, tol, ring)
 
 
-def _leader_cut_home(strip, patch, leader, tol=None):
+def _leader_cut_home(strip, patch, leader, tol=None, ring=None):
     """(property name, value to write, why) -- where the ROLLING
     construction's leader lives: the patch's LEADER CUT on the seam-parallel
     axis at the junction end (`ULeader1` / `ULeader2`).
 
     The band edge is left alone, so the SETBACK no longer rides along with
     the leader: the two are separate numbers on separate properties, which is
-    the maintainer's own model (setback 1/16, leader 0.25)."""
+    the maintainer's own model (setback 1/16, leader 0.25).  `ring` is
+    `_seam_cut_home`'s (#126)."""
     from SilkMachinery import leader_cut_prop
-    return _seam_cut_home(strip, patch, leader, leader_cut_prop, tol)
+    return _seam_cut_home(strip, patch, leader, leader_cut_prop, tol, ring)
 
 
 def _ring_of(strips):
@@ -1101,7 +1176,7 @@ def corner_ring_patches(strips):
     return patches, None
 
 
-def seam_leader(strip, patch, tol=None, construction=None):
+def seam_leader(strip, patch, tol=None, construction=None, ring=None):
     """`(leader, None)` or `(None, why)`: the rolling leader `patch`'s side
     of `strip` is cut at today.
 
@@ -1119,7 +1194,11 @@ def seam_leader(strip, patch, tol=None, construction=None):
         REAL leader cut when it has one (`ring_corner_gap` says whether the
         cut clears its band edge), else the band edge.  That is the reading
         for a corner whose construction was not recorded, and it cannot
-        mistake one for the other: a corner does not carry both."""
+        mistake one for the other: a corner does not carry both.
+
+    `ring` is the corner's strips, handed to the same expression the writer
+    uses (#126: a patch with two junctions on its along-seam axis can only be
+    read with the ring)."""
     from SilkMachinery import band_edge
     construction = (str(construction) if construction is not None else None)
     if construction == "rolling":
@@ -1128,7 +1207,7 @@ def seam_leader(strip, patch, tol=None, construction=None):
         home = _leader_home
     else:
         home = _leader_cut_home if _has_leader_cut(patch) else _leader_home
-    prop, sentinel, why = home(strip, patch, 0.0, tol)
+    prop, sentinel, why = home(strip, patch, 0.0, tol, ring)
     if prop is None:
         return None, why
     stored = band_edge(getattr(patch, prop, 0.0) or 0.0)
@@ -1259,7 +1338,8 @@ def apply_corner_choices(strips, pin=None, leaders=None):
                     "carries the triangular member)\n"
                     % (strip.Name, member_patch.Name))
                 continue
-            prop, write, why = _leader_cut_home(strip, member_patch, value)
+            prop, write, why = _leader_cut_home(strip, member_patch, value,
+                                               ring=ordered)
             if prop is None:
                 return None, ("seam %s: %s" % (strip.Name, why))
             if abs(float(getattr(member_patch, prop, 0.0) or 0.0) - write) \
@@ -1273,7 +1353,7 @@ def apply_corner_choices(strips, pin=None, leaders=None):
                   getattr(strip, "PatchB", None)):
             if p is None:
                 continue
-            prop, write, why = _leader_home(strip, p, value)
+            prop, write, why = _leader_home(strip, p, value, ring=ordered)
             if prop is None:
                 return None, ("seam %s: %s" % (strip.Name, why))
             if abs(float(getattr(p, prop, 0.0) or 0.0) - write) < 1e-12:
@@ -1551,7 +1631,8 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
                          getattr(s, "PatchB", None)):
             continue
         seam_leader = per_seam.get(s.Name, leader)
-        prop, value, why = _leader_cut_home(s, patch, seam_leader)
+        prop, value, why = _leader_cut_home(s, patch, seam_leader,
+                                            ring=strips)
         if prop is None:
             FreeCAD.Console.PrintError(
                 "Silk: the rolling leader cannot be placed: %s. The "

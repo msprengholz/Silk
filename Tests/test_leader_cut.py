@@ -234,10 +234,95 @@ def test_the_ring_loop_closes_at_one_cut_and_opens_at_two(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+class _TwoJunctionAxis:
+    """A patch-shaped stub carrying the demo's OWN layout on one axis (#126).
+
+    `V` holds a band edge at BOTH ends -- 0.1 from the seam that reaches the
+    junction and 0.9 from the seam on the OTHER side of the patch, i.e. a
+    second junction on the same axis -- and the junction's own LEADER cut at
+    the 0 end.  `band_extent` / `band_cells` / `corner_cells` read nothing
+    but these names, so the arithmetic can be exercised without geometry."""
+    Name = "P_TwoJunction"
+    USplit1, USplit2 = 0.0, 0.9
+    VSplit1, VSplit2 = 0.1, 0.9
+    ULeader1, ULeader2 = 0.0, 0.75
+    VLeader1, VLeader2 = 0.25, 1.0
+
+
+def test_two_junctions_on_one_axis_still_leave_the_band_one_cell(doc):
+    """#126: the corner region is read PER END, so a band edge at BOTH ends
+    of one axis does not eat the band.
+
+    The owner's own ring patches carry a third seam on the side opposite the
+    junction, so the along-seam axis holds two band edges.  Read as ONE end
+    (the pre-#126 rule, which has to name one) the leader cut at the junction
+    end leaves the band TWO cells; read per end it is the one cell between
+    the leader and the far setback -- the cube's answer, on the demo's
+    layout.  The setback is untouched and the far end's own cell stays a
+    corner cell (it belongs to the other junction)."""
+    errors, checks = [], []
+    p = _TwoJunctionAxis()
+
+    # the exclusion, per end, with the leader cut at the junction (0) end
+    vs = SM.build_intervals(p.VSplit1, p.VSplit2, p.VLeader1, p.VLeader2)
+    excluded = SM.corner_cells(p.VSplit1, p.VSplit2, len(vs),
+                              p.VLeader1, p.VLeader2)
+    checks.append("V intervals %r -> excluded %r"
+                  % ([tuple(round(x, 4) for x in iv) for iv in vs],
+                     sorted(excluded)))
+    if excluded != {0, 1, len(vs) - 1}:
+        errors.append("the corner regions are %r: want the junction-side "
+                      "region {0, 1} and the FAR end's own cell {%d}"
+                      % (sorted(excluded), len(vs) - 1))
+
+    # the band: exactly ONE cell, and it is the one between the leader and
+    # the far setback
+    cells = SM.band_cells(p, "V1", 1)
+    checks.append("band_cells(V1, 1) = %r" % (cells,))
+    if len(cells) != 1:
+        errors.append("the band covers %d cells -- the one-cell invariant is "
+                      "broken by the second junction on the axis"
+                      % len(cells))
+
+    # the patch ALONE cannot say which end the junction is at, and the
+    # refusal names both candidates
+    ext = SM.band_extent(p, "V1", 1)
+    checks.append("band_extent(V1, 1) without the ring: %r" % (ext[1],))
+    if ext[0] is not None:
+        errors.append("the patch named one junction end for an axis with a "
+                      "band edge at both ends")
+    elif "VSplit1" not in str(ext[1]) or "VSplit2" not in str(ext[1]):
+        errors.append("the refusal does not name both candidate ends: %r"
+                      % (ext[1],))
+
+    # with the end the RING reads, the band's extent and end come out
+    ext = SM.band_extent(p, "V1", 1, 0)
+    checks.append("band_extent(V1, 1, end=0) = %r" % (ext,))
+    if ext[0] is None:
+        errors.append("the ring's end did not place the band: %s" % (ext[1],))
+    else:
+        (lo, hi), _band, end = ext
+        if abs(lo - 0.25) > 1e-12 or abs(hi - 0.9) > 1e-12 or end != 0:
+            errors.append("the band reads %r at the %r end, want (0.25, 0.9) "
+                          "at the 0 end" % ((lo, hi), end))
+
+    # a caller whose end CONTRADICTS the axis is refused, never guessed
+    q = _TwoJunctionAxis()
+    q.VSplit1 = 0.0            # one band edge, at the 1 end only
+    ext = SM.band_extent(q, "V1", 1, 0)
+    checks.append("band_extent on a one-edge axis, told the wrong end: %r"
+                  % (ext[1],))
+    if ext[0] is not None:
+        errors.append("a caller's end contradicted the patch's own band edge "
+                      "and was accepted anyway")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_a_patch_without_a_leader_reads_exactly_what_it_always_read,
     test_a_leader_cut_subdivides_the_axis_and_between_is_the_corner_cell,
     test_the_band_stays_one_cell_under_a_leader_cut,
     test_a_leader_inside_the_band_is_inert_and_named,
     test_the_ring_loop_closes_at_one_cut_and_opens_at_two,
+    test_two_junctions_on_one_axis_still_leave_the_band_one_cell,
 ]
