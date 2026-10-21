@@ -107,7 +107,8 @@ from SilkGuide import compute_guide_state
 from SilkEdge import classify_sketches
 from SilkBlend import BLEND_TYPES
 from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge, \
-    create_corner_blend
+    create_corner_blend, apply_corner_choices, corner_ring_patches, \
+    existing_corner, seam_leader, ROLLING_LEADER
 from SilkMachinery import patch_side, side_of_edge, build_intervals, \
     corner_cells, split_pair, axis_splits, band_at_end, loop_order, \
     leader_pair, NO_LEADER_1, NO_LEADER_2
@@ -240,6 +241,86 @@ HIDE_GRIDS_TOOLTIP = (
 
 # Placeholder shown in an empty collection list, so "nothing yet" reads
 # as deliberate rather than as a list that failed to load.
+# The CORNER CHOICES (#117 / #119): the two things the corner stage cannot
+# decide for the owner -- WHICH patch carries the triangular member, and HOW
+# FAR ALONG each seam the band is cut (the rolling leader). Every seam of the
+# ring gets its own leader row, so the choice reaches EVERY patch of the ring
+# and not only the one that carries the member.
+CORNER_MEMBER_AUTO = "(automatic)"
+CORNER_MEMBER_AUTO_TIP = (
+    "Leave the corner's own placement alone. The corner stage searches for "
+    "the first ring patch/corner a triangular member assembles at; pick a "
+    "patch here to make it build at THAT patch instead.")
+CORNER_LEADER_DECIMALS = 3
+CORNER_LEADER_MIN = 10 ** -CORNER_LEADER_DECIMALS
+CORNER_LEADER_MAX = 1.0 - 10 ** -CORNER_LEADER_DECIMALS
+CORNER_LEADER_STEP = 0.05
+CORNER_LEADER_COLUMN_WIDTH = 78
+CORNER_LEADER_ROW_HEIGHT = 26
+CORNER_LEADER_TIP = (
+    "The rolling leader of THIS seam: where the band is cut back, measured "
+    "from the junction corner along the seam. It is written into the "
+    "seam-parallel band edge of both patches of the seam, which is what "
+    "the corner stage reads. A value equal to the patch's own band edge "
+    "rolls nothing, so the seams the corner does not cut stay as they are.")
+
+
+def corner_cut_seed(strips):
+    """The leader each seam of `strips` is cut at RIGHT NOW, per seam name.
+
+    What a corner that already exists carries, read back through the writer's
+    own expression (`seam_leader`). A seam whose patches carry no band edge
+    on that axis has no cut to report, so it seeds with `ROLLING_LEADER` --
+    the value the stage writes when it rolls a seam for the first time."""
+    out = {}
+    for s in strips:
+        here = None
+        for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
+            if p is None:
+                continue
+            here, _why = seam_leader(s, p)
+            if here is not None:
+                break
+        out[s.Name] = ROLLING_LEADER if here is None else here
+    return out
+
+
+def corner_leader_seed(strips, pin=None):
+    """The leader each seam of `strips` will be cut at, per seam name.
+
+    What the corner stage WILL write, not what it happens to find: the
+    seams of the patch that carries the triangular member are cut at
+    `ROLLING_LEADER`, every other seam keeps the cut its patches already
+    carry (so writing that value again is a no-op). That is what makes the
+    panel's untouched state the stage's default instead of a second opinion
+    about it.
+
+    `pin` is the member's placement the page asks for; None asks the stage's
+    own search (`SilkCorner.corner_member_pin`), because with no pin the
+    stage still cuts the seams of the patch it picks."""
+    if pin is None:
+        try:
+            from SilkCorner import corner_member_pin
+            pin, _why = corner_member_pin(strips)
+        except Exception:
+            pin = None
+    out = {}
+    for s in strips:
+        if pin is not None and (getattr(s, "PatchA", None) is pin[0]
+                                or getattr(s, "PatchB", None) is pin[0]):
+            out[s.Name] = ROLLING_LEADER
+            continue
+        here = None
+        for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
+            if p is None:
+                continue
+            here, _why = seam_leader(s, p)
+            if here is not None:
+                break
+        out[s.Name] = ROLLING_LEADER if here is None else here
+    return out
+
+
 PLACEHOLDERS = {
     SECTION_EDGE: "nothing collected -- click a sketch in the 3D view",
     SECTION_PATCH: "nothing collected -- click edges in the 3D view",
@@ -1021,6 +1102,58 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self.corner_remove_btn.clicked.connect(self._remove_selected)
         row.addWidget(self.corner_remove_btn)
         lay.addLayout(row)
+        lay.addWidget(self._instruction(
+            "The corner stage's two choices are yours: which patch carries "
+            "the small triangular surface, and how far along each seam the "
+            "band is cut back (the rolling leader)."))
+        # WHICH PATCH carries the triangular member (#117).
+        member_row = QtWidgets.QHBoxLayout()
+        member_row.addWidget(QtWidgets.QLabel("Triangular member on:"))
+        self.corner_member_patch = QtWidgets.QComboBox()
+        self.corner_member_patch.addItem(CORNER_MEMBER_AUTO)
+        self.corner_member_patch.setToolTip(CORNER_MEMBER_AUTO_TIP)
+        self.corner_member_patch.currentIndexChanged.connect(
+            lambda _i: self._render_corner_choices())
+        member_row.addWidget(self.corner_member_patch, 1)
+        member_row.addWidget(QtWidgets.QLabel("corner"))
+        self.corner_member_corner = QtWidgets.QSpinBox()
+        self.corner_member_corner.setRange(0, 3)
+        self.corner_member_corner.setToolTip(
+            "Which of that patch's four grid corners the triangular member "
+            "is built at (0..3; the corner stage's search finds the one "
+            "that assembles).")
+        member_row.addWidget(self.corner_member_corner)
+        lay.addLayout(member_row)
+        # HOW SMALL the triangle is: one leader PER SEAM, so the choice
+        # reaches every patch of the ring.
+        self.corner_leader_table = QtWidgets.QTableWidget(0, 3)
+        self.corner_leader_table.setHorizontalHeaderLabels(
+            ["Seam", "Patches", "Leader"])
+        self.corner_leader_table.verticalHeader().setVisible(False)
+        self.corner_leader_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.corner_leader_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.NoSelection)
+        header = self.corner_leader_table.horizontalHeader()
+        header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.Fixed)
+        header.resizeSection(2, CORNER_LEADER_COLUMN_WIDTH)
+        header.setMinimumSectionSize(16)
+        self.corner_leader_table.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOff)
+        self.corner_leader_table.setTextElideMode(QtCore.Qt.ElideRight)
+        self.corner_leader_table.setMaximumHeight(
+            CORNER_LEADER_ROW_HEIGHT * (CORNER_MAX + 1))
+        lay.addWidget(self.corner_leader_table)
+        self.corner_apply_btn = QtWidgets.QPushButton(
+            "Apply to the existing corner")
+        self.corner_apply_btn.setToolTip(
+            "Write these choices onto the corner this ring already has. "
+            "An edit that is only typed is committed first; with no corner "
+            "on this ring yet, Enter/OK builds one WITH these choices.")
+        self.corner_apply_btn.clicked.connect(self.on_apply_corner_choices)
+        lay.addWidget(self.corner_apply_btn)
+        self._corner_leader_spins = {}
         # The slack belongs to the PAGE, not to an empty list box.
         lay.addStretch(1)
         self.sections.add_section(SECTION_TITLES[SECTION_CORNER], page)
@@ -1387,6 +1520,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self._set_hint(state["hint"])
         self._render_lists()
         self._render_table(state["seams"], state["seam_counts"])
+        self._render_corner_choices()
         self.sync_ok_enabled()
 
     def _render_lists(self):
@@ -2163,6 +2297,134 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self.status_lbl.setText("; ".join(lines))
         return bool(made)
 
+    # ---- the corner choices (#117 / #119) --------------------------------
+
+    def _corner_ring(self):
+        """The collected corner strips in RING order, or [] when the
+        collection does not make a ring yet."""
+        strips = [i.obj for i in self._collected[SECTION_CORNER]]
+        if len(strips) not in (CORNER_MIN, CORNER_MAX):
+            return []
+        from SilkMachinery import corner_ring, corner_ring_3
+        ordered, _why = (corner_ring_3(strips) if len(strips) == CORNER_MIN
+                         else corner_ring(strips))
+        return list(ordered or [])
+
+    def _render_corner_choices(self):
+        """Mount the corner page's choices on the collected ring.
+
+        The member combo lists the RING's patches, and the leader table has
+        one row per SEAM -- so every patch of the ring is reachable, not just
+        the one that carries the member. Both are seeded from what the corner
+        stage WILL do (`corner_leader_seed`), so an untouched panel means
+        "exactly what the stage builds" rather than a second opinion.
+
+        The leader rows are only REBUILT when the ring's seams change: a
+        refresh runs after every recompute, and re-mounting the editors on
+        each one would throw away a value the user has typed but not yet
+        applied."""
+        ring = self._corner_ring()
+        patches, _why = corner_ring_patches(ring) if ring else (None, None)
+        blocked = self.corner_member_patch.blockSignals(True)
+        try:
+            keep = self.corner_member_patch.currentText()
+            self.corner_member_patch.clear()
+            self.corner_member_patch.addItem(CORNER_MEMBER_AUTO)
+            for p in patches or []:
+                self.corner_member_patch.addItem(p.Name)
+            idx = self.corner_member_patch.findText(keep)
+            self.corner_member_patch.setCurrentIndex(max(idx, 0))
+        finally:
+            self.corner_member_patch.blockSignals(blocked)
+        live = bool(patches)
+        for widget in (self.corner_member_patch, self.corner_member_corner,
+                       self.corner_leader_table, self.corner_apply_btn):
+            widget.setEnabled(live)
+
+        names = [s.Name for s in ring]
+        if names == getattr(self, "_corner_leader_names", None):
+            return                      # the same seams: keep the editors
+        self._corner_leader_names = names
+        # WHAT THE SEED MEANS DEPENDS ON WHAT THE RING HAS. Before the corner
+        # exists the editors show what the stage WILL cut (`corner_leader_seed`
+        # -- the member patch's seams at ROLLING_LEADER, every other seam at
+        # the band edge it already has); once it exists they show what it
+        # CARRIES (`corner_cut_seed`). Seeding a built corner with the
+        # pre-build values would silently re-point a seam the user had
+        # already rolled.
+        if not ring:
+            seeds = {}
+        elif existing_corner(ring) is not None:
+            seeds = corner_cut_seed(ring)
+        else:
+            seeds = corner_leader_seed(ring, self._corner_pin(patches))
+        self.corner_leader_table.setRowCount(len(ring))
+        self._corner_leader_spins = {}
+        for row, s in enumerate(ring):
+            texts = (s.Name, "%s <-> %s" % (getattr(s.PatchA, "Name", "?"),
+                                            getattr(s.PatchB, "Name", "?")))
+            for col, text in enumerate(texts):
+                item = QtWidgets.QTableWidgetItem(text)
+                item.setToolTip(text)
+                self.corner_leader_table.setItem(row, col, item)
+            spin = QtWidgets.QDoubleSpinBox()
+            spin.setDecimals(CORNER_LEADER_DECIMALS)
+            spin.setSingleStep(CORNER_LEADER_STEP)
+            spin.setRange(CORNER_LEADER_MIN, CORNER_LEADER_MAX)
+            spin.setButtonSymbols(
+                QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+            spin.setValue(seeds.get(s.Name, ROLLING_LEADER))
+            spin.setToolTip(CORNER_LEADER_TIP)
+            self.corner_leader_table.setCellWidget(row, 2, spin)
+            self._corner_leader_spins[s.Name] = spin
+
+    def _corner_pin(self, patches=None):
+        """The `(patch, corner)` the page asks for, or None for "(automatic)"
+        -- the corner stage's own search."""
+        name = self.corner_member_patch.currentText()
+        if not name or name == CORNER_MEMBER_AUTO:
+            return None
+        if patches is None:
+            patches, _why = corner_ring_patches(self._corner_ring())
+        for p in patches or []:
+            if p.Name == name:
+                return (p, int(self.corner_member_corner.value()))
+        return None
+
+    def corner_choices(self):
+        """`(pin, leaders)` as the page holds them: the member's placement
+        (None = automatic) and the leader of EVERY seam of the ring."""
+        pin = self._corner_pin()
+        leaders = {name: float(spin.value())
+                   for name, spin in self._corner_leader_spins.items()}
+        return pin, leaders
+
+    def on_apply_corner_choices(self):
+        """The Apply button: write these choices onto the ring's corner."""
+        stale = self.stale_items()
+        if stale:
+            return self._refuse_stale(stale)
+        ring = self._corner_ring()
+        if not ring:
+            self._refuse("Silk: collect the 3 or 4 blends of one junction "
+                         "first -- the corner's choices are about its ring.")
+            return False
+        pin, leaders = self.corner_choices()
+        doc = self.doc
+        doc.openTransaction("Silk corner choices")
+        try:
+            with _ConsoleTap() as tap:
+                corner, why = apply_corner_choices(ring, pin=pin,
+                                                   leaders=leaders)
+        finally:
+            doc.commitTransaction()
+        if corner is None:
+            self._refuse("Silk: %s" % why)
+            return False
+        self.status_lbl.setText("corner choices applied to %s" % corner.Name)
+        self.refresh()
+        return True
+
     def confirm_corner(self):
         """The 3 or 4 collected blends in ONE transaction -> one CornerBlend
         (#91), so one Enter is one undo step.
@@ -2180,10 +2442,12 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             return self._refuse_stale(stale)
         doc = self.doc
         before = {o.Name for o in doc.Objects}
+        pin, leaders = self.corner_choices()
         doc.openTransaction("Silk corner blend")
         try:
             with _ConsoleTap() as tap:
-                corner = create_corner_blend(*strips)
+                corner = create_corner_blend(*strips, pin=pin,
+                                             leaders=leaders or None)
         finally:
             doc.commitTransaction()
 

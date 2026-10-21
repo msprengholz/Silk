@@ -49,9 +49,13 @@ bboxes, 0 normal-field flips at n = 39/81/150, and the same
 tri-interior-to-quad distances (4.639 .. 35.521 mm, 7 %..56 % of the corner's
 own 63.2 mm extent). The primitives are NOT the gap.
 
-What the census also shows, on every one of those 20 rings: `corner_grid` --
-our corner stage's RING NORMALIZER -- REFUSES them, while the pair function
-underneath reproduces them exactly. `corner_grid` accepts only rings whose
+What the census also showed, on every one of those 20 rings, was that
+`corner_grid` -- our corner stage's RING NORMALIZER -- REFUSED them while the
+pair function underneath reproduced them exactly. THAT has since been fixed
+(#119 follow-up): the normalizer now accepts the pairings the algebra
+produces, all 40 rings of episodes 28 and 29 come through it at 0.000e+00, and
+`Tests/test_corner_ring_parity.py` is the permanent instrument for it. The
+rest of this docstring is the state the question was asked in. `corner_grid` accepts only rings whose
 every adjacent pair shares the corner slots `CORNER_COMMON = (3, 2)` (or all
 its mirror); the reference's rings share (0, 1) and (0, 2) as well, which
 upstream's `SubGrid33_2Grid64` takes one pair at a time. That is the first

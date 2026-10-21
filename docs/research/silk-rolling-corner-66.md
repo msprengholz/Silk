@@ -419,3 +419,171 @@ tri bbox (0.1,0.1,0)→(0.9375,0.9375,0).
   apex's cells): the rotational LARGE/SMALL pattern the video shows is still
   out of reach with one leader per seam.
 * #126 (the corner-cell refusal on the owner's own model) is untouched.
+
+---
+
+# The corner STAGE against the reference's ring: what landed, and the blocker
+
+The primitives were never the limit: `Tests/prototype_reference_corner.py`
+feeds the maintainer's own ring grids to `subgrid33_2grid64` +
+`control_grid66_4sub` and reproduces all 20 quad corners of episode 28 (and
+29) at **0.000e+00** on poles and weights.  What failed was the stage AROUND
+them.  This session closed two of the four named defects and measured the
+other two to a stopping point.
+
+## Defect 1 — the ring normalizer was stricter than the algebra. FIXED.
+
+`SilkMachinery.corner_grid` accepted only rings whose every adjacent pair
+shared the corner slots `CORNER_COMMON` = (3, 2) or all of their mirror, and
+refused **all 40** of the reference's rings ("the four strips are not a
+consistently oriented ring").  His rings share (0,1), (0,2) and (3,1) as well,
+mixed freely round one ring — seven distinct patterns over the two files —
+and `subgrid33_2grid64` takes each pair on whatever corners it finds.
+
+**The fix.** `corner_grid` now resolves the ring through `_oriented_ring`: the
+ring AS STORED is used whenever its four pairs are all read without a grid
+swap (the byte-identical path every ring this workbench builds takes); a ring
+handed over mirrored is reversed and the reversed reading is used when THAT is
+all one way.  No corner pattern is demanded.  A ring that MIXES the two
+readings is still refused, BY NAME and with both patterns quoted — one of its
+four subgrids would land transposed against its neighbours, so the 6x6's
+interior rows would not line up, and a silent wrong surface is worse than a
+refusal.
+
+**The proof, through `corner_grid` itself** (`Tests/test_corner_ring_parity.py`,
+fast tier): episode 28 **20/20** and episode 29 **20/20** quad corners
+reproduced from the ring grids the files store, worst pole deviation
+**0.000e+00 mm** and worst weight deviation **0.000e+00** over all 36 poles.
+The same module pins the as-stored no-op (the ring is handed back as the same
+list), the mirrored ring giving the identical 6x6 (0.000e+00 mm), and the
+mixed ring's refusal by name.
+
+## Defect 4 — the tri is a `CubicSurface_64` again, the fill selectable. FIXED.
+
+The maintainer's tri face is `CubicSurface_64` over the member net.  Ours was
+a FreeCAD `Surface::Filling`.  `SilkWorkflowOps.create_corner_blend(...
+member_face=...)` now selects the face and **"cubicsurface64" is the
+default**: the member's own 64 is the tri, the member is VISIBLE, and no fill
+is built.  **"fill"** is the option — the owner's replacement surface, built
+through the shipped `create_fill` (#96, #121's selectable C0 fallback) with
+the silk member kept hidden behind it, exactly as before.  An unknown value is
+refused BY NAME before anything is built (so it cannot fall through to the
+shipped corner).  Measured on the cube corner: default → 1 face on the member,
+**0** `Surface::Filling` in the document; `member_face="fill"` → 1 fill, the
+64 hidden.
+
+## The owner's two choices, and where they reach
+
+* **Which patch carries the tri** (`MemberPatch` / `MemberCorner`, #117) now
+  works on the ROLLING path.  The rolling construction resolved the pin for
+  its cutting step and never wrote it onto the corner it built, so the
+  corner's own `execute()` re-ran the AUTOMATIC search while the member
+  followed the cut — the two surfaces could disagree.  Now: a USER's pin is
+  written onto the built corner, and `SilkCorner._member_pin_of` makes the
+  member read it (the member used to ignore the pin entirely: with the member
+  pinned to PatchB its face did not move when PatchB's cut moved).  An
+  UNPINNED corner still stores no pin — that is #117's opt-in contract, and
+  the corner and the member then agree because both run the same search on the
+  same ring.
+* **How small the tri is** — the leader PER SEAM:
+  `create_corner_blend(leaders={"B_AB": 0.5, ...})`, and the panel's corner
+  page mounts **one editor per seam of the ring**, so the choice reaches every
+  patch rather than only the member's.  `apply_corner_choices(strips,
+  pin=..., leaders=...)` writes both onto a corner that already exists (the
+  panel's Apply); it refuses by name when the ring has no corner yet, so it
+  cannot become a second creation path.
+
+Measured (cube-corner fixture; the tri's own face area; the check lines of
+`Tests/test_corner_choices.py`):
+
+| member on | one leader 0.25 | one leader 0.50 | member bbox max (0.25) |
+|---|---|---|---|
+| PatchA[0] | 0.057246 | 0.228984 | (0.25, 0.25, 0) |
+| PatchB[0] | 0.057246 | 0.228984 | (0, 0.25, 0.25) |
+| PatchC[0] | 0.057246 | 0.228984 | (0.25, 0, 0.25) |
+
+At ONE leader the three areas are EQUAL and the three PLACEMENTS differ: the
+three member cells are the same square on three planes, which is the
+fixture's symmetry.  With a leader PER SEAM the cells become three different
+rectangles and the area follows the member patch too:
+
+| member on | {B_AB:.5, B_BC:.25, B_CA:.1} | {B_AB:.9, B_BC:.5, B_CA:.2} |
+|---|---|---|
+| PatchA[0] | 0.045797 | 0.164868 |
+| PatchB[0] | 0.114492 | 0.412170 |
+| PatchC[0] | 0.022898 | 0.091593 |
+
+## Defect 2 — the member's collapsed row is still consumed on our ring. NOT FIXED.
+
+**The finding, in the terms the next attempt needs.**  On our cell layout the
+member's **collapse corner IS the ring's shared corner**, so **no pairing or
+orientation avoids it**.  The ring's shared corners on the cube fixture are
+the three patch corner cells' FAR corners — A = (0.1, 0.1, 0), B = (0, 0.1,
+0.1), C = (0.1, 0, 0.1) — and the triangular member's collapsed row is the
+whole row through A, so A sits at member slots 2 **and** 3.  Measured over all
+**24** (patch, corner 0..3, reversed) member candidates: every one either
+refuses ("the two grids share no corner" / "more than one corner") or
+assembles WITH the collapsed side — 15 of the 6x6's coincident pairs are that
+row (17 counting the apex's two extra hits).
+
+**The reference's zero-coincident 6x6 needs a different LOOP.**  His member's
+cell is the region **between the setback (1/16) and the leader (0.25)**, so
+his strips' junction rows terminate at the member's MIXED corners, and the
+member's real row (the L around its near corner) — not its collapsed row — is
+the 6x6's fourth side.  In our machinery that arrangement is the leader cut on
+**every** patch, and **that arrangement opens our ring today**: with
+`ULeader1 = VLeader1 = 0.25` on all three patches (intervals [0,.1],
+[.1,.25], [.25,1], the corner cell correctly (1,1)) the strips stop sharing
+corners with each other AND with the member — "the two grids share no corner"
+on pairs 0→1 and 3→0 — and `corner_inputs` refuses "could not build
+triangular 4th member".  So the remaining work is **which rows form the ring
+loop** (the member-side re-solve #119 names), not the assembler's pairing
+rule.
+
+## Defect 3 — the cap smoothing could not be removed. BLOCKED BY DEFECT 2.
+
+Measured directly on the fixture, same instrument (`SilkChecks.
+_normal_field_flips`, n = 39/81/150), from the assembled net with the
+smoothing removed and with it:
+
+| | flips n=39 / 81 / 150 | net moved by the smoothing |
+|---|---|---|
+| RAW (smoothing removed) | **19 / 23 / 24** | 0.0000e+00 mm |
+| smoothed (shipped) | 0 / 0 / 0 | 5.6256e-02 mm |
+
+So the smoothing stays, by the ticket's own rule ("if a fold appears without
+the smoothing, stop and report").
+
+## The acceptance, stated honestly
+
+1. **Met** — the parity table THROUGH `corner_grid`: 20/20 quad corners of
+   episode 28 and of episode 29 at 0.000e+00 (poles and weights).
+2. **NOT MET** — our 6x6 still has 15 coincident pole pairs (the member's
+   collapsed row is still a boundary side); the member net keeps its 15.
+3. **NOT MET** — the cap smoothing cannot be removed; unsmoothed 19/23/24
+   flips against the smoothed 0/0/0.
+4. **Met** — the tri is a `CubicSurface_64` by default, the fill selectable,
+   and the tri's area changes with the leader and (under a per-seam leader)
+   with the member patch.
+5. **Met** — the shipped fallback is untouched: `construction="shipped"`
+   builds no cut, writes no pin and is pinned byte-identical by
+   `Tests/test_corner_blend.py::test_corner_blend_pole_parity_with_legacy_chain`
+   and `Tests/test_chain.py::test_chain_corner_ground_truth` (max pole dev
+   5.55e-14 against the fixture's stored poles).
+
+**The sentence this ticket may not lose:** the primitives reproduce all 20 of
+his corners at 0.000e+00; the stage now accepts his rings (defect 1) and
+builds the tri as his 64 (defect 4); **the ring LOOP is still ours**, so the
+assembly still consumes the member's collapsed row and still needs the cap
+smoothing.  Our corner stage does NOT yet reproduce his corner.
+
+Renders (`Tests/rolling_corner_reference_visual.py`, MANUAL, one camera RULE
+scaled per subject — our fixture is 0.1 mm at the origin and his geometry is
+tens of millimetres elsewhere, so one literal camera cannot frame both):
+`Resources/Test_files/_inspect/ringref_1_ours.png` (66 + tri at leader 0.25),
+`ringref_2_ours_leader050.png`, `ringref_3_tri_leader025.png`,
+`ringref_4_tri_leader050.png`, `ringref_5_reference.png` (his 66 and 64 drawn
+from the nets his file stores, read offline).  Measured on the same run: our
+66 0.078693 mm² at leader 0.25 and 0.262572 mm² at 0.5; our tri 0.057246 /
+0.228984; the reference's 66 5187.829202 mm² and its tri 1439.902924 mm² —
+all with 0 normal-field flips at n = 39/81/150.

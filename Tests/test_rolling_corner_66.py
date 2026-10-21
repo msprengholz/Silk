@@ -34,7 +34,7 @@ import FreeCAD
 import Part
 
 from SilkWorkflowOps import (create_corner_blend, create_rolling_corner_66,
-                             corner_fill_boundary)
+                             corner_fill_boundary, MEMBER_FACE_FILL)
 from Tests import cube_corner_model as ccm
 
 TOL = 1e-9          # mm: the cut edge and the corner fill share it
@@ -80,14 +80,22 @@ def _cut_residual(corner, strips, n=41):
 
 
 def test_the_rolling_corner_builds_the_66_the_member_and_the_fill(doc):
-    """Path (A) builds all three surfaces the maintainer's file carries."""
+    """Path (A) builds all three surfaces the maintainer's file carries:
+    the 66, the small triangular member, and -- AS THE OPTION -- its FreeCAD
+    `Surface::Filling` replacement.
+
+    The default is the member's own `CubicSurface_64` (the construction the
+    maintainer's files store), so the fill is built here by asking for it BY
+    NAME. `Tests/test_corner_choices.py` pins the default and the pair of
+    reachable faces."""
     errors, checks = [], []
     _fixture(doc)
     strips = _strips(doc)
     patch = doc.getObject("PatchA")
     rolled = [s for s in strips if s.PatchA is patch or s.PatchB is patch]
     res = create_rolling_corner_66(strips, patch, leader=0.25, seams=rolled,
-                                   name="Roll")
+                                   name="Roll",
+                                   member_face=MEMBER_FACE_FILL)
     if res is None:
         return {"pass": False,
                 "errors": ["the rolling corner did not build"],
@@ -113,7 +121,7 @@ def test_the_rolling_corner_builds_the_66_the_member_and_the_fill(doc):
     checks.append("the member's collapsed row: %.3e mm" % apex)
     if apex > 1e-9:
         errors.append("the small triangular surface has no collapsed row")
-    # the owner's spec: the FreeCAD replacement of that surface
+    # the owner's spec: the FreeCAD replacement of that surface, when asked
     if res["member_fill"] is None:
         errors.append("the FreeCAD replacement of the small triangular "
                       "surface did not build")
@@ -257,8 +265,10 @@ def test_the_default_corner_is_the_rolling_one(doc):
     The default (no `construction` argument) must:
       * move the band's corner-side cut -- the rolling leader -- on the
         seams of the patch that carries the triangular member,
-      * build the small triangular member AND its FreeCAD filling (the
-        owner's replacement of the spiderweb),
+      * build the small triangular member, whose FACE is its own
+        `CubicSurface_64` -- the construction the maintainer's files store
+        (#119 follow-up; the FreeCAD filling is the selectable option and is
+        pinned in `Tests/test_corner_choices.py`),
       * and differ from the fallback, pole for pole.
 
     The fallback (`construction="shipped"`) must leave the patches'
@@ -302,14 +312,21 @@ def test_the_default_corner_is_the_rolling_one(doc):
                 "checks": checks}
     member = doc.getObject("DefaultMember")
     fill = doc.getObject("DefaultMemberFill")
-    checks.append("the default corner: %d poles, %d face(s)"
-                  % (len(corner.Poles), len(corner.Shape.Faces)))
+    checks.append("the default corner: %d poles, %d face(s); the member: %s "
+                  "(%d face(s)); a FreeCAD member filling: %s"
+                  % (len(corner.Poles), len(corner.Shape.Faces),
+                     getattr(member, "Name", None),
+                     len(member.Shape.Faces) if member is not None
+                     and member.Shape else 0,
+                     getattr(fill, "Name", None)))
     if member is None:
         errors.append("the default corner built no triangular member")
-    if fill is None:
-        errors.append("the default corner built no FreeCAD member filling")
-    elif getattr(fill, "TypeId", "") != "Surface::Filling":
-        errors.append("the member's face is not a FreeCAD Surface::Filling")
+    elif not member.Shape or len(member.Shape.Faces) != 1:
+        errors.append("the default corner's triangular member is not one "
+                      "face -- its `CubicSurface_64` is the tri")
+    if fill is not None:
+        errors.append("the default corner built a FreeCAD member filling "
+                      "(%s): the 64 is the default face" % fill.Name)
     # the leader moved the cut
     p = doc.getObject("PatchA")
     checks.append("the cut moved: PatchA.USplit1=%g VSplit1=%g"

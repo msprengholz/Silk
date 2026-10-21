@@ -120,11 +120,28 @@ creates them anymore.
   should be the default fill!"*). The switch lives in the OPS LAYER
   (`SilkWorkflowOps.create_corner_blend(..., construction=...)`):
   `"rolling"` (the default) = the 66 over the ring's cells plus the small
-  triangular member whose FACE is a FreeCAD `Surface::Filling` (the
-  owner's replacement of the spiderweb; the silk member behind it is
-  hidden); `"shipped"` (the fallback) = the 66 with the spiderweb member,
-  byte for byte the construction of before #119. No new button: the
-  wizard's corner step and the toolbar command both call the ops layer.
+  triangular member beside it; `"shipped"` (the fallback) = the 66 with the
+  spiderweb member, byte for byte the construction of before #119. No new
+  button: the wizard's corner step and the toolbar command both call the ops
+  layer. The tri's FACE is the member's own `CubicSurface_64` by DEFAULT (the
+  construction the maintainer's files store) and a FreeCAD
+  `Surface::Filling` is the selectable option (`member_face="fill"`, the
+  owner's replacement of that surface). The owner's two choices ride the ops
+  layer and the panel: WHICH patch carries the tri (`MemberPatch` /
+  `MemberCorner`, honoured on the rolling path too) and the LEADER PER SEAM
+  (`leaders={seam: value}`, one panel editor per seam of the ring).
+- **The ring LOOP is still OURS** (#119 follow-up, measured): `corner_grid`
+  now accepts the pairings the subgrid algebra produces — the reference's own
+  rings, all 40 of them, come through it at 0.000e+00 (`Tests/
+  test_corner_ring_parity.py`) — but the member's COLLAPSE CORNER IS the
+  ring's shared corner on our cell layout, so no pairing or orientation
+  avoids it: the 6x6 still carries 15 coincident pole pairs and its cap
+  still needs `smooth_degenerate_cap` (unsmoothed: 19/23/24 normal-field
+  flips at n=39/81/150). His zero-coincident 6x6 needs the member's cell to
+  be the region BETWEEN the setback and the leader, and that arrangement
+  opens our ring today (the strips stop sharing corners: "the two grids share
+  no corner"). What is left is which ROWS close the ring — the member-side
+  re-solve, `docs/research/silk-rolling-corner-66.md`.
 - **The rolling leader is a CUT OF ITS OWN** (#119, additive):
   `ULeader1/2`, `VLeader1/2` on the member's patch, defaulting to the
   sentinels — so a patch that never carries one reads exactly the two band

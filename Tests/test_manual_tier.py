@@ -44,6 +44,7 @@ EXPECTED_MANUAL = {
     "test_corner_blend",
     "test_corner_fill",
     "test_corner_gui_command",
+    "test_corner_choices",
     "test_corner_orientation",
     "test_cube_corner_3valent",
     "test_demo01_fixture_clickthrough",

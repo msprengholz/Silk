@@ -1548,37 +1548,94 @@ def smooth_degenerate_cap(poles36, weights36, tol=1e-6):
     return out_p, list(weights36)
 
 
-def corner_grid(grids, tol=1e-6):
-    """Four 24-pole grids (ring order) -> the corner's 6x6.
+def _ring_pairs(grids, tol):
+    """The four adjacent-pair readings of a ring, in ring order.
 
-    `grids` are the strips' control nets with each junction-end row at
-    V = 3, given in cyclic order. The ring's rotational direction matters:
-    upstream accepts only the shared corner at (V3, U5) on the first grid
-    and (V3, U0) on the second, and a ring handed over the other way
-    presents every pair MIRRORED -- which assembles into a grid whose
-    boundary does not match the ring's own. So a ring whose every pair is
-    mirrored is reversed (`grids[1:]` reversed, keeping the first pair's
-    orientation); a ring that is not consistently oriented either way is
-    refused by name.
-
-    Returns (poles36, weights36, None) or (None, None, reason)."""
+    Pair `i` is `pair_common(grids[i], grids[i + 1])` -- the very call
+    `subgrid33_2grid64` makes, so this cannot disagree with the algebra
+    about which corners two strips share. Returns (pairs, None) or
+    (None, reason), the reason naming the two strips."""
     pairs = []
-    mirrored = []
     for i in range(4):
         a, b = grids[i], grids[(i + 1) % 4]
         common, why = pair_common(a[0], b[0], tol)
         if common is None:
-            return None, None, ("strip %d and strip %d: %s" % (i, (i + 1) % 4,
-                                                                why))
+            return None, ("strip %d and strip %d: %s"
+                          % (i, (i + 1) % 4, why))
         pairs.append(common)
-        mirrored.append((common[1], common[0]))
-    if all(c == CORNER_COMMON for c in pairs):
-        pass
-    elif all(c == CORNER_COMMON for c in mirrored):
-        grids = [grids[0]] + list(reversed(grids[1:]))
-    else:
-        return None, None, ("the four strips are not a consistently oriented "
-                            "ring (shared corners %r)" % (pairs,))
+    return pairs, None
+
+
+def _pair_needs_swap(common):
+    """True when `subgrid33_2grid64` has to SWAP its two grids to read this
+    pairing: the shared corner sits on the first grid's cross-seam side
+    (corner slot 1 or 2) and on the second's (slot 0 or 3).
+
+    A swap is a reparameterization of the SAME corner -- the reader writes
+    the 3x3 with u and v exchanged -- so a ring whose four pairs are all
+    read one way or all read the other is the same ring round either
+    direction. A ring that MIXES the two is not: one of its subgrids would
+    land transposed against its neighbours and the 6x6's interior rows
+    would not line up. That is what the refusal names."""
+    return common[0] in (1, 2) and common[1] in (0, 3)
+
+
+def _oriented_ring(grids, tol):
+    """`grids` in the direction the subgrid reader consumes them, or
+    (None, reason).
+
+    The ring as stored is used whenever its four pairs are all read without
+    a grid swap -- that is the byte-identical path every ring this workbench
+    builds takes. A ring handed over the other way round presents every pair
+    mirrored, so it is reversed (`grids[1:]` reversed, keeping the first
+    grid) and the reversed reading is used when THAT is all one way.
+
+    NO CORNER PATTERN IS DEMANDED. The reference's own rings (the
+    maintainer's `Silk_CopyPasta_28`/`_29`, read offline: all 20 quad
+    corners) share (0,1), (0,2) and (3,1) as well as the ring-canonical
+    (3,2), mixed freely round one ring -- e.g. [(0,1), (0,2), (3,1),
+    (0,1)]. `pair_common` and `subgrid33_2grid64` take each pair on the
+    corners it finds, so those rings reproduce the reference's 6x6 pole for
+    pole (`Tests/test_corner_ring_acceptance.py` runs that parity table
+    through THIS function); a normalizer that admitted only (3,2) and its
+    full mirror refused all 20 of them."""
+    pairs, why = _ring_pairs(grids, tol)
+    if pairs is None:
+        return None, why
+    if not any(_pair_needs_swap(c) for c in pairs):
+        return grids, None
+    mirrored = [grids[0]] + list(reversed(grids[1:]))
+    mpairs, _mwhy = _ring_pairs(mirrored, tol)
+    if mpairs is not None and not any(_pair_needs_swap(c) for c in mpairs):
+        return mirrored, None
+    return None, ("the four strips are not a consistently oriented ring "
+                  "(shared corners %r, read the other way %r: the subgrid "
+                  "reader would have to transpose one pair's two grids and "
+                  "leave the others alone)"
+                  % (pairs, mpairs))
+
+
+def corner_grid(grids, tol=1e-6):
+    """Four 24-pole grids (ring order) -> the corner's 6x6.
+
+    `grids` are the ring's control nets in cyclic order, each carrying its
+    junction-end row on whichever row the ring's shared corner sits on --
+    V = 3 for a strip whose patch puts the junction there, V = 0 for one
+    that does not, and EITHER for a triangular member, whose two ring
+    corners are a property of its cell rather than of a convention.
+
+    The direction is normalized by `_oriented_ring`: a ring handed over
+    mirrored is reversed, and any pairing `subgrid33_2grid64` reads is
+    accepted (only a ring that MIXES the two readings is refused by name).
+
+    A ring whose triangular member collapses one side of the 6x6 is
+    re-solved by `smooth_degenerate_cap` -- see that function for why, and
+    for the measurement that makes it necessary.
+
+    Returns (poles36, weights36, None) or (None, None, reason)."""
+    grids, why = _oriented_ring(list(grids), tol)
+    if grids is None:
+        return None, None, why
 
     subgrids = []
     for i in range(4):

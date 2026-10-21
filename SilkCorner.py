@@ -231,7 +231,7 @@ def _assemble_square_ring(base, ordered):
     return None, why
 
 
-def _resolve_member_pin(pin, patches):
+def resolve_member_pin(pin, patches):
     """(patch, corner) for a triangular-member pin, or (None, reason).
 
     `pin` is `(patch or its Name, corner index)` -- which ring patch's
@@ -269,7 +269,7 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
     corners are the patch vertices -- across every corner index and
     reversal. Returns the 4-grid ring or None.
 
-    `pinned` is a resolved `(patch, corner)` from `_resolve_member_pin`:
+    `pinned` is a resolved `(patch, corner)` from `resolve_member_pin`:
     when set, ONLY that candidate is tried (both reversal states, as the
     search does) and no other patch or corner is considered, so the
     member lands exactly where the user asked or the caller refuses. When
@@ -442,7 +442,7 @@ def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
         # swapped.  Stored order FIRST, so a corner that already assembles
         # keeps its exact poles.
         pinned, pin_why = ((None, None) if pin is None
-                           else _resolve_member_pin(pin, patches))
+                           else resolve_member_pin(pin, patches))
         if pin is not None and pinned is None:
             return None, None, None, pin_why
         ring = None
@@ -847,7 +847,8 @@ class RollingMemberFace:
             self._in_execute = False
 
     def _do_execute(self, fp):
-        grids, _cells, why = corner_inputs(list(fp.Strips))
+        grids, _cells, why = corner_inputs(list(fp.Strips),
+                                          pin=_member_pin_of(fp))
         member = member_grid(grids) if grids is not None else None
         if member is None:
             FreeCAD.Console.PrintError(
@@ -936,6 +937,26 @@ class RollingMemberFace:
             fp.purgeTouched()
         except Exception:
             pass
+
+
+def _member_pin_of(face):
+    """The `(patch, corner)` the corner fill this face belongs to is PINNED
+    to, or None.
+
+    THE MEMBER AND THE 66 MUST AGREE ABOUT WHERE THE MEMBER IS (#117).  The
+    corner object carries the placement (`MemberPatch` / `MemberCorner`) and
+    derives its 6x6 from it; this face re-derives the SAME member from the
+    SAME ring, so it has to read the same pin rather than run the automatic
+    search again.  Measured on the cube-corner fixture with the member pinned
+    to PatchB: without this, the face kept showing the member the search
+    picks (its face area did not move when PatchB's cut moved, while the
+    corner's own derivation did) -- i.e. the two surfaces disagreed, which is
+    exactly the defect #117 was filed for, on the rolling construction."""
+    corner = getattr(face, "Corner", None)
+    patch = getattr(corner, "MemberPatch", None) if corner is not None else None
+    if patch is None:
+        return None
+    return (patch, int(getattr(corner, "MemberCorner", 0) or 0))
 
 
 def member_grid(grids):
