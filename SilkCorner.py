@@ -678,6 +678,26 @@ def corner_construction(obj):
                         "rolling corner)" % getattr(obj, "Name", "?"))
 
 
+def ensure_pieces(obj):
+    """The corner's `Pieces` link list (#130): its preserved pieces.
+
+    The rolled corner leaves the patches' own surface exposed beside the
+    corner fill, and the maintainer's file keeps that surface as five
+    separate objects (`PreservedPiece` below).  They are
+    recorded HERE, on the corner, because they are a part of it -- what a
+    caller hides, recolours or replaces when it wants the corner's exposed
+    surface back is one list.
+
+    An empty list is the ordinary reading: the shipped construction has no
+    separate member and therefore no pieces, and a corner restored from a
+    document older than this property has none either."""
+    if not hasattr(obj, "Pieces"):
+        obj.addProperty("App::PropertyLinkList", "Pieces", "Inputs",
+                        "the corner's preserved pieces -- one per cell of a "
+                        "ring patch that the corner does not cover")
+        obj.Pieces = []
+
+
 def fill_of_member(doc, member):
     """The `Surface::Filling` whose boundary is this member's shape, or
     None.
@@ -698,6 +718,48 @@ def fill_of_member(doc, member):
     return None
 
 
+def corner_cell_of(p, strips, tol=CORNER_DEFAULT_TOL):
+    """`(iu, iv, nu, nv, u_end, v_end)` of the ring-corner cell of patch
+    `p`: the cell's index on each axis, the axes' interval counts, and the
+    parametric END (0 or 1) the junction sits at on each axis.
+
+    THE CELL (#119): when the junction end carries a LEADER cut, the corner
+    cell is the interval that ENDS at that cut -- the region between the
+    setback and the leader -- because that is the region the corner fill
+    leaves over once the band is cut back.  Without a leader it is the end
+    interval, exactly as before.
+
+    THE ENDS are read from the SEAMS, one axis from each: a seam that runs
+    ALONG U lies at constant V, so its side digit names the V end the
+    junction is at, and the seam along V names the U end.  They are needed
+    beside the cell index because the index alone cannot say which way is
+    "away from the junction" (`SilkMachinery.preserved_piece_cells`), and on
+    a three-interval axis the same index is both ends' leader-cut cell.
+    """
+    nu, nv = len(axis_intervals(p, "U")), len(axis_intervals(p, "V"))
+    iu_c = iv_c = u_end = v_end = None
+    for s in strips:
+        other = s.PatchB if s.PatchA is p else s.PatchA
+        if other is None:
+            continue
+        # #83: read the strip's side off the STRIP (which carries the pinned
+        # Edge of a unified Blend), not off the patch pair. A patch pair
+        # sharing two seams names the same side twice, so a corner cell
+        # derived through `patch_side` can be taken on the wrong seam's band.
+        e, ss = side_and_end(s, p, tol)
+        if not e:
+            continue
+        letter = "V" if e[0] == "U" else "U"
+        s1, s2 = split_pair(p, letter)
+        l1, l2 = leader_pair(p, letter)
+        idx, _n, _end = corner_cell_index(s1, s2, l1, l2, int(e[1]))
+        if e[0] == "U":
+            iv_c, v_end = idx, int(e[1])
+        else:
+            iu_c, u_end = idx, int(e[1])
+    return iu_c, iv_c, nu, nv, u_end, v_end
+
+
 class CornerBlend:
     """FeaturePython: fills the central region where 4 patches meet."""
 
@@ -716,6 +778,7 @@ class CornerBlend:
         # Which construction this corner is (the corner stage records it
         # when it builds; an object built here directly has none yet).
         ensure_construction(obj)
+        ensure_pieces(obj)
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs",
                         "corner grid poles (6x6)").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "Outputs",
@@ -740,6 +803,7 @@ class CornerBlend:
         migrate_shaded_display(obj)
         ensure_member_pin(obj)
         ensure_construction(obj)
+        ensure_pieces(obj)
 
     def onChanged(self, fp, prop):
         if prop in ("Strips", "tolerance", "MemberPatch", "MemberCorner"):
@@ -781,8 +845,9 @@ class CornerBlend:
     @staticmethod
     def _corner_cell(p, strips, tol):
         """(iu_c, iv_c, nu, nv) of the corner cell at the 4-patch junction
-        of patch p. The U-direction seam gives the V side of the corner,
-        the V-direction seam gives the U side.
+        of patch p -- the first four fields of `corner_cell_of`, which is
+        the one derivation (the two extra fields are the junction's
+        parametric ends, read by the preserved pieces).
 
         `nu` / `nv` are the interval counts of the two named band edges
         plus the leader cuts (#82 / #119) -- `len(splits) + 1` used to say
@@ -795,30 +860,7 @@ class CornerBlend:
         between the setback and the leader -- because that is the region the
         corner fill leaves over once the band is cut back. Without a leader
         it is the end interval, exactly as before."""
-        nu, nv = len(axis_intervals(p, "U")), len(axis_intervals(p, "V"))
-        iu_c = iv_c = None
-        for s in strips:
-            other = s.PatchB if s.PatchA is p else s.PatchA
-            if other is None:
-                continue
-            # #83: read the strip's side off the STRIP (which carries the
-            # pinned Edge of a unified Blend), not off the patch pair. A
-            # patch pair sharing two seams names the same side twice, so a
-            # corner cell derived through `patch_side` can be taken on the
-            # wrong seam's band.
-            e, ss = side_and_end(s, p, tol)
-            if not e:
-                continue
-            letter = "V" if e[0] == "U" else "U"
-            s1, s2 = split_pair(p, letter)
-            l1, l2 = leader_pair(p, letter)
-            idx, _n, _end = corner_cell_index(s1, s2, l1, l2,
-                                              int(e[1]))
-            if e[0] == "U":
-                iv_c = idx
-            else:
-                iu_c = idx
-        return iu_c, iv_c, nu, nv
+        return corner_cell_of(p, strips, tol)[:4]
 
     def _refuse(self, fp, why):
         """Refuse loudly and leave the object EMPTY rather than stale: a
@@ -1152,6 +1194,160 @@ def member_grid(grids):
 class RollingMemberFaceViewProvider:
     """The small triangular surface's view provider (no icon of its own:
     it is a piece of the corner, not a new kind of object)."""
+
+    def __init__(self, vobj):
+        vobj.Proxy = self
+
+    def attach(self, vobj):
+        self.ViewObject = vobj
+        self.Object = vobj.Object
+
+    def updateData(self, obj, prop):
+        return True
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        return None
+
+
+class PreservedPiece:
+    """ONE cell of a ring patch's own surface, kept as its own object
+    (#130) -- the maintainer's `CubicSurface_44` beside a rolled corner.
+
+    WHICH CELL.  A rolled corner does not cover its patches: beside the
+    corner fill and the triangular member the patches' own surface stays
+    visible, and the maintainer's file keeps that surface as FIVE separate
+    objects, one cell each (measured from `Silk_CopyPasta_29`: three from
+    the patch that carries the tri, one from each of the other two).  The
+    cell is derived by `SilkMachinery.preserved_piece_cells` -- the cell ONE
+    STEP BEYOND the patch's inner cell, away from the junction -- and this
+    object is that cell of that patch, so the surface it draws is the
+    patch's own, not a re-fitted copy of it.
+
+    THE SURFACE IS THE PATCH'S OWN CELL.  It is read through the patch's
+    `getSubgrid` (the same segmentation the patch's `_subsurfaces` hold) and
+    built with the patch's own base-surface construction, so the piece meets
+    its neighbours C0 to the arithmetic: it is a segment of the same
+    bicubic Bezier, cut on knot lines the patch already carries.
+
+    The object re-derives on every execute, like `RollingMemberFace`: if a
+    cut moves, the piece follows the cell its `CellU` / `CellV` name rather
+    than keeping a stale rectangle, and a document that settles does so
+    with the corner's own pieces settled too.
+    """
+
+    def __init__(self, obj, patch, cell_u, cell_v, role=""):
+        obj.addProperty("App::PropertyLink", "Patch", "Inputs",
+                        "the ring patch this piece is a cell of").Patch = patch
+        obj.addProperty("App::PropertyInteger", "CellU", "Inputs",
+                        "the patch's U interval this piece covers"
+                        ).CellU = int(cell_u)
+        obj.addProperty("App::PropertyInteger", "CellV", "Inputs",
+                        "the patch's V interval this piece covers"
+                        ).CellV = int(cell_v)
+        obj.addProperty("App::PropertyString", "Role", "Inputs",
+                        "which preserved piece this is, relative to the "
+                        "patch's inner cell").Role = str(role)
+        obj.addProperty("App::PropertyFloat", "U0", "Outputs",
+                        "the cell's first U parameter").U0
+        obj.addProperty("App::PropertyFloat", "U1", "Outputs",
+                        "the cell's second U parameter").U1
+        obj.addProperty("App::PropertyFloat", "V0", "Outputs",
+                        "the cell's first V parameter").V0
+        obj.addProperty("App::PropertyFloat", "V1", "Outputs",
+                        "the cell's second V parameter").V1
+        obj.addProperty("App::PropertyVectorList", "Poles", "Outputs",
+                        "the cell's 16 poles").Poles
+        obj.addProperty("App::PropertyFloatList", "Weights", "Outputs",
+                        "the cell's 16 weights").Weights
+        obj.addProperty("App::PropertyString", "object_type", "",
+                        "").object_type = "PreservedPiece"
+        obj.setEditorMode("object_type", 1)
+        obj.Proxy = self
+        self._in_execute = False
+
+    def onChanged(self, fp, prop):
+        if prop in ("Patch", "CellU", "CellV"):
+            if 'Restore' not in fp.State and getattr(fp, "Patch", None) is not None:
+                fp.touch()
+                fp.recompute()
+
+    def execute(self, fp):
+        if 'Restore' in fp.State:
+            return
+        if getattr(self, "_in_execute", False):
+            return
+        self._in_execute = True
+        try:
+            self._do_execute(fp)
+        finally:
+            self._in_execute = False
+
+    def _refuse(self, fp, why):
+        fp.Poles = []
+        fp.Weights = []
+        fp.Shape = Part.Shape()
+        FreeCAD.Console.PrintError(
+            "Silk: preserved piece %s: %s\n" % (fp.Name, why))
+
+    def _do_execute(self, fp):
+        p = getattr(fp, "Patch", None)
+        if p is None:
+            self._refuse(fp, "it names no patch")
+            return
+        us = axis_intervals(p, "U")
+        vs = axis_intervals(p, "V")
+        iu, iv = int(fp.CellU), int(fp.CellV)
+        if not (0 <= iu < len(us) and 0 <= iv < len(vs)):
+            self._refuse(fp, ("cell (%d, %d) does not exist on %s, whose axes "
+                              "are cut into %d and %d intervals"
+                              % (iu, iv, p.Name, len(us), len(vs))))
+            return
+        getter = getattr(getattr(p, "Proxy", None), "getSubgrid", None)
+        if getter is None:
+            self._refuse(fp, "%s does not expose its cells" % p.Name)
+            return
+        u0, u1 = us[iu]
+        v0, v1 = vs[iv]
+        poles2d, weights2d = getter(u0, u1, v0, v1)
+        if not poles2d or not weights2d:
+            self._refuse(fp, ("%s's cell (%d, %d) is not built (the patch "
+                              "has no surface yet)" % (p.Name, iu, iv)))
+            return
+        # the patch's own flat order: poles[U][V] == flat[U * 4 + V]
+        poles = [poles2d[r][c] for r in range(4) for c in range(4)]
+        weights = [float(weights2d[r][c]) for r in range(4) for c in range(4)]
+        fp.U0, fp.U1, fp.V0, fp.V1 = u0, u1, v0, v1
+        fp.Poles = poles
+        fp.Weights = weights
+        # THE PATCH'S OWN BASE-SURFACE CONSTRUCTION, so this IS the cell and
+        # not a re-fit of it: the piece is a segment of the same bicubic
+        # Bezier, on knot lines the patch already carries.
+        surf = Part.BSplineSurface()
+        surf.increaseDegree(3, 3)
+        for knot, mult in [(0.0, 4), (1.0, 4)]:
+            surf.insertUKnot(knot, mult, 1e-7)
+            surf.insertVKnot(knot, mult, 1e-7)
+        for r in range(4):
+            for c in range(4):
+                idx = r * 4 + c
+                surf.setPole(c + 1, r + 1, poles[idx], weights[idx])
+        shape = surf.toShape()
+        fp.Shape = shape if (shape and getattr(shape, "Faces", None)) \
+            else Part.Shape()
+        # the properties written above touch the object again; a document
+        # that stays dirty is a document that never settles (#125).
+        try:
+            fp.purgeTouched()
+        except Exception:
+            pass
+
+
+class PreservedPieceViewProvider:
+    """The preserved piece's view provider (no icon of its own: it is a
+    piece of the corner's own surface, not a new kind of object)."""
 
     def __init__(self, vobj):
         vobj.Proxy = self

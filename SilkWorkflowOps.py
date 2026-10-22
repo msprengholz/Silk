@@ -1799,12 +1799,122 @@ def create_rolling_corner_66(strips, patch, leader=ROLLING_LEADER, seams=None,
                 stale.ViewObject.Visibility = False
             except Exception:
                 pass
+    # 4. the FIVE PRESERVED PIECES (#130): the ring patches' own surface
+    #    beside the two surfaces above -- three cells from the patch that
+    #    carries the tri, one from each of the other two.
+    pieces = create_preserved_pieces(corner, member_patch=patch)
     return {"corner": corner, "member": member, "member_fill": member_fill,
             "member_fill_gap": member_fill_gap,
             "member_junction_c0": member_junction_c0,
             "member_face": member_face if member is not None else None,
             "leader": leader, "rolled": [s.Name for s in roll],
+            "pieces": pieces,
             "written": written}
+
+
+# ---- the preserved pieces of a rolled corner (#130) -----------------------
+#
+# A rolled corner does not COVER its patches, it sits on them: beside the 66
+# (the quad) and the triangular member, the patches' own surface stays
+# visible, and the maintainer's corner keeps that surface as FIVE separate
+# objects -- one CELL of a ring patch each (measured from
+# `Silk_CopyPasta_29`): three from the patch that carries the tri, one from
+# each of the other two.  `SilkMachinery.preserved_piece_cells` derives the
+# cells; this is the wiring that turns each of them into an object and
+# records them on the corner (`CornerBlend.Pieces`).
+
+def create_preserved_pieces(corner, member_patch=None, name=None):
+    """Attach the corner's FIVE PRESERVED PIECES (#130) and return them.
+
+    `corner` is a built `CornerBlend`; `member_patch` the patch that carries
+    the triangular member (None asks the same automatic search the member
+    itself runs).  Returns the list of `PreservedPiece` objects -- an
+    already-populated corner returns the pieces it has (the corner stage is
+    idempotent), and a corner whose ring cannot supply them prints the
+    reason and returns [] rather than parking a half set in the tree.
+
+    WHICH CELLS is not decided here: `SilkMachinery.preserved_piece_cells`
+    derives them from the patch's own corner cell and the junction's
+    parametric ends, the same reading the corner fill and the member are
+    built from.  What this function owns is the OBJECT: one per cell, a
+    `PreservedPiece` linked to its patch and recorded on the corner, so the
+    five surfaces can be hidden or replaced as one list.
+
+    It is the ROLLING construction that has pieces: they are the surface the
+    corner's two surfaces leave over, and the shipped construction -- which
+    has no separate member -- is byte for byte the corner of before #130.
+    """
+    from SilkCorner import (PreservedPiece, PreservedPieceViewProvider,
+                            corner_cell_of, ensure_pieces,
+                            corner_member_pin, CORNER_DEFAULT_TOL)
+    from SilkMachinery import (preserved_piece_cells, corner_ring_3,
+                               axis_intervals)
+    doc = FreeCAD.ActiveDocument
+    ensure_pieces(corner)
+    existing = list(getattr(corner, "Pieces", None) or [])
+    if existing:
+        return existing
+    strips = list(getattr(corner, "Strips", None) or [])
+    ordered, why = corner_ring_3(strips)
+    if ordered is None:
+        FreeCAD.Console.PrintError(
+            "Silk: the corner's preserved pieces were not created -- %s\n"
+            % why)
+        return []
+    patches = []
+    for s in ordered:
+        for p in (s.PatchA, s.PatchB):
+            if p is not None and p not in patches:
+                patches.append(p)
+    if member_patch is None:
+        pin = corner_member_pin(strips, CORNER_DEFAULT_TOL)
+        member_patch = pin[0][0] if pin and pin[0] else None
+    # derive EVERY piece before creating anything (the #80/#83 lesson: never
+    # park a dead object), and name the patch that cannot supply its cell.
+    planned = []
+    for p in patches:
+        cell = corner_cell_of(p, ordered, CORNER_DEFAULT_TOL)
+        cells, why = preserved_piece_cells(cell, member=(p is member_patch))
+        if cells is None:
+            FreeCAD.Console.PrintError(
+                "Silk: the corner's preserved pieces were not created -- on "
+                "%s, %s. Nothing was created.\n" % (p.Name, why))
+            return []
+        us, vs = axis_intervals(p, "U"), axis_intervals(p, "V")
+        for role, iu, iv in cells:
+            planned.append((p, role, iu, iv, us[iu], vs[iv]))
+    base = name or getattr(corner, "Name", "Corner")
+    made = []
+    for (p, role, iu, iv, _uiv, _viv) in planned:
+        obj = doc.addObject("Part::FeaturePython",
+                            "%sPiece_%s_%s" % (base, p.Name, role))
+        obj.Label = "%s piece: %s (%s)" % (base, p.Name, role)
+        PreservedPiece(obj, p, iu, iv, role)
+        PreservedPieceViewProvider(obj.ViewObject)
+        obj.ViewObject.DisplayMode = "Flat Lines"
+        made.append(obj)
+    corner.Pieces = made
+    doc.recompute()
+    for obj in made:
+        if not obj.Poles:
+            FreeCAD.Console.PrintError(
+                "Silk: the preserved piece %s did not build (%s cell %d/%d); "
+                "the pieces were removed again.\n"
+                % (obj.Name, obj.Patch.Name if obj.Patch else "?",
+                   obj.CellU, obj.CellV))
+            for o in made:
+                if doc.getObject(o.Name) is not None:
+                    doc.removeObject(o.Name)
+            corner.Pieces = []
+            doc.recompute()
+            return []
+    FreeCAD.Console.PrintMessage(
+        "Silk: the corner keeps %d preserved piece(s), one cell of a ring "
+        "patch each: %s\n"
+        % (len(made),
+           ", ".join("%s (%s of %s)" % (o.Name, o.Role, o.Patch.Name)
+                     for o in made)))
+    return made
 
 
 # ---- the corner fill (#96) ------------------------------------------------

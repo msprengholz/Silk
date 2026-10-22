@@ -953,6 +953,84 @@ def ring_corner_gap(p):
     return None
 
 
+# ---- the preserved pieces of a rolled corner (#130) ---------------------
+#
+# A rolled corner does not cover its patches: beside the corner fill and the
+# triangular member the patches' OWN surface stays visible, and the
+# maintainer's file keeps that surface as FIVE separate objects, one per CELL
+# of a ring patch.  Measured from `Silk_CopyPasta_29` -- each is a
+# `CubicSurface_44` over one cell of a `CubicSurface_44` base patch:
+#
+#   _048 <- cell 094 \
+#   _062 <- cell 166  } from the patch that carries the tri
+#   _064 <- cell 168 /
+#   _049 <- cell 095     from the second patch
+#   _053 <- cell 130     from the third patch
+#
+# and the cells, read off that file's cut positions, are all ONE STEP BEYOND
+# the patch's inner cell: `_048`/`_062`/`_064` are the cells beside the
+# member's cell (one beyond it in u, one in v, and the diagonal one) and
+# `_049`/`_053` are the single cell diagonally beyond the corner cell.  So
+# the count and the placement are pinned by the file, not chosen here.
+
+PRESERVED_BEYOND_U = "beyond_u"
+PRESERVED_BEYOND_V = "beyond_v"
+PRESERVED_BEYOND_BOTH = "beyond_both"
+PRESERVED_PIECE_ROLES = (PRESERVED_BEYOND_U, PRESERVED_BEYOND_V,
+                         PRESERVED_BEYOND_BOTH)
+
+
+def preserved_piece_cells(cell, member=False):
+    """The PRESERVED-PIECE cells of one ring patch: ((role, iu, iv), ...)
+    -- or (None, why) when this patch's axes cannot supply them.
+
+    `cell` is the patch's ring-corner cell as `SilkCorner.corner_cell_of`
+    reports it: `(iu, iv, nu, nv, u_end, v_end)`.  The cell is the interval
+    that ENDS at the leader cut when that end carries one (the region
+    between the setback and the leader) and the end interval otherwise
+    (`corner_cell_index`), which is why the member patch's cell is the tri's
+    own cell and every other patch's is its corner cell.
+
+    `member` says which of the two readings this patch is: the patch that
+    carries the triangular member yields THREE pieces (one beyond its cell
+    in u, one in v, and the diagonal one), each of the other two yields ONE
+    (the diagonal one) -- 3 + 1 + 1 = the five surfaces the maintainer's
+    corner stores.
+
+    "Beyond" is measured AWAY from the junction: the direction is the one
+    `u_end` / `v_end` do not name, so a patch whose junction sits at
+    parametric 1 steps DOWN the interval list.  A piece is therefore always
+    one whole cell of the patch as the patch is cut -- the same object his
+    file stores -- and never a partly-cut region.
+    """
+    if not cell:
+        return None, "the patch has no ring-corner cell"
+    iu, iv, nu, nv, u_end, v_end = cell
+    if iu is None or iv is None or u_end is None or v_end is None:
+        return None, "the patch's ring corner does not name a cell on both axes"
+    du = -1 if u_end == 1 else 1
+    dv = -1 if v_end == 1 else 1
+    ju, jv = iu + du, iv + dv
+    for (name, idx, n) in (("U", ju, nu), ("V", jv, nv)):
+        if not 0 <= idx < n:
+            return None, ("the %s axis has no interval beyond the corner cell "
+                          "(%d interval(s), the cell at index %d) -- a "
+                          "preserved piece is one whole cell of the patch"
+                          % (name, n, iu if name == "U" else iv))
+    roles = [PRESERVED_BEYOND_BOTH]
+    if member:
+        roles = [PRESERVED_BEYOND_U, PRESERVED_BEYOND_V,
+                 PRESERVED_BEYOND_BOTH]
+    out = []
+    for role in roles:
+        out.append((role,
+                    ju if role in (PRESERVED_BEYOND_U, PRESERVED_BEYOND_BOTH)
+                    else iu,
+                    jv if role in (PRESERVED_BEYOND_V, PRESERVED_BEYOND_BOTH)
+                    else iv))
+    return out, None
+
+
 def _edges_str(p, letter):
     """`USplit1 = 0.1, USplit2 = 0.9` — one axis as the data tab shows it,
     with the leader cut named when the axis carries one (#119)."""

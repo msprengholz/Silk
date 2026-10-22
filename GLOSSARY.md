@@ -84,6 +84,17 @@ file the tri interior is **16-62 %** of the corner extent away from the quad, wh
 wrapping patch reads **0.1-10 %**.
 _Avoid_: using "tri" for a fill drawn over a region the quad already covers
 
+**Preserved piece**:
+One CELL of a ring patch's own surface, kept as a separate object beside a rolled corner
+-- the surface the corner's two surfaces (the quad and the tri) do **not** cover. A
+rolled corner has **FIVE**, measured from the maintainer's file: **three** from the patch
+that carries the tri (the cells one step beyond the member's cell in u, in v, and the
+diagonal one) and **one** from each of the other two patches (the cell diagonally beyond
+its corner cell). Silk builds them as `PreservedPiece` objects, recorded on the corner's
+`Pieces` link list; the cell comes from `SilkMachinery.preserved_piece_cells`.
+_Avoid_: "patch remnant", "spare surface"; a preserved piece is never a re-fitted copy of
+the patch -- it is the patch's own cell, cut on knot lines the patch already carries
+
 **Rolling leader**:
 a position on the seam curve, measured from the junction corner, that **must be an
 independent cut** -- separate from the band edge (the setback). The maintainer has TWO

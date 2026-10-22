@@ -213,6 +213,24 @@ creates them anymore.
 - Refuses **by name and creates nothing** unless it gets four strips forming
   one ring, or three strips forming a 3-cycle (the #80/#83 lesson: never park a
   dead object). An existing corner for the same strip set is an idempotent no-op.
+- **A rolled corner carries TEN ROLES, not five (#130).** Measured from
+  `Silk_CopyPasta_29`: 3 ring blends + the tri + the quad + **FIVE preserved
+  pieces** -- one CELL of a ring patch each, three from the patch that carries
+  the tri and one from each of the other two. The cell is pinned by the file:
+  the cell ONE STEP BEYOND the patch's inner cell, away from the junction
+  (`SilkMachinery.preserved_piece_cells`), where the inner cell is the
+  member's cell on the tri's patch and the corner cell on the others -- on the
+  cube fixture that is 0.15x0.75, 0.75x0.15 and 0.75x0.75 mm² beside the
+  0.15x0.15 mm² tri, plus 0.9x0.9 mm² on the two other patches. Each piece is
+  a `SilkCorner.PreservedPiece` object -- the patch's OWN cell read through
+  `Patch.getSubgrid` and built with the patch's base-surface construction, so
+  it is a segment of the same Bezier, not a re-fit -- recorded on the corner's
+  `Pieces` link list. They are C0 to everything they abut by construction
+  (measured 5.6e-17..1.4e-14 mm across the cube and the demo). The **shipped**
+  construction has no separate member and therefore no pieces (byte
+  identical), and a 4-valent ring has no member either.
+  `Tests/test_preserved_pieces.py` pins the ten roles, the cells, the nets,
+  the C0 table, the settle and the shipped/4-valent pairs.
 - **The 3-valent path builds (measured on the cube-corner fixture).** The
   member is derived from the patch's ring **corner cell** (not its full base
   net), and a multi-corner match is admitted by `pair_common` only when it is
