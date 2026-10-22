@@ -79,6 +79,8 @@ selectable option; an unknown face is refused before anything is built.
 # stays importable. See suite.py.
 MANUAL = True
 
+import os
+
 import FreeCAD
 
 from SilkWorkflowOps import (create_corner_blend, apply_corner_choices,
@@ -638,4 +640,284 @@ def test_the_panel_offers_the_construction_and_shows_the_refusal(doc):
             FreeCAD.closeDocument(sdoc.Name)
         if doc.Name in FreeCAD.listDocuments():
             FreeCAD.setActiveDocument(doc.Name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+# ---------------------------------------------------------------------------
+# The wizard UI for the corner: place the tri, set the setback, keep the
+# triangle equal-sided (#129's length rule, reachable from the panel)
+# ---------------------------------------------------------------------------
+
+# The demo junction the owner inspects (Tests/demo01_fixture_model.CORNERS[0])
+# and the artifact this test leaves OPEN for him.
+DEMO_RING = ("B_FT", "B_FR", "B_TR")
+ARTIFACT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "Resources", "Test_files", "_inspect", "demo_corner_ui.FCStd")
+
+
+def _fresh_demo(label):
+    """A fresh document carrying the demo's 12 edges / 5 patches / 8 blends
+    and NO corner -- the state the wizard's corner step starts from.
+
+    A fresh document per build is what makes each placement its own corner:
+    a junction's second build is an idempotent no-op, so two builds in one
+    document could not be told apart. A copy left open by an earlier run is
+    closed first (a `saveAs` renames the label, so both are checked)."""
+    from Tests.demo01_fixture_model import build
+    for name, d in list(FreeCAD.listDocuments().items()):
+        if d.Label == label or d.Name == label:
+            FreeCAD.closeDocument(name)
+    doc = FreeCAD.newDocument(label)
+    FreeCAD.setActiveDocument(doc.Name)
+    build(doc, corners=False)
+    doc.recompute()
+    doc.recompute()
+    return doc
+
+
+def _panel_build(tag, pin=None, leaders=None, save_to=None):
+    """Build ONE demo corner THROUGH THE REAL PANEL and report NUMBERS.
+
+    The corner section is opened, the ring is clicked in, the page's own
+    widgets are set exactly as a user would (the patch combo, the corner
+    index, one spin per seam), and the corner is built by the panel's Enter
+    (`panel_confirm`) -- not by the ops layer. Everything reported is read
+    back off the built objects: the corner's recorded member placement, the
+    tri's face area, the quad's area, and the length of each cut that bounds
+    the triangular member (`seam_cut_length`, the stage's own instrument).
+
+    `save_to` saves the document there and LEAVES IT OPEN (the artifact); no
+    document escapes otherwise -- every one is closed before returning.
+    """
+    import SilkTaskPanel as TP
+    from Tests.test_task_panel import _open_panel, _close_panel, _click
+    from SilkCorner import (corner_construction, corner_member_pin,
+                            CORNER_DEFAULT_TOL)
+    from SilkWorkflowOps import seam_cut_length
+
+    out = {"tag": tag, "built": False, "status": "", "construction": None,
+           "member_patch": None, "member_corner": None, "tri_area": None,
+           "quad_area": None, "cuts": {}, "bbox": None, "seeds": {},
+           "sent": {}, "object_types": []}
+    doc = _fresh_demo(tag)
+    strips = [doc.getObject(n) for n in DEMO_RING]
+    panel = _open_panel(doc)
+    try:
+        panel.sections.open(TP.SECTION_CORNER)
+        for s in strips:
+            _click(s)
+        out["seeds"] = {name: (spin.value(), spin.text())
+                        for name, spin in panel._corner_leader_spins.items()}
+        if pin is not None:
+            panel.corner_member_patch.setCurrentIndex(
+                panel.corner_member_patch.findText(pin[0]))
+            panel.corner_member_corner.setValue(int(pin[1]))
+        for name, value in (leaders or {}).items():
+            panel._corner_leader_spins[name].setValue(value)
+        _pin, sent = panel.corner_choices()
+        out["sent"] = dict(sent)
+        out["built"] = bool(panel.panel_confirm())
+        out["status"] = panel.status_text()
+        corner = doc.getObject("CornerBlend")
+        if corner is not None:
+            out["construction"] = corner_construction(corner)[0]
+            out["member_patch"] = getattr(corner.MemberPatch, "Name", None)
+            out["member_corner"] = int(corner.MemberCorner)
+            if corner.Shape and corner.Shape.Faces:
+                out["quad_area"] = corner.Shape.Area
+            member = _member(doc)
+            if member is not None and member.Shape and member.Shape.Faces:
+                out["tri_area"] = member.Shape.Area
+                bb = member.Shape.BoundBox
+                out["bbox"] = (round(bb.XMax, 4), round(bb.YMax, 4),
+                               round(bb.ZMax, 4))
+            ring = list(corner.Strips)
+            patch = getattr(corner, "MemberPatch", None)
+            if patch is None:
+                found, _why = corner_member_pin(ring, CORNER_DEFAULT_TOL)
+                patch = found[0] if found is not None else None
+            if patch is not None:
+                for s in ring:
+                    if patch not in (s.PatchA, s.PatchB):
+                        continue
+                    length, _why = seam_cut_length(s, patch, ring=ring)
+                    if length is not None:
+                        out["cuts"][s.Name] = length
+            out["object_types"] = sorted(
+                (getattr(o, "object_type", ""), o.Name) for o in doc.Objects
+                if getattr(o, "object_type", "")
+                in ("CornerBlend", "RollingMemberFace", "PreservedPiece"))
+            if save_to is not None:
+                # The artifact is for the owner to inspect: the LABELS say
+                # which junction and which role each object is (names are
+                # untouched, so nothing depends on them).
+                corner.Label = "CB_J1_FrontTopRight"
+                os.makedirs(os.path.dirname(save_to), exist_ok=True)
+                doc.saveAs(save_to)
+    finally:
+        _close_panel(panel)
+        if save_to is None and doc.Name in FreeCAD.listDocuments():
+            FreeCAD.closeDocument(doc.Name)
+    return out
+
+
+def test_the_panel_places_the_tri_sets_the_setback_and_defaults_to_equal_sides(doc):
+    """THE WIZARD'S CORNER UI, driven through the real panel (#129 / #117 /
+    #128), in the owner's own order:
+
+      (a) WHICH CORNER CARRIES THE TRI. The corner section's placement --
+          the patch combo plus the corner index -- decides it, and the
+          member's own face moves with it. Measured on the demo junction,
+          where all three ring patches can carry the tri but at a DIFFERENT
+          corner index each (`P_Top[3]`, `P_Front[2]`, `P_Right[1]`), so a
+          selector that ignored the index could not build at all and one
+          that ignored the patch could not move the tri.
+      (b) THE SETBACK IS ADJUSTABLE. One editor per seam, in mm from the
+          junction corner; two values give two triangle sizes.
+      (c) THE EQUAL-SIDED DEFAULT. An UNTOUCHED page builds the corner with
+          every seam at "equal", and the two cuts that bound the triangular
+          member come out the same length in mm (the owner's rule: *"ideally
+          both segment lengths should be close to the same absolute
+          length"*) -- which is what turns the demo's 9 mm x 35 mm sliver
+          into a near-even triangle.
+      (d) THE STATUS LINE says which construction was built, and names the
+          refusal (the component's own words) when the requested one was
+          refused and the shipped construction built instead.
+
+    The artifact of (c) is left OPEN:
+    `Resources/Test_files/_inspect/demo_corner_ui.FCStd`.
+    """
+    from SilkWorkflowOps import CUT_LENGTH_TOL
+
+    errors, checks = [], []
+
+    def report(out):
+        checks.append("%s: built=%s, MemberPatch=%s[%s], tri %.6f mm^2, "
+                      "quad %.6f mm^2, cuts %s, status %r"
+                      % (out["tag"], out["built"], out["member_patch"],
+                         out["member_corner"], out["tri_area"] or 0.0,
+                         out["quad_area"] or 0.0,
+                         {k: round(v, 6) for k, v in out["cuts"].items()},
+                         out["status"]))
+
+    # -- (a) the tri-corner selector moves the tri ----------------------
+    top = _panel_build("_ui_tri_top", pin=("P_Top", 3))
+    front = _panel_build("_ui_tri_front", pin=("P_Front", 2))
+    for out, patch, corner_index in ((top, "P_Top", 3), (front, "P_Front", 2)):
+        report(out)
+        if not out["built"]:
+            errors.append("(a) the panel built nothing for %s[%d]: %r"
+                          % (patch, corner_index, out["status"]))
+        elif (out["member_patch"], out["member_corner"]) != (patch,
+                                                             corner_index):
+            errors.append("(a) the panel's placement %s[%d] did not reach the "
+                          "corner (it records %r[%r])"
+                          % (patch, corner_index, out["member_patch"],
+                             out["member_corner"]))
+        if out["tri_area"] is None:
+            errors.append("(a) %s[%d] built no triangular face"
+                          % (patch, corner_index))
+    if (top["tri_area"] is not None and front["tri_area"] is not None):
+        checks.append("(a) the tri moves with the placement: %s[3] %.6f mm^2 "
+                      "at %s, %s[2] %.6f mm^2 at %s"
+                      % ("P_Top", top["tri_area"], top["bbox"],
+                         "P_Front", front["tri_area"], front["bbox"]))
+        if top["bbox"] == front["bbox"]:
+            errors.append("(a) the tri sits in the same place on both "
+                          "placements (%s)" % (top["bbox"],))
+        if abs(top["tri_area"] - front["tri_area"]) <= 1e-9:
+            errors.append("(a) the tri's area did not change with the "
+                          "placement (%.6f on both)" % top["tri_area"])
+
+    # -- (b) the setback editor changes the triangle's size -------------
+    near = _panel_build("_ui_setback_30", pin=("P_Top", 3),
+                        leaders={"B_FT": 30.0, "B_TR": 30.0})
+    far = _panel_build("_ui_setback_50", pin=("P_Top", 3),
+                       leaders={"B_FT": 50.0, "B_TR": 50.0})
+    for out in (near, far):
+        report(out)
+        if not out["built"]:
+            errors.append("(b) the panel built nothing at the lengths %s: %r"
+                          % (out["sent"], out["status"]))
+    if near["tri_area"] is not None and far["tri_area"] is not None:
+        checks.append("(b) the setback editor moves the tri: 30/30 mm -> "
+                      "%.6f mm^2 (cuts %s); 50/50 mm -> %.6f mm^2 (cuts %s)"
+                      % (near["tri_area"],
+                         {k: round(v, 6) for k, v in near["cuts"].items()},
+                         far["tri_area"],
+                         {k: round(v, 6) for k, v in far["cuts"].items()}))
+        if abs(far["tri_area"] - near["tri_area"]) <= 1e-6:
+            errors.append("(b) the editor's two values gave the same triangle "
+                          "(%.6f mm^2 at both)" % near["tri_area"])
+        if near["cuts"] == far["cuts"]:
+            errors.append("(b) the two editor values placed the same cuts "
+                          "(%s)" % (near["cuts"],))
+
+    # -- (c) the equal-sided default, and the artifact ------------------
+    default = _panel_build("demo_corner_ui", save_to=ARTIFACT)
+    report(default)
+    labels = sorted(out["seeds"].items())
+    checks.append("(c) an untouched page seeds every seam with %s (the "
+                  "editor's own 'equal')" % (labels,))
+    for name, (value, text) in labels:
+        if value != 0.0 or text != "equal":
+            errors.append("(c) seam %s seeds %r ('%s'), not the equalising "
+                          "default" % (name, value, text))
+    if not default["built"]:
+        errors.append("(c) the default page built nothing: %r"
+                      % default["status"])
+    legs = sorted(default["cuts"].values())
+    checks.append("(c) the cuts that bound the tri: %s mm -- difference "
+                  "%.3e mm (tolerance %.1e)"
+                  % (["%.9f" % v for v in legs],
+                     abs(legs[-1] - legs[0]) if len(legs) > 1 else 0.0,
+                     CUT_LENGTH_TOL))
+    if len(legs) != 2:
+        errors.append("(c) the default corner carries %d cut(s): %s"
+                      % (len(legs), default["cuts"]))
+    elif abs(legs[-1] - legs[0]) > CUT_LENGTH_TOL:
+        errors.append("(c) the default build is NOT equal-sided: %s"
+                      % (default["cuts"],))
+    if default["tri_area"] is None:
+        errors.append("(c) the default build has no triangular face")
+    checks.append("(c) the artifact: %s (%d objects: %s)"
+                  % (ARTIFACT, len(default["object_types"]),
+                     ", ".join("%s=%s" % pair
+                               for pair in default["object_types"])))
+    if not os.path.exists(ARTIFACT):
+        errors.append("(c) no artifact at %s" % ARTIFACT)
+
+    # -- (d) the status line names what was built, and the refusal ------
+    checks.append("(d) built as asked: %r" % default["status"])
+    if "rolling" not in default["status"]:
+        errors.append("(d) the status line does not name the construction "
+                      "built: %r" % default["status"])
+    if "rolling" in default["status"] and "tri sides" in default["status"]:
+        field = default["status"].split("tri sides")[-1].split("mm")[0]
+        try:
+            said = sorted(float(v) for v in field.replace("/", " ").split())
+        except ValueError:
+            said = []
+        if len(said) != 2 or any(
+                abs(a - b) > 1e-6 for a, b in
+                zip(said, legs or [0.0, 1.0])):
+            errors.append("(d) the status line's tri sides %r are not the "
+                          "cuts the corner carries (%s)"
+                          % (said, ["%.6f" % v for v in legs]))
+
+    # a leader that rests inside the setback cannot cut the member's cell
+    refused = _panel_build("_ui_refused", leaders={"B_FT": 10.0,
+                                                   "B_TR": 10.0})
+    report(refused)
+    checks.append("(d) refused: construction %r, status %r"
+                  % (refused["construction"], refused["status"]))
+    word = "the rolling leader cannot cut the member's cell"
+    if refused["construction"] != "shipped":
+        errors.append("(d) the refused rolling corner built the %r "
+                      "construction" % (refused["construction"],))
+    for wanted in ("shipped", "refused", word):
+        if wanted not in refused["status"]:
+            errors.append("(d) the status line does not say %r: %r"
+                          % (wanted, refused["status"]))
     return {"pass": not errors, "errors": errors, "checks": checks}

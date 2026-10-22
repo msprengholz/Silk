@@ -226,6 +226,32 @@ creates them anymore.
   **3.51..37.08 %** of the corner's extent (his 16..62 %), the quad's
   worst/best pole pitch 32.74 → **26.93**, with 0/0/0 normal-field flips and
   0/630 coincident pairs across it.
+- **The PANEL offers the equal-sided default as a value (#129's rule, made
+  reachable).** Each seam's editor is a length in mm from the junction
+  corner (`Leader (mm)`), and its own **0 reads `equal`**
+  (`CORNER_LEADER_AUTO` / `setSpecialValueText`): that is the ask for the
+  equalising rule, so a seam nothing has cut yet SEEDS at `equal`
+  (`_seam_seed` returns the sentinel instead of the length the old parameter
+  default landed at) and an untouched page builds the equal-sided triangle.
+  `corner_choices()` hands `create_corner_blend` only the seams carrying a
+  NUMBER, and no leaders IS the rule (`leaders=None`); `apply_corner_choices`
+  runs the same rule on the member patch's unnamed seams (`equal_cut_legs`,
+  shared with `create_rolling_corner_66`), so moving the member onto a patch
+  nothing has cut yet still cuts the cell back on both axes. The status line
+  names the construction built AND the tri's own sides it was placed at
+  (`_built_cut_lengths`), and the refusal's own wording when the requested
+  construction was refused. Measured by
+  `Tests/test_corner_choices.py`
+  (`test_the_panel_places_the_tri_sets_the_setback_and_defaults_to_equal_sides`,
+  MANUAL, artifact
+  `Resources/Test_files/_inspect/demo_corner_ui.FCStd`, LEFT OPEN): the
+  placement selector `P_Top[3]` → tri 293.615537 / quad 567.064425 mm² at
+  (58.0414, -66.6667, 64.6564), `P_Front[2]` → tri 57.985728 / quad
+  311.440225 mm² at (16.1198, -75.8895, 45.7615); the setback editor 30/30 mm
+  → tri 129.683005 mm² (cut sides 25.037835 / 5.055816), 50/50 mm →
+  1233.354808 mm² (45.037835 / 25.055816); the untouched page →
+  **17.435446341 / 17.435446341 mm (difference 2.949e-13 mm)**, and the
+  shipped fallback's status line carries the refusal word for word.
 - Builds the real subgrid chain — `SubGrid33_2Grid64` ×4 →
   `ControlGrid66_4Sub` → `CubicSurface_66` — ported into `SilkMachinery`
   (`corner_ring`, `corner_grid`, `subgrid33_2grid64`, `control_grid66_4sub`)

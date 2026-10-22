@@ -1389,6 +1389,38 @@ def equal_cut_length(cuts):
     return (lo * hi) ** 0.5
 
 
+def equal_cut_legs(reaches, patch, strips):
+    """`(target, leg, None)` -- the cut side the EQUALISING rule places on
+    the seams that carry no leader of their own.
+
+    `target` is the length the rule aims at (`equal_cut_length` of the cut
+    sides the stage's own parameter default, `ROLLING_LEADER`, lands at beside
+    each seam's setback); `leg` is that figure capped to the longest side the
+    SHORTEST band can carry, which is what actually gets placed.  One figure
+    for the whole corner, so the cuts beside the triangular member are the
+    same length and the triangle comes out roughly equal-sided.
+
+    Shared by the two places that place a cut with no length asked for -- the
+    corner stage's own build (`create_rolling_corner_66`) and the panel's
+    Apply (`apply_corner_choices`) -- so a corner BUILT with no leader and a
+    corner whose member has just been moved onto seams nothing has cut yet
+    come out the same way.  Returns `(None, None, why)` when a seam cannot be
+    measured."""
+    from SilkMachinery import leader_cut_prop, seam_length
+    seeds = []
+    for reach in reaches:
+        prop, value, why = _seam_cut_home(reach["seam"], patch,
+                                          ROLLING_LEADER, leader_cut_prop,
+                                          ring=strips)
+        if prop is None:
+            return None, None, why
+        seeds.append(seam_length(patch, reach["side"], reach["setback"],
+                                 value))
+    target = equal_cut_length(seeds)
+    leg = min([target] + [r["max_mm"] for r in reaches])
+    return target, leg, None
+
+
 def _ring_of(strips):
     """The ring order of 3 or 4 strips, by name of the rule that applies.
 
@@ -1517,6 +1549,12 @@ def apply_corner_choices(strips, pin=None, leaders=None):
     band edge of both patches of the seam.  A seam the member patch does not
     touch has no cut under the rolling construction, and says so.
 
+    A SEAM THE ROLLING CONSTRUCTION'S MEMBER PATCH TOUCHES BUT `leaders` DOES
+    NOT NAME takes the EQUALISING rule (`equal_cut_legs`) -- the same rule the
+    stage applies when the corner is built with no leader, so "no leader
+    asked for" means one thing on both paths, and moving the member onto a
+    patch nothing has cut yet still leaves a cell cut back on both axes.
+
     The choices are properties of a BUILT corner (the member's placement and
     the ring's cut positions), so this refuses by name when the ring has no
     corner yet: it is the panel's Apply, not a second creation path -- the
@@ -1640,6 +1678,44 @@ def apply_corner_choices(strips, pin=None, leaders=None):
             plan.append((p, prop, write))
         seam_writes.append((strip.Name, value))
     if construction == CORNER_CONSTRUCTION_ROLLING:
+        # A seam of the member patch the caller gave NO length for takes the
+        # EQUALISING rule, exactly as it does when the corner is BUILT with no
+        # leader: asking for no leader is how that rule is asked for
+        # (`create_corner_blend(leaders=None)`), so Apply has to mean the same
+        # thing.  Without it, moving the member onto a patch nothing has cut
+        # yet would leave that patch uncut -- and a rolling corner whose cell
+        # is not cut back on both axes cannot be assembled at all.
+        named = {name for name, _value in seam_writes}
+        on_member = [s for s in ordered
+                     if member_patch in (getattr(s, "PatchA", None),
+                                         getattr(s, "PatchB", None))]
+        unnamed = [s for s in on_member if s.Name not in named]
+        if unnamed:
+            reaches = []
+            for s in on_member:
+                reach, why = seam_cut_reach(s, member_patch, ring=ordered)
+                if reach is None:
+                    return None, ("seam %s: %s" % (s.Name, why))
+                reaches.append(reach)
+            _target, leg, why = equal_cut_legs(reaches, member_patch, ordered)
+            if leg is None:
+                return None, ("the equalising rule cannot place the cut on "
+                              "%s's seams: %s" % (member_patch.Name, why))
+            for reach in reaches:
+                if reach["seam"].Name in named:
+                    continue
+                prop, write, why = seam_cut_at_leg(reach["seam"],
+                                                   member_patch, leg,
+                                                   ring=ordered)
+                if prop is None:
+                    return None, ("seam %s: %s" % (reach["seam"].Name, why))
+                if abs(float(getattr(member_patch, prop, 0.0) or 0.0)
+                       - write) < 1e-12:
+                    continue
+                plan.append((member_patch, prop, write))
+                # the leader that cut side lands at, for the message below
+                seam_writes.append((reach["seam"].Name,
+                                    reach["corner_mm"] + leg))
         # The same condition the corner stage refuses on, decided BEFORE the
         # first write: a leader that does not cut the member's cell back on
         # both axes leaves a 6x6 with coincident poles (or a refusal deeper
@@ -1962,21 +2038,12 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
         asks.append((reach, leg))
     equal_at = [i for i, (_r, leg) in enumerate(asks) if leg is None]
     if equal_at:
-        from SilkMachinery import leader_cut_prop, seam_length
-        seeds = []
-        for reach in reaches:
-            prop, value, why = _seam_cut_home(reach["seam"], patch,
-                                             ROLLING_LEADER,
-                                             leader_cut_prop, ring=strips)
-            if prop is None:
-                FreeCAD.Console.PrintError(
-                    "Silk: the rolling leader cannot be placed: %s. The "
-                    "rolling construction was not built.\n" % why)
-                return None
-            seeds.append(seam_length(patch, reach["side"],
-                                     reach["setback"], value))
-        target = equal_cut_length(seeds)
-        capped = min([target] + [r["max_mm"] for r in reaches])
+        target, capped, why = equal_cut_legs(reaches, patch, strips)
+        if capped is None:
+            FreeCAD.Console.PrintError(
+                "Silk: the rolling leader cannot be placed: %s. The "
+                "rolling construction was not built.\n" % why)
+            return None
         if capped < target - CUT_LENGTH_TOL:
             short = min(reaches, key=lambda r: r["max_mm"])
             FreeCAD.Console.PrintMessage(

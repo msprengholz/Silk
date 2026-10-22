@@ -103,6 +103,16 @@ cuts per axis end (setback 1/16 and leader 1/4); Silk carries one band edge per 
 _Avoid_: writing the leader into the band edge (that makes setback and leader one number,
 which pinches the corner's 4th side -- the exact defect this vocabulary exists to stop)
 
+**Equal-sided default** (`equal`):
+the leader the user has NOT placed. The stage then **equalises** the two cuts that bound the
+triangular member -- the same length in mm, at the geometric mean of the sizes the old
+parameter default gave them (`SilkWorkflowOps.equal_cut_length` / `equal_cut_legs`) -- which
+is the owner's rule and what makes the triangle roughly even-sided. It is the panel's
+per-seam default (`CORNER_LEADER_AUTO`: the editor's own 0 shows "equal") and is spelled
+`leader=None` / a seam left out of `leaders` in the ops layer.
+_Avoid_: calling it a length (it is the ABSENCE of one), and quoting it as a u/v fraction
+-- the rule is measured in mm along the seam curve
+
 **Spiderweb**:
 the control net of a grid with a **collapsed row** (`ControlGrid64_3_1Grid44`), drawn as a
 web of lines to a point. It is a **scaffolding** grid: usable as a ring member, not as a

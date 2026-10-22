@@ -108,7 +108,7 @@ from SilkEdge import classify_sketches
 from SilkBlend import BLEND_TYPES
 from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge, \
     create_corner_blend, apply_corner_choices, corner_ring_patches, \
-    existing_corner, seam_leader, seam_default_leader, \
+    existing_corner, seam_leader, \
     CORNER_CONSTRUCTIONS, \
     CORNER_CONSTRUCTION_ROLLING, CORNER_CONSTRUCTION_SHIPPED, \
     CORNER_CONSTRUCTION_DEFAULT
@@ -260,11 +260,22 @@ CORNER_MEMBER_AUTO_TIP = (
 # seam's own length is the real bound and the stage refuses by name with the
 # number when the ask does not fit (`SilkWorkflowOps.seam_cut_reach`).
 CORNER_LEADER_DECIMALS = 3
-CORNER_LEADER_MIN = 10 ** -CORNER_LEADER_DECIMALS
 CORNER_LEADER_MAX = 1000.0
 CORNER_LEADER_STEP = 1.0
 CORNER_LEADER_COLUMN_WIDTH = 78
 CORNER_LEADER_ROW_HEIGHT = 26
+# "equal" -- the stage's EQUAL-SIDED DEFAULT, reachable in the editor. #129
+# made the cut a LENGTH and gave its default a rule: with no length asked for
+# the corner stage EQUALISES the two cuts that bound the triangular member, so
+# the tri's own sides come out the same absolute length -- the owner's rule
+# (2026-10-22): *"ideally both segment lengths should be close to the same
+# absolute length"*. This makes that rule a value in the editor: the spin's
+# own 0 IS the ask (`setSpecialValueText` shows it as "equal"), and it is what
+# a seam nothing has cut yet seeds with, so an UNTOUCHED panel builds the
+# equal-sided corner instead of re-imposing a fraction of each seam's own
+# parameter (which is the demo's 9 mm x 35 mm sliver).
+CORNER_LEADER_AUTO = 0.0
+CORNER_LEADER_AUTO_TEXT = "equal"
 CORNER_LEADER_TIP = (
     "The rolling leader of THIS seam: where the band is cut back, as a "
     "LENGTH IN MM measured from the junction corner along the seam. The "
@@ -272,19 +283,24 @@ CORNER_LEADER_TIP = (
     "(its band edge stays the setback), so only the seams of the patch that "
     "carries the triangular surface are cut; the SHIPPED construction "
     "writes it into the seam-parallel band edge of both patches of the "
-    "seam. Left at the stage's own default the two cuts that bound the "
-    "triangular member are equalised instead, and the panel shows the "
-    "length each seam carries.")
+    "seam.\n"
+    "At 'equal' (the default) the stage's EQUAL-SIDING rule places the cut "
+    "instead: the two cuts that bound the triangular member are made the "
+    "same length in mm, which is what makes the triangle roughly "
+    "equal-sided. Type a number to place this seam's cut yourself; after "
+    "the corner exists the editor shows the length each seam carries.")
 
 
 def _seam_seed(s, strips, patch=None, construction=None, fresh=False):
     """The length (mm from the junction corner) ONE seam seeds its editor
-    with: what it carries now, else where the corner stage's own parameter
-    default would put it.
+    with: what it carries now, else `CORNER_LEADER_AUTO` ("equal").
 
-    A seam that carries no cut has none to report, and the length the stage
-    would place is `seam_default_leader` -- the same measurement in the same
-    unit, NOT a bare 0.25 (which the stage no longer reads as a fraction).
+    A seam that carries no cut has none to report, and the panel must not
+    invent one: seeding the length the stage's old PARAMETER default lands at
+    would OVERRIDE the equalising rule with a fraction of each seam's own
+    parameter -- the very thing #129 replaced (on the demo that is the 9 mm x
+    35 mm sliver, not the equal-sided triangle).  So an uncut seam seeds at
+    "equal" and the stage's own rule places it.
     `fresh` skips the reading entirely: a seam of the patch the corner WILL
     carry the member on has nothing to read yet, and what sits there today is
     the BAND EDGE, which is the setback and not a leader at all (seeding it
@@ -303,9 +319,7 @@ def _seam_seed(s, strips, patch=None, construction=None, fresh=False):
                 break
         if here is not None:
             return here
-    p = patch if patch is not None else getattr(s, "PatchA", None)
-    seed, _why = seam_default_leader(s, p, ring=strips)
-    return seed if seed is not None else CORNER_LEADER_MIN
+    return CORNER_LEADER_AUTO
 
 
 def corner_cut_seed(strips, construction=None):
@@ -316,8 +330,8 @@ def corner_cut_seed(strips, construction=None):
     own expression (`seam_leader`, which knows both constructions: the
     member patch's leader cut for the rolling one, the band edge for the
     shipped one) and converted to a length in the stage's own unit. A seam
-    that carries no cut seeds with the length the stage's parameter default
-    lands at on it (`seam_default_leader`)."""
+    that carries no cut seeds at `CORNER_LEADER_AUTO` ("equal") -- the
+    stage's equalising rule is what places a cut nobody has asked for."""
     return {s.Name: _seam_seed(s, strips, construction=construction)
             for s in strips}
 
@@ -327,16 +341,17 @@ def corner_leader_seed(strips, pin=None, construction=None):
     from the junction corner.
 
     What the corner stage WILL write, not what it happens to find.  Under
-    the ROLLING construction a seam of the member patch seeds with the length
-    the stage's parameter default lands at on it: the cut lives on the member
-    patch, so the seams of the OTHER patches are not cut at all and the value
-    shown for them is the one the stage would use if the member moved there.
-    (Seeding them with their band edge -- which reads like a `seam_leader` --
-    would hand the stage an INERT leader for a seam that becomes the
-    member's, and the rolling cut must clear the setback on both axes of that
-    patch.)  Under the SHIPPED construction the leader IS the band edge, so a
-    seam seeds with the edge it already carries and writing it again is a
-    no-op.
+    the ROLLING construction a seam of the member patch seeds at
+    `CORNER_LEADER_AUTO` ("equal"): the cut lives on the member patch and the
+    stage's equalising rule places it, so there is no number to show and none
+    to impose -- the seeded value IS the ask.  The seams of the OTHER patches
+    are not cut at all, and they seed at "equal" too rather than at a length
+    the stage would never write there (seeding them with their band edge --
+    which reads like a `seam_leader` -- would hand the stage an INERT leader
+    for a seam that becomes the member's, and the rolling cut must clear the
+    setback on both axes of that patch).  Under the SHIPPED construction the
+    leader IS the band edge, so a seam seeds with the edge it already carries
+    and writing it again is a no-op.
 
     `pin` is the member's placement the page asks for; None asks the stage's
     own search (`SilkCorner.corner_member_pin`), because with no pin the
@@ -1143,9 +1158,11 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         lay.addLayout(row)
         lay.addWidget(self._instruction(
             "The corner stage's three choices are yours: the CONSTRUCTION "
-            "(rolling or shipped), which patch carries the small triangular "
-            "surface, and how far along each seam the band is cut back (the "
-            "rolling leader)."))
+            "(rolling or shipped), which patch and corner carries the small "
+            "triangular surface, and the SETBACK of each seam -- how far "
+            "along it the band is cut back, in mm from the junction corner. "
+            "Left at 'equal' the stage makes the two cuts that bound the "
+            "triangle the same length, so it comes out roughly equal-sided."))
         # WHICH CONSTRUCTION (#128): the rolling corner (the 66 over the
         # member patch's cut cell plus the triangular member beside it) is
         # the DEFAULT; the shipped corner is the fallback, and it is the
@@ -1193,7 +1210,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         # reaches every patch of the ring.
         self.corner_leader_table = QtWidgets.QTableWidget(0, 3)
         self.corner_leader_table.setHorizontalHeaderLabels(
-            ["Seam", "Patches", "Leader"])
+            ["Seam", "Patches", "Leader (mm)"])
         self.corner_leader_table.verticalHeader().setVisible(False)
         self.corner_leader_table.setEditTriggers(
             QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -2382,7 +2399,10 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         one row per SEAM -- so every patch of the ring is reachable, not just
         the one that carries the member. Both are seeded from what the corner
         stage WILL do (`corner_leader_seed`), so an untouched panel means
-        "exactly what the stage builds" rather than a second opinion.
+        "exactly what the stage builds" rather than a second opinion -- and
+        since #129 that means a seam nothing has cut yet seeds at "equal"
+        (`CORNER_LEADER_AUTO`), the equalising rule the stage places when no
+        leader is asked for.
 
         The leader rows are only REBUILT when the ring's seams change: a
         refresh runs after every recompute, and re-mounting the editors on
@@ -2440,10 +2460,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             spin = QtWidgets.QDoubleSpinBox()
             spin.setDecimals(CORNER_LEADER_DECIMALS)
             spin.setSingleStep(CORNER_LEADER_STEP)
-            spin.setRange(CORNER_LEADER_MIN, CORNER_LEADER_MAX)
+            # 0 is the "equal" ask, so the range's floor is the sentinel and
+            # its special text is what the row shows for it: a seam the user
+            # has not placed is visibly the equalising rule, not a length.
+            spin.setRange(CORNER_LEADER_AUTO, CORNER_LEADER_MAX)
+            spin.setSpecialValueText(CORNER_LEADER_AUTO_TEXT)
             spin.setButtonSymbols(
                 QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
-            spin.setValue(seeds.get(s.Name, CORNER_LEADER_MIN))
+            spin.setValue(seeds.get(s.Name, CORNER_LEADER_AUTO))
             spin.setToolTip(CORNER_LEADER_TIP)
             self.corner_leader_table.setCellWidget(row, 2, spin)
             self._corner_leader_spins[s.Name] = spin
@@ -2511,11 +2535,28 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
 
     def corner_choices(self):
         """`(pin, leaders)` as the page holds them: the member's placement
-        (None = automatic) and the leader of EVERY seam of the ring."""
+        (None = automatic) and the leader of every seam that is cut at a
+        LENGTH.
+
+        A seam left at `CORNER_LEADER_AUTO` ("equal") is NOT in `leaders`:
+        asking for no leader is exactly how the stage's equalising rule is
+        asked for (`create_corner_blend(leaders=None)`), so an untouched page
+        builds the equal-sided corner rather than re-imposing a length nobody
+        typed."""
         pin = self._corner_pin()
-        leaders = {name: float(spin.value())
-                   for name, spin in self._corner_leader_spins.items()}
+        leaders = {}
+        for name, spin in self._corner_leader_spins.items():
+            value = float(spin.value())
+            if value > CORNER_LEADER_AUTO:
+                leaders[name] = value
         return pin, leaders
+
+    def corner_equal_seams(self):
+        """The seams the page leaves at "equal" (the equalising default),
+        in table order -- the ones `corner_choices` does not hand to the
+        stage as a length."""
+        return [name for name, spin in self._corner_leader_spins.items()
+                if float(spin.value()) <= CORNER_LEADER_AUTO]
 
     def on_apply_corner_choices(self):
         """The Apply button: write these choices onto the ring's corner."""
@@ -2539,7 +2580,16 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         if corner is None:
             self._refuse("Silk: %s" % why)
             return False
-        self.status_lbl.setText("corner choices applied to %s" % corner.Name)
+        # A seam left at "equal" is the equalising RULE's, not a length: the
+        # stage places it (`apply_corner_choices` runs the same rule the build
+        # does), so the panel says which seams it placed instead of letting the
+        # user believe their old numbers are still in force.
+        left = self.corner_equal_seams()
+        self.status_lbl.setText(
+            "corner choices applied to %s%s"
+            % (corner.Name,
+               "" if not left else
+               " (%s placed by the equalising rule)" % ", ".join(left)))
         self.refresh()
         return True
 
@@ -2563,6 +2613,11 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         from inside the build) and the construction that was built instead
         both land here, and the construction is read off the object the
         stage built (`SilkCorner.corner_construction`), not off the combo.
+
+        THE TRIANGLE'S OWN SIDES ARE SAID THERE TOO: the lengths the rolling
+        cut was placed at (`_built_cut_lengths`), which is what shows an
+        untouched page's "equal" default as two equal numbers rather than
+        leaving the user to measure the tri.
         """
         strips = self.collected(SECTION_CORNER)
         stale = self.stale_items()
@@ -2596,6 +2651,9 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                                          "blend (%s)" % corner.Name)
             return False
         built, _note = self._built_construction(corner)
+        cuts = self._built_cut_lengths(corner)
+        cut_note = "" if not cuts else "; tri sides %s mm" % " / ".join(
+            "%.6f" % v for v in cuts.values())
         if built != asked:
             # The refusal is the component's own line; the construction that
             # was built instead is the object's own record.
@@ -2608,11 +2666,12 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                    why or "no reason given"))
         else:
             self.status_lbl.setText("%s created from %d blends (%s "
-                                    "construction)"
-                                    % (corner.Name, len(strips), built))
+                                    "construction%s)"
+                                    % (corner.Name, len(strips), built,
+                                       cut_note))
         FreeCAD.Console.PrintMessage("Corner blend created: %s (%s "
-                                     "construction)\n"
-                                     % (corner.Name, built))
+                                     "construction%s)\n"
+                                     % (corner.Name, built, cut_note))
         return True
 
     @staticmethod
@@ -2620,6 +2679,40 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         """`(construction, note)` of the corner the stage just built."""
         from SilkCorner import corner_construction
         return corner_construction(corner)
+
+    @staticmethod
+    def _built_cut_lengths(corner):
+        """`{seam: mm}` -- the length of each cut the built corner
+        carries, read through the stage's own instrument
+        (`SilkWorkflowOps.seam_cut_length`).
+
+        These are the triangular member's own sides, so the status line says
+        what the equalising rule became instead of leaving the user to guess:
+        the two figures are the number the panel's "equal" default produces.
+        The shipped construction has no leader cut, so it reports none."""
+        from SilkWorkflowOps import seam_cut_length
+        patch = getattr(corner, "MemberPatch", None)
+        ring = list(getattr(corner, "Strips", None) or [])
+        if not ring:
+            return {}
+        if patch is None:
+            # An UNSET `MemberPatch` means "the search decides" (#117), so a
+            # corner nobody pinned carries no patch to read the cuts from
+            # until the same search this corner ran is asked.
+            from SilkCorner import corner_member_pin, CORNER_DEFAULT_TOL
+            found, _why = corner_member_pin(ring, CORNER_DEFAULT_TOL)
+            patch = found[0] if found is not None else None
+        if patch is None:
+            return {}
+        out = {}
+        for s in ring:
+            if patch not in (getattr(s, "PatchA", None),
+                             getattr(s, "PatchB", None)):
+                continue
+            length, _why = seam_cut_length(s, patch, ring=ring)
+            if length is not None:
+                out[s.Name] = length
+        return out
 
     def _refuse_stale(self, stale):
         item, why = stale[0]
