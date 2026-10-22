@@ -1655,6 +1655,259 @@ def smooth_degenerate_cap(poles36, weights36, tol=1e-6):
     return out_p, list(weights36)
 
 
+def net_fold_count(poles36, weights36, n=12):
+    """How many adjacent sample pairs of the 6x6's normal field disagree.
+
+    A FOLD, counted the way `SilkChecks._normal_field_flips` counts it, but
+    on the exact rational net and without FreeCAD: the surface normal is
+    taken from central differences of the net's own evaluation on an
+    `n` x `n` grid of cell centres, and every neighbouring pair whose
+    normals point apart is one flip.
+
+    This is the corner stage's own reading of "the assembled net doubles
+    over" -- the predicate `smooth_folding_interior` acts on. It is a COUNT, not a
+    label: the caller decides what to do with it, and zero means the net's
+    normal field keeps its orientation over the sampled grid."""
+    grid = []
+    for i in range(n):
+        u = (i + 0.5) / n
+        bu = _basis6(u)
+        for j in range(n):
+            v = (j + 0.5) / n
+            bv = _basis6(v)
+            num = [0.0, 0.0, 0.0]
+            den = 0.0
+            for a in range(6):
+                wa = bu[a]
+                for b in range(6):
+                    wt = wa * bv[b] * float(weights36[b * 6 + a])
+                    if wt == 0.0:
+                        continue
+                    q = poles36[b * 6 + a]
+                    num[0] += wt * q.x
+                    num[1] += wt * q.y
+                    num[2] += wt * q.z
+                    den += wt
+            grid.append(None if den == 0.0
+                        else _CGV(num[0] / den, num[1] / den, num[2] / den))
+    h = 0.5 / n
+
+    def normal(i, j):
+        a = grid[i * n + j]
+        if a is None:
+            return None
+        du = _shift(grid, n, i, j, 1, 0, h, a)
+        dv = _shift(grid, n, i, j, 0, 1, h, a)
+        if du is None or dv is None:
+            return None
+        nv = du.cross(dv)
+        return None if nv.Length < 1e-15 else nv
+
+    flips = 0
+    for i in range(n):
+        for j in range(n):
+            a = normal(i, j)
+            if a is None:
+                continue
+            for (di, dj) in ((-1, 0), (0, -1)):
+                ii, jj = i + di, j + dj
+                if ii < 0 or jj < 0:
+                    continue
+                b = normal(ii, jj)
+                if b is not None and a.dot(b) < -1e-9:
+                    flips += 1
+    return flips
+
+
+def _shift(grid, n, i, j, di, dj, h, fallback):
+    """The one-sided (or central) difference of the sample grid along one
+    axis, or None where the neighbour is missing."""
+    a = grid[(i + di) * n + (j + dj)] if 0 <= i + di < n \
+        and 0 <= j + dj < n else None
+    b = grid[(i - di) * n + (j - dj)] if 0 <= i - di < n \
+        and 0 <= j - dj < n else None
+    if a is not None and b is not None:
+        return (a - b) * (0.5 / h)
+    if a is not None:
+        return (a - fallback) / h
+    if b is not None:
+        return (fallback - b) / h
+    return None
+
+
+def coons_fill_interior(poles36, weights36, n_samp=25):
+    """The 6x6's INTERIOR poles re-solved as the transfinite (Coons) fill of
+    its own boundary loop, with every boundary pole and every weight held
+    fixed.
+
+    The assembled net's boundary is the four ring members' junction rows --
+    geometry the ring SUPPLIES and the corner must interpolate. Its interior
+    is upstream's extrapolation (`subgrid33_2grid64`'s tangent-ratio step,
+    averaged), which is a heuristic: it is fitted to two rows per member and
+    it is scale-relative, so on a cell whose own net is anisotropic the two
+    one-sided estimates diverge and the average lands outside the boundary
+    quad -- the net folds (measured: the demo model's junction
+    CB_J1_FrontTopRight, 0/630 coincident pole pairs and NO collapsed side,
+    yet 30/56/86 normal-field flips at n = 39/81/150, and the fold sits in
+    the two subgrids that touch the triangular member while the two
+    strip-to-strip subgrids are clean).
+
+    The bilinear Coons fill of the SAME loop is the standard transfinite
+    interpolation of it, and it lies exactly in the bicubic space this net
+    lives in -- so the rational least squares recovers it pole for pole and
+    the fit residual is the float floor, not a fit quality. Weights are held
+    fixed, so only pole POSITIONS move, exactly as in
+    `smooth_degenerate_cap`.
+
+    Returns (poles36, weights36): the input lists unchanged when the solve
+    is not finite (the repair must never break a build)."""
+    n_samp = int(n_samp)
+    free = [(v * 6 + u) for v in range(1, 5) for u in range(1, 5)]
+    sites = [((i + 0.5) / n_samp, (j + 0.5) / n_samp)
+             for i in range(n_samp) for j in range(n_samp)]
+    fixed = [k for k in range(36) if k not in free]
+
+    corners = [0, 5, 30, 35]           # (0,0) (0,5) (5,0) (5,5)
+
+    A = np.zeros((len(sites), len(free)))
+    B = np.zeros((len(sites), 3))
+    for r, (u, v) in enumerate(sites):
+        bu, bv = _basis6(u), _basis6(v)
+        field_w = sum(bu[a] * bv[b] * float(weights36[b * 6 + a])
+                      for a in range(6) for b in range(6))
+        if field_w <= 0.0:
+            return poles36, weights36
+        tgt = _coons_loop(poles36, weights36, u, v)
+        if tgt is None:
+            return poles36, weights36
+        acc = [0.0, 0.0, 0.0]
+        for k in fixed:
+            vv, uu = divmod(k, 6)
+            rat = bu[uu] * bv[vv] * float(weights36[k]) / field_w
+            if rat != 0.0:
+                q = poles36[k]
+                acc[0] += rat * q.x
+                acc[1] += rat * q.y
+                acc[2] += rat * q.z
+        for ci, k in enumerate(free):
+            vv, uu = divmod(k, 6)
+            A[r, ci] = bu[uu] * bv[vv] * float(weights36[k]) / field_w
+        B[r, 0] = tgt[0] - acc[0]
+        B[r, 1] = tgt[1] - acc[1]
+        B[r, 2] = tgt[2] - acc[2]
+
+    try:
+        sol, _res, _rank, _sv = np.linalg.lstsq(A, B, rcond=None)
+    except Exception:
+        return poles36, weights36
+    if not all(np.isfinite(sol.ravel())):
+        return poles36, weights36
+    out_p = list(poles36)
+    for ci, k in enumerate(free):
+        out_p[k] = _CGV(float(sol[ci, 0]), float(sol[ci, 1]),
+                        float(sol[ci, 2]))
+    return out_p, list(weights36)
+
+
+def _coons_loop(poles36, weights36, u, v):
+    """The bilinear Coons fill of the 6x6's four boundary curves at (u, v).
+
+    Rational boundaries (evaluated with the assembled weights), Cartesian
+    result -- the standard transfinite interpolation of a quadrilateral
+    loop, minus the bilinear blend of its four corners. No degenerate
+    special case: a collapsed side needs none, because a side that is one
+    point is simply a constant boundary curve."""
+    def point(pairs):
+        num = [0.0, 0.0, 0.0]
+        den = 0.0
+        for idx, wt in pairs:
+            if wt == 0.0:
+                continue
+            q = poles36[idx]
+            num[0] += wt * q.x
+            num[1] += wt * q.y
+            num[2] += wt * q.z
+            den += wt
+        if den == 0.0:
+            return None
+        return (num[0] / den, num[1] / den, num[2] / den)
+
+    bu, bv = _basis6(u), _basis6(v)
+    c_v0 = point([(0 * 6 + i, bu[i] * float(weights36[0 * 6 + i]))
+                  for i in range(6)])
+    c_v1 = point([(5 * 6 + i, bu[i] * float(weights36[5 * 6 + i]))
+                  for i in range(6)])
+    c_u0 = point([(j * 6 + 0, bv[j] * float(weights36[j * 6 + 0]))
+                  for j in range(6)])
+    c_u1 = point([(j * 6 + 5, bv[j] * float(weights36[j * 6 + 5]))
+                  for j in range(6)])
+    if None in (c_v0, c_v1, c_u0, c_u1):
+        return None
+    k00 = (1 - u) * (1 - v)
+    k01 = (1 - u) * v
+    k10 = u * (1 - v)
+    k11 = u * v
+    out = []
+    for k, axis in enumerate(("x", "y", "z")):
+        base = ((1 - v) * c_v0[k] + v * c_v1[k]
+                + (1 - u) * c_u0[k] + u * c_u1[k])
+        blend = (k00 * getattr(poles36[0], axis)
+                 + k10 * getattr(poles36[5], axis)
+                 + k01 * getattr(poles36[30], axis)
+                 + k11 * getattr(poles36[35], axis))
+        out.append(base - blend)
+    return tuple(out)
+
+
+def smooth_folding_interior(poles36, weights36, tol=1e-6, n=12):
+    """A 6x6 with NO collapsed side whose interior FOLDS is re-solved as the
+    transfinite (Coons) fill of its own boundary loop.
+
+    `smooth_degenerate_cap` is the collapsed-side half of this rule, and this
+    is the other half.  A collapsed side is a STRUCTURAL statement -- the
+    triangular member's junction row is one point -- and the cap smoothing
+    re-solves the eight interior poles beside it against the Coons target.
+    The two-patch corner has no collapsed side at all: the member contributes
+    its real row, the 6x6 has 36 distinct poles -- and its interior is still
+    upstream's tangent-ratio extrapolation, which is scale-relative and
+    fitted to two rows per member.  On a cell whose own net is anisotropic
+    the two one-sided estimates diverge and their average lands outside the
+    boundary quad, so the net folds while nothing about it is degenerate
+    (measured: the demo model's junction CB_J1_FrontTopRight, 0/630
+    coincident pole pairs, no collapsed side, 30/56/86 normal-field flips at
+    n = 39/81/150, the fold in the two subgrids that touch the triangular
+    member while the two strip-to-strip subgrids are clean --
+    `Tests/demo_corner_row_diff.py`).
+
+    THREE conditions, all read off the net, and the input is returned
+    UNCHANGED unless every one holds:
+
+      * NO collapsed side snapped -- a collapsed corner is
+        `smooth_degenerate_cap`'s, byte for byte, so the shipped construction
+        cannot move through this step;
+      * the assembled net FOLDS (`net_fold_count` > 0) -- a corner that does
+        not fold keeps the poles upstream gave it (the cube fixture's
+        two-patch corner, 0 flips, is returned as the same lists);
+      * the re-solved net folds LESS -- a repair that does not repair must
+        not silently reshape the corner, so the assembled net is kept then.
+
+    The BOUNDARY is never touched (only rows/cols 1..4 are free), so C0 at
+    every seam is preserved by construction, and the weights are held fixed
+    exactly as in the cap smoothing.  On the demo junction the re-solve takes
+    the fold to 0 at n = 12 and n = 24 and the built corner to 0/0/0 flips at
+    n = 39/81/150, while the cube fixture's net does not fold and is returned
+    unchanged."""
+    if _collapsed_side(poles36, tol) is not None:
+        return poles36, weights36
+    before = net_fold_count(poles36, weights36, n=n)
+    if not before:
+        return poles36, weights36
+    out_p, out_w = coons_fill_interior(poles36, weights36)
+    if net_fold_count(out_p, out_w, n=n) >= before:
+        return poles36, weights36
+    return out_p, out_w
+
+
 def _ring_pairs(grids, tol):
     """The four adjacent-pair readings of a ring, in ring order.
 
@@ -1758,6 +2011,10 @@ def corner_grid(grids, tol=1e-6):
     # member-side interior rows are re-solved from the boundary (no-op on
     # an ordinary 4-valent ring).
     p36, w36 = smooth_degenerate_cap(p36, w36, tol)
+    # ... and a 6x6 that has NO collapsed side but still folds gets the same
+    # transfinite interior -- see `smooth_folding_interior` for why the
+    # two-patch corner needs it and why the shipped one cannot reach it.
+    p36, w36 = smooth_folding_interior(p36, w36, tol)
     return p36, w36, None
 
 

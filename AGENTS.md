@@ -227,7 +227,23 @@ creates them anymore.
   `SilkMachinery.smooth_degenerate_cap` re-solves the two member-side interior
   rows of the assembled 6x6 from the transfinite (Coons) fill of the corner's
   own boundary loop — upstream's subgrid chain extrapolates past the collapsed
-  row and folded the cap. After the fix: **0 normal-field flips** (n=39/81/150,
+  row and folded the cap. Its NON-degenerate sibling is
+  `SilkMachinery.smooth_folding_interior` (#129): a 6x6 with **no** collapsed
+  side that still FOLDS (`net_fold_count`, read on the exact net) gets all 16
+  interior poles re-solved against the same Coons fill, boundary and weights
+  held fixed. Upstream's interior is a scale-relative tangent-ratio
+  extrapolation fitted to two rows per member, so on a cell whose own net is
+  anisotropic the two one-sided estimates diverge and their average lands
+  outside the boundary quad — measured on the demo's CB_J1_FrontTopRight
+  (0/630 coincident, no collapsed side, 30/56/86 flips at n=39/81/150, the
+  fold in the two subgrids that touch the triangular member while the two
+  strip-to-strip subgrids are clean): 0/0/0 flips after the step, the tri's
+  nearest interior sample 0.0179 → 0.30967 mm off the quad
+  (`Tests/demo_corner_row_diff.py`, `Tests/test_fold_free_interior.py`). The
+  step cannot reach a shipped corner — a collapsed side is
+  `smooth_degenerate_cap`'s case and gates it off structurally — and a
+  fold-free net is returned as the SAME lists, so the cube fixture stays
+  byte-identical. After the fix: **0 normal-field flips** (n=39/81/150,
   Part surface + exact net; was 19/1521 at n=39), cap samples inside the
   boundary box (was +0.0101 mm), Shape valid, no self-intersections; the
   non-reversed seam `k_gap` 4.563e-03 sampled / 6.888e-15 exact; the two seams

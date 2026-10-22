@@ -406,6 +406,28 @@ def test_a_demo_junction_rolls_on_the_patch_that_carries_two_junctions(doc):
                   % (coins, SM._collapsed_side(poles, 1e-6)))
     if coins:
         errors.append("the 6x6 carries %d coincident pole pairs" % coins)
+
+    # THE INTERIOR (measured #129): the demo's 6x6 has no collapsed side, so
+    # `smooth_degenerate_cap` is a no-op here and nothing but
+    # `SilkMachinery.smooth_folding_interior` touches it -- and upstream's
+    # tangent-ratio interior FOLDS on this cell.  Before that step the built
+    # corner read 30/56/86 normal-field flips at n=39/81/150 on both readers
+    # (Part surface and exact net) with the tri inside the quad (0.0179 mm of
+    # its interior off the quad, 0.03..2.13 % of the corner's 57.5 mm
+    # extent); with it the corner reads 0/0/0 and the tri's nearest interior
+    # sample stands 0.30967 mm off the quad.  Raw readings:
+    # `Resources/Test_files/_inspect/step1_demo_corner_row_diff.txt`.
+    import SilkChecks
+    flips = [len(SilkChecks._normal_field_flips(
+        corner.Shape.Faces[0].Surface, n=n)[0]) for n in (39, 81, 150)]
+    checks.append("the quad's normal-field flips n=39/81/150: %r (the cell "
+                  "this corner is cut from has no collapsed side, so this is "
+                  "`smooth_folding_interior` and not the cap smoothing)"
+                  % (flips,))
+    if any(flips):
+        errors.append("the demo corner's 6x6 folds (%r flips at "
+                      "n=39/81/150) -- the interior step did not hold"
+                      % (flips,))
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
