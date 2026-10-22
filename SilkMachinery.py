@@ -1236,6 +1236,131 @@ def leader_cut(p, ea, ss, leader, end=None):
     return cut, corner_end
 
 
+# ---- the seam measured in MILLIMETRES (#129) ------------------------------
+#
+# WHY A FRACTION WAS THE WRONG UNIT.  The leader used to be placed as a
+# fraction of the seam curve's own parameter, and a fraction is not a length:
+# on the demo's `CB_J1_FrontTopRight` the same 0.25 cuts 14.3 mm of one seam
+# and 57.6 mm of the other, so the triangular member came out 9.3 mm by
+# 32.7 mm -- a sliver, where the maintainer's is a near-even triangle.  The
+# owner's rule (2026-10-22): *"ideally both segment lengths should be close
+# to the same absolute length (not u or v values between 0 and 1, but the
+# actual length in eg. mm)"*.  These three readers are the one place that
+# answers "how many mm along this seam is that parameter" (and back), and
+# they are the instrument the corner stage places its cut with.
+#
+# THE CURVE IS THE PATCH'S OWN.  A patch's base surface is a bicubic Bezier,
+# so its boundary at the seam's side is that surface at the side's fixed
+# coordinate -- `base_surface.value(t, fixed)` -- and `t` is the SAME
+# parameter the axis cuts are expressed in.  No re-fit, no second curve: the
+# length the stage places and the parameter it writes are read off one curve.
+
+SEAM_LENGTH_STATIONS = 64
+
+
+def seam_curve_coords(ea):
+    """(along_letter, fixed) -- the axis the seam runs along, and the
+    boundary coordinate of the side it runs on.
+
+    A seam on side `U0` is the row at V = 0 and runs along U, so a length
+    along it is a length in the U parameter at V = 0.
+    `seam_axis_roles` names the axis; the side's own end names the
+    coordinate."""
+    along, _band = seam_axis_roles(ea)
+    return along, (0.0 if ea[1] == "0" else 1.0)
+
+
+def seam_point(p, ea, t):
+    """The point at parameter `t` along `p`'s own seam curve, or None when
+    the patch carries no surface."""
+    surf = getattr(getattr(p, "Proxy", None), "_base_surface", None)
+    if surf is None:
+        return None
+    along, fixed = seam_curve_coords(ea)
+    return surf.value(t, fixed) if along == "U" else surf.value(fixed, t)
+
+
+def seam_length(p, ea, t0, t1, stations=SEAM_LENGTH_STATIONS):
+    """The arc length in mm along `p`'s seam curve from `t0` to `t1`, or
+    None when the patch carries no base surface.
+
+    A chord sum on `stations` equal PARAMETER steps.  It under-reads a curved
+    seam (the chords cut the corners), with an error that falls as
+    1/stations^2 -- `Tests/corner_even_cuts.py` prints the convergence
+    (64 / 256 / 1024 stations) beside every length it reports, so the figure
+    is never quoted without its floor."""
+    prev = seam_point(p, ea, t0)
+    if prev is None:
+        return None
+    total = 0.0
+    for i in range(1, stations + 1):
+        t = t0 + (t1 - t0) * i / float(stations)
+        pt = seam_point(p, ea, t)
+        total += (pt - prev).Length
+        prev = pt
+    return total
+
+
+def seam_parameter_at_length(p, ea, t_from, t_to, length,
+                             stations=SEAM_LENGTH_STATIONS):
+    """(parameter, None) -- the position `length` mm along the seam from
+    [`t_from`, walking toward `t_to`); (None, why) when the seam is shorter
+    than that.
+
+    The walk is the SAME chord sum `seam_length` integrates, so a length
+    asked for and a length read back are one instrument: the only difference
+    between them is the interpolation fraction inside one step."""
+    length = float(length)
+    if length <= 0.0:
+        return None, "a length along a seam is positive (got %g mm)" % length
+    prev = seam_point(p, ea, t_from)
+    if prev is None:
+        return None, ("%s carries no surface to measure along"
+                      % getattr(p, "Name", "?"))
+    run = 0.0
+    alpha_lo, alpha_hi = 0.0, None
+    for i in range(1, stations + 1):
+        t = t_from + (t_to - t_from) * i / float(stations)
+        pt = seam_point(p, ea, t)
+        step = (pt - prev).Length
+        if run + step >= length:
+            # THE BRACKET IS THE STEP ITSELF, not the interpolated guess: the
+            # first-order guess assumes a constant speed inside the step and
+            # can overshoot a curve that slows down, which leaves the root
+            # OUTSIDE the bracket and the bisection below then converges to
+            # the guess instead (measured: 2.6e-3 mm of residual on the
+            # demo's 17.4 mm cut).
+            alpha_lo = (i - 1) / float(stations)
+            alpha_hi = i / float(stations)
+            break
+        run += step
+        prev = pt
+    if alpha_hi is None:
+        return None, ("the seam on %s is only %.6f mm long from %g to %g, "
+                      "and %g mm was asked for"
+                      % (getattr(p, "Name", "?"), run, t_from, t_to, length))
+    # BISECT ON THE SAME CHORD SUM.  The march brackets the position inside
+    # one step and interpolates there, which reads a curved seam a few
+    # thousandths of a millimetre long (measured: 4.2e-3 mm on the demo's
+    # 17.4 mm cut).  Refining on `seam_length` -- the reader the corner stage
+    # reports with -- makes the length ASKED FOR and the length READ BACK one
+    # measurement: the residual is then the arithmetic's, not the step's.
+    for _ in range(64):
+        if alpha_hi - alpha_lo <= 1e-13:
+            break
+        mid = 0.5 * (alpha_lo + alpha_hi)
+        got = seam_length(p, ea, t_from,
+                          t_from + (t_to - t_from) * mid, stations)
+        if got is None:
+            return None, ("%s carries no surface to measure along"
+                          % getattr(p, "Name", "?"))
+        if got < length:
+            alpha_lo = mid
+        else:
+            alpha_hi = mid
+    return (t_from + (t_to - t_from) * 0.5 * (alpha_lo + alpha_hi), None)
+
+
 def split_band_cells(base_surface, p, ea, ss, leader):
     """((corner_poles, corner_weights), (outer_poles, outer_weights), why).
 

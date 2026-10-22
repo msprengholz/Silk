@@ -197,6 +197,35 @@ creates them anymore.
   only; the SHIPPED construction still writes the band edge (that is where
   the construction of before #119 cut), and a corner that carries no recorded
   construction reads as shipped.
+- **The cut is placed by LENGTH, and its sides are EQUALISED (#129).** The
+  owner's rule (2026-10-22): *"ideally both segment lengths should be close
+  to the same absolute length (not u or v values between 0 and 1, but the
+  actual length in eg. mm). this ensures a neat, closer to even sided
+  triangle"*. So `create_corner_blend` / `create_rolling_corner_66` take
+  `leader` in **mm from the junction corner** (`leaders={seam: mm}` per
+  seam), and the **default is `leader=None`: the two cuts that bound the
+  triangular member are equalised** — `equal_cut_length` puts both cut sides
+  at the GEOMETRIC MEAN of the length the parameter default (`ROLLING_LEADER`
+  = 0.25) gives them, the length at which the triangle keeps its area. Both
+  refusals are by name and atomic: a leader inside its setback (an inert cut)
+  and a length longer than the band can carry say the number they refuse. The
+  readers are `SilkMachinery.seam_length` / `seam_parameter_at_length` (a
+  chord sum, and its inverse, on the patch's OWN base-surface seam curve —
+  64 stations, 1.7e-6 relative floor), `SilkWorkflowOps.seam_cut_reach` (the
+  seam's setback / reachable maximum), `seam_cut_length` (the tri's own side,
+  mm) and `seam_cut_at_leg`; the panel's per-seam editor is in mm too
+  (`CORNER_LEADER_TIP`). On a unit-axis patch mm IS the parameter, so the
+  cube corner is byte-identical (worst |Δ| 0.000e+00 on all 36+24 poles and
+  weights) and every caller that passes `leader=0.25` there reads the corner
+  it read before. Measured on `CB_J1_FrontTopRight`
+  (`Tests/corner_even_cuts.py`, MANUAL, artifact
+  `Resources/Test_files/_inspect/demo_corner_even.FCStd`): the cut sides went
+  9.302915 / 32.677217 mm → **17.435446 / 17.435446 mm** (residual 2.9e-13
+  mm), the tri/quad areas 278.09 / 469.17 (0.5927) → 293.62 / 567.06
+  (**0.5178**, his 0.2776), the tri's interior → quad 1.55..14.55 % →
+  **3.51..37.08 %** of the corner's extent (his 16..62 %), the quad's
+  worst/best pole pitch 32.74 → **26.93**, with 0/0/0 normal-field flips and
+  0/630 coincident pairs across it.
 - Builds the real subgrid chain — `SubGrid33_2Grid64` ×4 →
   `ControlGrid66_4Sub` → `CubicSurface_66` — ported into `SilkMachinery`
   (`corner_ring`, `corner_grid`, `subgrid33_2grid64`, `control_grid66_4sub`)

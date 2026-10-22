@@ -108,7 +108,8 @@ from SilkEdge import classify_sketches
 from SilkBlend import BLEND_TYPES
 from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge, \
     create_corner_blend, apply_corner_choices, corner_ring_patches, \
-    existing_corner, seam_leader, ROLLING_LEADER, CORNER_CONSTRUCTIONS, \
+    existing_corner, seam_leader, seam_default_leader, \
+    CORNER_CONSTRUCTIONS, \
     CORNER_CONSTRUCTION_ROLLING, CORNER_CONSTRUCTION_SHIPPED, \
     CORNER_CONSTRUCTION_DEFAULT
 from SilkMachinery import patch_side, side_of_edge, build_intervals, \
@@ -253,58 +254,89 @@ CORNER_MEMBER_AUTO_TIP = (
     "Leave the corner's own placement alone. The corner stage searches for "
     "the first ring patch/corner a triangular member assembles at; pick a "
     "patch here to make it build at THAT patch instead.")
+# The leader is a LENGTH IN MM along the seam, measured from the junction
+# corner (#129) -- the owner's unit: *"not u or v values between 0 and 1, but
+# the actual length in eg. mm"*.  The maximum is a mile wide on purpose: a
+# seam's own length is the real bound and the stage refuses by name with the
+# number when the ask does not fit (`SilkWorkflowOps.seam_cut_reach`).
 CORNER_LEADER_DECIMALS = 3
 CORNER_LEADER_MIN = 10 ** -CORNER_LEADER_DECIMALS
-CORNER_LEADER_MAX = 1.0 - 10 ** -CORNER_LEADER_DECIMALS
-CORNER_LEADER_STEP = 0.05
+CORNER_LEADER_MAX = 1000.0
+CORNER_LEADER_STEP = 1.0
 CORNER_LEADER_COLUMN_WIDTH = 78
 CORNER_LEADER_ROW_HEIGHT = 26
 CORNER_LEADER_TIP = (
-    "The rolling leader of THIS seam: where the band is cut back, measured "
-    "from the junction corner along the seam. The ROLLING construction "
-    "writes it as the member patch's own leader cut (its band edge stays "
-    "the setback), so only the seams of the patch that carries the "
-    "triangular surface are cut; the SHIPPED construction writes it into "
-    "the seam-parallel band edge of both patches of the seam. A value equal "
-    "to the patch's own band edge rolls nothing.")
+    "The rolling leader of THIS seam: where the band is cut back, as a "
+    "LENGTH IN MM measured from the junction corner along the seam. The "
+    "ROLLING construction writes it as the member patch's own leader cut "
+    "(its band edge stays the setback), so only the seams of the patch that "
+    "carries the triangular surface are cut; the SHIPPED construction "
+    "writes it into the seam-parallel band edge of both patches of the "
+    "seam. Left at the stage's own default the two cuts that bound the "
+    "triangular member are equalised instead, and the panel shows the "
+    "length each seam carries.")
 
 
-def corner_cut_seed(strips, construction=None):
-    """The leader each seam of `strips` is cut at RIGHT NOW, per seam name.
+def _seam_seed(s, strips, patch=None, construction=None, fresh=False):
+    """The length (mm from the junction corner) ONE seam seeds its editor
+    with: what it carries now, else where the corner stage's own parameter
+    default would put it.
 
-    What a corner that already exists carries, read back through the writer's
-    own expression (`seam_leader`, which knows both constructions: the
-    member patch's leader cut for the rolling one, the band edge for the
-    shipped one). A seam that carries no cut has none to report, so it seeds
-    with `ROLLING_LEADER` -- the value the stage writes when it rolls a seam
-    for the first time."""
-    out = {}
-    for s in strips:
+    A seam that carries no cut has none to report, and the length the stage
+    would place is `seam_default_leader` -- the same measurement in the same
+    unit, NOT a bare 0.25 (which the stage no longer reads as a fraction).
+    `fresh` skips the reading entirely: a seam of the patch the corner WILL
+    carry the member on has nothing to read yet, and what sits there today is
+    the BAND EDGE, which is the setback and not a leader at all (seeding it
+    would hand the stage a cut resting on the setback -- an inert cut, and a
+    refused corner)."""
+    if not fresh:
         here = None
-        for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
+        for p in ((patch,) if patch is not None
+                  else (getattr(s, "PatchA", None),
+                        getattr(s, "PatchB", None))):
             if p is None:
                 continue
             here, _why = seam_leader(s, p, construction=construction,
                                      ring=strips)
             if here is not None:
                 break
-        out[s.Name] = ROLLING_LEADER if here is None else here
-    return out
+        if here is not None:
+            return here
+    p = patch if patch is not None else getattr(s, "PatchA", None)
+    seed, _why = seam_default_leader(s, p, ring=strips)
+    return seed if seed is not None else CORNER_LEADER_MIN
+
+
+def corner_cut_seed(strips, construction=None):
+    """The leader each seam of `strips` is cut at RIGHT NOW, per seam name,
+    in MM from the junction corner.
+
+    What a corner that already exists carries, read back through the writer's
+    own expression (`seam_leader`, which knows both constructions: the
+    member patch's leader cut for the rolling one, the band edge for the
+    shipped one) and converted to a length in the stage's own unit. A seam
+    that carries no cut seeds with the length the stage's parameter default
+    lands at on it (`seam_default_leader`)."""
+    return {s.Name: _seam_seed(s, strips, construction=construction)
+            for s in strips}
 
 
 def corner_leader_seed(strips, pin=None, construction=None):
-    """The leader each seam of `strips` will be cut at, per seam name.
+    """The leader each seam of `strips` will be cut at, per seam name, in MM
+    from the junction corner.
 
     What the corner stage WILL write, not what it happens to find.  Under
-    the ROLLING construction every seam seeds with `ROLLING_LEADER` unless it
-    already carries a leader cut: the cut lives on the member patch, so the
-    seams of the OTHER patches are not cut at all and the value shown for
-    them is the one the stage would use if the member moved there.  (Seeding
-    them with their band edge -- which reads like a `seam_leader` -- would
-    hand the stage an INERT leader for a seam that becomes the member's, and
-    the rolling cut must clear the setback on both axes of that patch.)
-    Under the SHIPPED construction the leader IS the band edge, so a seam
-    seeds with the edge it already carries and writing it again is a no-op.
+    the ROLLING construction a seam of the member patch seeds with the length
+    the stage's parameter default lands at on it: the cut lives on the member
+    patch, so the seams of the OTHER patches are not cut at all and the value
+    shown for them is the one the stage would use if the member moved there.
+    (Seeding them with their band edge -- which reads like a `seam_leader` --
+    would hand the stage an INERT leader for a seam that becomes the
+    member's, and the rolling cut must clear the setback on both axes of that
+    patch.)  Under the SHIPPED construction the leader IS the band edge, so a
+    seam seeds with the edge it already carries and writing it again is a
+    no-op.
 
     `pin` is the member's placement the page asks for; None asks the stage's
     own search (`SilkCorner.corner_member_pin`), because with no pin the
@@ -318,30 +350,13 @@ def corner_leader_seed(strips, pin=None, construction=None):
     out = {}
     for s in strips:
         if construction == "shipped":
-            here = None
-            for p in (getattr(s, "PatchA", None),
-                      getattr(s, "PatchB", None)):
-                if p is None:
-                    continue
-                here, _why = seam_leader(s, p, construction="shipped",
-                                         ring=strips)
-                if here is not None:
-                    break
-            out[s.Name] = ROLLING_LEADER if here is None else here
+            out[s.Name] = _seam_seed(s, strips, construction="shipped")
             continue
         if pin is not None and (getattr(s, "PatchA", None) is pin[0]
                                 or getattr(s, "PatchB", None) is pin[0]):
-            out[s.Name] = ROLLING_LEADER
+            out[s.Name] = _seam_seed(s, strips, patch=pin[0], fresh=True)
             continue
-        here = None
-        for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
-            if p is None:
-                continue
-            here, _why = seam_leader(s, p, construction="rolling",
-                                     ring=strips)
-            if here is not None:
-                break
-        out[s.Name] = ROLLING_LEADER if here is None else here
+        out[s.Name] = _seam_seed(s, strips, construction="rolling")
     return out
 
 
@@ -2398,10 +2413,11 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self._corner_leader_names = names
         # WHAT THE SEED MEANS DEPENDS ON WHAT THE RING HAS. Before the corner
         # exists the editors show what the stage WILL cut (`corner_leader_seed`
-        # -- the member patch's seams at ROLLING_LEADER, every other seam at
-        # the band edge it already has); once it exists they show what it
-        # CARRIES (`corner_cut_seed`). Seeding a built corner with the
-        # pre-build values would silently re-point a seam the user had
+        # -- the length the stage's parameter default lands at on the member
+        # patch's seams, the length each other seam already carries); once it
+        # exists they show what it CARRIES (`corner_cut_seed`), as a length
+        # in mm from the junction corner (#129). Seeding a built corner with
+        # the pre-build values would silently re-point a seam the user had
         # already rolled.
         if not ring:
             seeds = {}
@@ -2427,7 +2443,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             spin.setRange(CORNER_LEADER_MIN, CORNER_LEADER_MAX)
             spin.setButtonSymbols(
                 QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
-            spin.setValue(seeds.get(s.Name, ROLLING_LEADER))
+            spin.setValue(seeds.get(s.Name, CORNER_LEADER_MIN))
             spin.setToolTip(CORNER_LEADER_TIP)
             self.corner_leader_table.setCellWidget(row, 2, spin)
             self._corner_leader_spins[s.Name] = spin

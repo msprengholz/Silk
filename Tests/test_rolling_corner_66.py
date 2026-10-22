@@ -333,9 +333,16 @@ def test_the_default_corner_is_the_rolling_one(doc):
     checks.append("the cut: PatchA band edges %r %r, leader cuts %r %r"
                   % (split_pair(p, "U"), split_pair(p, "V"),
                      leader_pair(p, "U"), leader_pair(p, "V")))
-    if 0.25 not in leader_pair(p, "U") or 0.25 not in leader_pair(p, "V"):
-        errors.append("the default corner did not cut the member patch's "
-                      "leader")
+    # #129: the parameter is now SOLVED from a length, so it is compared to
+    # its value, not to its float.  On this fixture (1 mm axes) the cut side
+    # the equalising rule makes is 0.15 mm, which lands on 0.25 -- the same
+    # corner the parameter default always built, to the last bit.
+    for letter in ("U", "V"):
+        near = [v for v in leader_pair(p, letter) if abs(v - 0.25) <= 1e-9]
+        if not near:
+            errors.append("the default corner did not cut the member patch's "
+                          "%s leader (leader cuts %r)"
+                          % (letter, leader_pair(p, letter)))
     for name in ("PatchA", "PatchB", "PatchC"):
         q = doc.getObject(name)
         if abs(q.USplit1 - 0.1) > 1e-12 or abs(q.VSplit1 - 0.1) > 1e-12:
@@ -409,7 +416,8 @@ def test_the_leader_is_measured_from_the_junction_corner(doc):
                           "band edges" % patch.Name)
 
     # (2) the mirror, on the 2x2 model's junction at the 1 end
-    from SilkWorkflowOps import _leader_cut_home, seam_leader
+    from SilkWorkflowOps import (_leader_cut_home, seam_default_leader,
+                                 seam_leader)
     from Tests import corner_model as cm
     sdoc = FreeCAD.newDocument("MirrorDoc")
     try:
@@ -445,12 +453,20 @@ def test_the_leader_is_measured_from_the_junction_corner(doc):
             if prop is not None:
                 setattr(p, prop, value)
                 sdoc.recompute()
+                # #129: `seam_leader` reads the cut back as a LENGTH IN MM
+                # along the seam (the panel's unit), so the fraction 0.25
+                # written above reads back as the arc from the junction
+                # corner to it -- which is what the same cut is asked for in
+                # the stage's own unit.
                 back, _why = seam_leader(s, p, construction="rolling")
-                checks.append("  read back through `seam_leader`: %r"
-                              % (back,))
-                if back is None or abs(back - 0.25) > 1e-12:
-                    errors.append("the cut reads back as %r, not the leader "
-                                  "0.25 it was written with" % (back,))
+                want, _w = seam_default_leader(s, p)
+                checks.append("  read back through `seam_leader`: %r mm (the "
+                              "same cut by the stage's own default, %r mm)"
+                              % (back, want))
+                if back is None or abs(back - want) > 1e-9:
+                    errors.append("the cut reads back as %r mm, not the %r mm "
+                                  "the same cut is worth along the seam"
+                                  % (back, want))
     finally:
         FreeCAD.closeDocument(sdoc.Name)
         FreeCAD.setActiveDocument(doc.Name)

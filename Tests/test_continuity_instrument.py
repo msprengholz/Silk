@@ -231,10 +231,13 @@ def test_manual_measurement_scripts_reachable(doc):
     import Tests.g2_corner_fill_probe as fillprobe
     # #128: the two-patch corner's render, beside the maintainer's own.
     import Tests.two_patch_corner_visual as twopatch
+    # #129: the corner's cuts measured in MILLIMETRES, and the rule that
+    # equalises them -- the instrument behind the cut-length table.
+    import Tests.corner_even_cuts as even
     errs = []
     checks = []
     for mod in (demo, cm, solve, edge, fill, roll, visual, rolling, ringref,
-                rss, fillprobe, twopatch):
+                rss, fillprobe, twopatch, even):
         ok = callable(getattr(mod, "main", None))
         checks.append("%s.main callable: %s" % (mod.__name__, ok))
         if not ok:
