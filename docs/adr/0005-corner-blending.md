@@ -9,8 +9,12 @@ language in the UI (Q3).
 
 ## Feed: the ring strips
 
-The corner is fed by the **four ring strips, in cyclic order** — the `Strips`
-link list `CornerBlend` already holds. This is not a matter of taste: upstream's
+The **shipped** construction is fed by the **four ring strips, in cyclic order**
+— the `Strips` link list `CornerBlend` already holds. (The `rolling` construction,
+which is the default since #119, is fed by the same ring and adds the leader
+cuts: the quad is built over the four members, one of them the triangular
+member's net, and the triangular patch stands beside it — see
+`0006-rolled-corner-is-two-patches.md`.) This is not a matter of taste: upstream's
 corner primitive takes blend grids as its input, and the original demos pair
 them **consecutively** (`SubGrid_i` uses grids `i` and `i+1`, cyclically), which
 is exactly what a cyclic `Strips` list gives us. Feeding boundary rows instead —
@@ -187,12 +191,13 @@ drawn and selectable -- **and ships the Silk-side assembly path as well**
 (select the ring strips in Silk, Silk builds the `Surface::Filling`), which is
 the exact path and the checkable one.
 
-**Consequence to keep in view.** Silk's own corner ships the degenerate
-triangular member that upstream calls *"not intended to produce a final
-surface … a stepping stone"*. With the fill path merely deferred rather than
-adopted, that member remains **our final surface** unless the owner judges a
-fill better on a real model — which is exactly the judgement #96 now exists to
-enable.
+**Consequence to keep in view.** Silk's corner ships the degenerate triangular
+member that upstream calls *"not intended to produce a final surface … a
+stepping stone"*, and that member's face **is** the triangular patch's face: a
+`CubicSurface_64` by default (the construction the maintainer's files store) or
+the FreeCAD fill as the option (`member_face="fill"`). The fill path therefore
+shipped rather than stayed deferred, and the triangular patch is a surface of
+the corner in its own right — `0006-rolled-corner-is-two-patches.md`.
 
 ## Measurement update (#96: the fill component, tested)
 

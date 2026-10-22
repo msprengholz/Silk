@@ -222,9 +222,11 @@ def test_band_edit_still_reaches_blend_and_corner(doc):
     WHICH STRIPS READ AN EDGE IS THE CONSTRUCTION'S ANSWER (#128).  The edit
     is made on a patch that carries ONE cut per axis end (`PatchB`), where
     the band edge is still the blend's own setback -- so both of its strips
-    must follow.  On the MEMBER patch the rolling construction cut a second
+    must follow.  On the patch that carries the triangular patch the rolling
+    construction cut a second
     edge (the leader), and the band's cells start AT the leader, so its
-    setback moves the member's cell and the corner and no strip: that is
+    setback moves the triangular patch's cell, the quad's fourth member, and
+    the corner, and no strip: that is
     measured in the second half rather than asserted away.
     """
     errors, checks = [], []
@@ -262,9 +264,9 @@ def test_band_edit_still_reaches_blend_and_corner(doc):
     else:
         checks.append("document settles right after the edit")
 
-    # the MEMBER patch's setback reaches the corner the same way (its band's
-    # cells start at the leader, so no strip follows it -- reported, not
-    # hidden)
+    # the CARRYING patch's setback reaches the corner the same way (its
+    # band's cells start at the leader, so no strip follows it -- reported,
+    # not hidden)
     pA = model["patches"]["PatchA"]
     corner_before = _poles(corner)
     area_before = corner.Shape.Area
@@ -274,16 +276,16 @@ def test_band_edit_still_reaches_blend_and_corner(doc):
     doc.recompute()
     corner_moved = sum(1 for a, b in zip(corner_before, _poles(corner))
                        if a != b)
-    checks.append("the member patch's setback: the corner moved %d/36 poles, "
-                  "area %.6f -> %.6f; the strips' poles moved %s"
+    checks.append("the carrying patch's setback: the corner moved %d/36 "
+                  "poles, area %.6f -> %.6f; the strips' poles moved %s"
                   % (corner_moved, area_before, corner.Shape.Area,
                      {n: sum(1 for a, b in zip(strips_before[n], _poles(s))
                              if a != b)
                       for n, s in (("B_AB", bAB),
                                    ("B_CA", model["strips"]["B_CA"]))}))
     if not corner_moved or abs(corner.Shape.Area - area_before) < 1e-9:
-        errors.append("the member patch's own setback did not reach the "
-                      "corner -- the member's cell is not being rebuilt")
+        errors.append("the carrying patch's own setback did not reach the "
+                      "corner -- the tri's cell is not being rebuilt")
 
     # and it stays settled
     for i in range(2):

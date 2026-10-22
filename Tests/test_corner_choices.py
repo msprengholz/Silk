@@ -4,26 +4,29 @@ The corner stage used to decide things on the owner's behalf and give him no
 way to say otherwise, and the owner's own complaint was: *"why can i
 implement a 3 sided corner, but not select to be rolling immediately?"*
 
-  * WHICH CONSTRUCTION it builds -- the rolling one (the 66 over the member
-    patch's cut cell plus the small triangular surface beside it, the
-    maintainer's two-patch corner) or the shipped one (the 66 with the
+  * WHICH CONSTRUCTION it builds -- the rolling one (the quad over the ring's
+    four members plus the small triangular patch beside it, the
+    maintainer's two-patch corner -- `docs/adr/0006-rolled-corner-is-two-
+    patches.md`) or the shipped one (the 66 with the
     spiderweb member).  Both are reachable from the ops layer
     (`create_corner_blend(construction=...)`) and from the panel's selector,
     the rolling one is the default, and WHICH ONE WAS BUILT is recorded on
     the corner (`Construction`) so a fallback cannot pass for the real thing.
-  * WHICH patch of the ring carries the small triangular surface (the
-    triangular 4th member). `MemberPatch` / `MemberCorner` exist (#117), but
-    they were only written on the SHIPPED construction's corner -- the
+  * WHICH CORNER carries the small triangular patch -- that is the owner's
+    choice, and it is spelled as the ring patch plus its grid corner
+    (`MemberPatch` / `MemberCorner`, #117). These properties were only
+    written on the SHIPPED construction's corner -- the
     rolling construction handed its resolved pin to the cutting step and
     never wrote it onto the corner it built, so the corner's own `execute()`
-    re-derived the member with the automatic search and the 66 and the tri
+    re-derived the member with the automatic search and the quad and the tri
     could disagree about where the member is.
-  * HOW FAR ALONG each seam the band is cut back -- the rolling leader --
-    per SEAM. `create_corner_blend(leaders={...})` carries one value per
+  * HOW FAR ALONG each seam the band is cut back -- the rolling leader, a
+    LENGTH in mm from the junction corner (#129) -- per SEAM.
+    `create_corner_blend(leaders={...})` carries one value per
     seam, and the panel mounts one editor per seam of the ring, so the choice
-    reaches every patch of the ring rather than only the one the stage picked.
-    The leader is the MEMBER PATCH's own cut (`ULeader1/2`, `VLeader1/2`),
-    the band edge staying the setback (#128).
+    reaches every seam of the ring.  The leader is the carrying patch's own
+    cut (`ULeader1/2`, `VLeader1/2`), the band edge staying the setback
+    (#128); the third blend is never cut.
 
 WHAT IS MEASURED HERE, on the cube-corner fixture
 (`Tests/cube_corner_model.py`, three exact planar squares meeting at one
@@ -58,8 +61,9 @@ say both things:
       which patch carries the tri" is measured on the geometry, not on a
       property write.
 
-      EVERY LEADER THAT CUTS THE MEMBER PATCH MUST CLEAR THE SETBACK.  The
-      cell between the setback and the leader is the member's own cell, on
+      EVERY LEADER THAT CUTS THE CARRYING PATCH MUST CLEAR THE SETBACK.  The
+      cell between the setback and the leader is the triangular patch's own
+      cell, on
       BOTH of the patch's axes; a leader resting on the 0.1 band edge is
       inert (`SilkMachinery.axis_cuts`), the cell on that axis stays the
       band's, and the assembly either refuses or comes out with 4 coincident

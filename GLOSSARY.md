@@ -58,30 +58,32 @@ built from the ring of strip blends (four subgrids). Three- and four-patch junct
 five or more is refused by name -- use a corner fill there.
 _Avoid_: corner surface, corner patch, corner subgrid
 
-**Triangular member**:
-The degenerate grid with a collapsed row (`ControlGrid64_3_1Grid44`) a three-patch corner
-needs to reach the four subgrids its fill machinery demands. Upstream calls it a
-*scaffolding piece*; the collapsed row gives a degenerate-boundary normal on the two seams
-that touch it.
-_Avoid_: triangular patch, fake blend, fourth strip
+**Triangular member** (the tri's net):
+The 6×4 net with one collapsed row (`ControlGrid64_3_1Grid44`) that the triangular patch
+carries. In a rolled corner it is **one of the quad's four ring members** AND the tri's own
+face, read REAL-ROW-FIRST; only the shipped fallback uses it as a fake fourth ring member
+(`docs/adr/0006-rolled-corner-is-two-patches.md`).
+_Avoid_: calling it a filler that exists to reach four subgrids, fake blend, fourth strip
 
 **Rolled corner** (also *rolling corner*):
-**TWO patches meeting along the rolling leader** -- the **quad** (a `ControlGrid66_4Sub` ->
-`CubicSurface_66` built from the four subgrids between consecutive ring members, with the
-triangular member **one of the four**, so its interior is the ring hole) and the **tri**
-(the member's **own** surface, beside the quad, sharing the leader boundary). Signature
-to check against the reference files: **every member is read by THREE consumers** -- its
-own `CubicSurface_64` and two `SubGrid33_2Grid64`. A corner where ONE patch wraps the
-whole region is **not** this, and curvature numbers do not make it so.
+**TWO patches meeting along one curve**, plus the cells the division leaves: the **quad**
+(a `ControlGrid66_4Sub` -> `CubicSurface_66` over four ring members, the triangular
+member's net being one of them), the **tri** (a patch of its own, adjacent to the quad,
+sharing one curve with it, covering no area the quad covers), and **five preserved
+pieces**. The cut is a LENGTH in mm per seam, equalised by default. Stated once in
+`docs/adr/0006-rolled-corner-is-two-patches.md` -- that file is the definition; this entry
+is the pointer. A corner where ONE patch wraps the whole region is **not** this, and
+curvature numbers do not make it so.
 _Avoid_: "it rolls" (a curvature reading, not a construction); "one surface spanning the
 corner" (that is the shipped fallback)
 
 **Quad** / **Tri** (in a rolled corner):
-the **quad** is the 66 above; the **tri** is the member's own face -- its spiderweb
-`CubicSurface_64`, or a FreeCAD fill over the member's **three real boundary curves plus
-the apex**. The tri sits **beside** the quad, not inside it: measured on the maintainer's
-file the tri interior is **16-62 %** of the corner extent away from the quad, where a
-wrapping patch reads **0.1-10 %**.
+the **quad** is the 66 above; the **tri** is the patch beside it, whose **face** is its own
+net's `CubicSurface_64` (the construction the maintainer's files store) or a FreeCAD fill
+over its **three real boundary curves**. It sits **beside** the quad: the two share one
+curve and cover **no common area**, which is the property to measure. The interior-distance
+percentage the maintainer's file gives (16-62 % of the corner extent) is a **reading**;
+Silk's own corner reads 3.51-37.08 % on the demo, and below his floor is not green.
 _Avoid_: using "tri" for a fill drawn over a region the quad already covers
 
 **Preserved piece**:
@@ -96,10 +98,11 @@ _Avoid_: "patch remnant", "spare surface"; a preserved piece is never a re-fitte
 the patch -- it is the patch's own cell, cut on knot lines the patch already carries
 
 **Rolling leader**:
-a position on the seam curve, measured from the junction corner, that **must be an
+a LENGTH in mm along the seam curve, measured from the junction corner, that **must be an
 independent cut** -- separate from the band edge (the setback). The maintainer has TWO
 cuts per axis end (setback 1/16 and leader 1/4); Silk carries one band edge per axis end
-(#82), so the leader exists as `ULeader1/2` / `VLeader1/2`, default unset = byte-identical.
+(#82), so the leader exists as `ULeader1/2` / `VLeader1/2`, default unset = byte-identical,
+written on the patch that carries the tri (#129: mm, never a u/v fraction).
 _Avoid_: writing the leader into the band edge (that makes setback and leader one number,
 which pinches the corner's 4th side -- the exact defect this vocabulary exists to stop)
 
@@ -115,10 +118,9 @@ _Avoid_: calling it a length (it is the ABSENCE of one), and quoting it as a u/v
 
 **Spiderweb**:
 the control net of a grid with a **collapsed row** (`ControlGrid64_3_1Grid44`), drawn as a
-web of lines to a point. It is a **scaffolding** grid: usable as a ring member, not as a
-corner face.
-_Avoid_: "the spiderweb" used for any corner surface -- the shipped corner's net is a
-perfectly ordinary 6x6
+web of lines to a point. It is the **tri's net** in a rolled corner, and the fake fourth
+ring member in the shipped fallback.
+_Avoid_: "the spiderweb" used for any corner surface -- the quad is a perfectly ordinary 6x6
 
 **Rolled-fillet look**:
 the maintainer's *design* effect -- one large fillet and one small one that appears to roll

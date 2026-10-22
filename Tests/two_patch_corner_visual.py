@@ -5,8 +5,9 @@ WHAT IS RENDERED, and what each picture is allowed to say.
 
   1. OUR corner.  The cube-corner fixture (`Tests/cube_corner_model.py`),
      built through the corner stage's DEFAULT construction: the rolling
-     corner, whose leader is the MEMBER PATCH's own cut.  The 66 stops at the
-     member's cell, and the small triangular surface (`CubicSurface_64` over
+     corner, whose leader is the carrying patch's own cut.  The quad is the 66
+     over the ring's four members, and the small triangular surface
+     (`CubicSurface_64` over
      the member net) sits beside it -- the maintainer's two surfaces.
   2. THE TRI alone, from the same camera, so the cell it covers can be read
      against the quad around it.

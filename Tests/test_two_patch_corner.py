@@ -2,18 +2,19 @@
 
 WHAT THIS PINS, AND WHY IT IS A MEASUREMENT MODULE
 
-The maintainer's rolling corner is two surfaces: the big quad (Silk's own
-6x6 corner fill) and, beside it, the small triangular member -- and his quad
-stops at the member's cell instead of sweeping over it.  The arrangement that
-produces that is the one his own file carries:
+The rolled corner is two surfaces: the big **quad** (the 66 over the ring's
+four members) and, beside it, the **tri** (the triangular patch), plus the
+five preserved pieces -- stated once in
+`docs/adr/0006-rolled-corner-is-two-patches.md`.  This module measures that
+arrangement, and it measures it as built:
 
-  * the member patch is cut at TWO positions per axis, the SETBACK and the
-    LEADER (`SilkPatch.ULeader1/2`, `VLeader1/2`), so the member's cell is the
-    region BETWEEN them and the TWO strips that share that patch end their
-    junction rows at TWO DIFFERENT points -- the member's real row runs
-    between them (`SilkMachinery.ring_corner_gap` states the rule);
+  * the patch that carries the tri is cut at TWO positions per axis, the
+    SETBACK and the LEADER (`SilkPatch.ULeader1/2`, `VLeader1/2`), so the
+    tri's cell is the region BETWEEN them and the TWO strips that share that
+    patch end their junction rows at TWO DIFFERENT points -- the member's real
+    row runs between them (`SilkMachinery.ring_corner_gap` states the rule);
   * every other patch of the ring keeps ONE cut per axis end, so its own two
-    strips still meet at one point;
+    strips still meet at one point, and the third blend is not cut at all;
   * the member's row is read as the ring row (not its collapsed row), which
     is `SilkCorner._member_row_order` answering REAL-ROW-FIRST for a patch
     that carries a real second cut.
@@ -39,7 +40,11 @@ parameter:
     (smoothed) net does not -- a known-fold and a known-good control at the
     same resolution;
   * the tri-interior-to-quad distance, as a fraction of the corner's own
-    extent, against the maintainer's own reading (16 %..62 %);
+    extent, beside the maintainer's own reading (16 %..62 %) -- REPORTED, not
+    used as a pass line (see row (d): its minimum is below his floor);
+  * the property that actually separates the two surfaces: **no common area**
+    and an interior strictly outside the quad, with a known-answer control
+    (the quad against itself) that proves the instrument can see an overlap;
   * the seam `k_gap`, exact and sampled, with the published floor beside it
     (`Tests/continuity_calibration.error_floor`), and the C0 at the cut;
   * the settling count and the per-pass cost (#125).
@@ -54,16 +59,20 @@ MEASURED (this build, cube-corner fixture, leader 0.25, setback 0.1)
                                 own collapsed row, inside the loop)
     (c) normal-field flips      0/0/0 without the smoothing; no collapsed side
     (d) tri interior -> quad    0.0187 .. 0.1337 mm = 7.5 %..53.5 % of the
-                                0.25 mm extent (his: 16..62 %)
+                                0.25 mm extent (his: 16..62 %; the minimum is
+                                BELOW his floor and is reported as such).
+                                THE BAR: no common area (0.000000 mm^2, against
+                                the quad-against-itself control's 0.046713)
+                                and an interior strictly outside the quad
     (e) seam k_gap              exact 7.8e-15 .. 1.6e-14 /mm, sampled
                                 0.0067 .. 0.0093 /mm; the cut's C0
-                                1.4e-17 .. 5.6e-17 mm
+                                1.4e-17 .. 3.2e-17 mm
     (f) settles                 touched [], three passes 0.0001 s each, the
                                 poles move 0.000e+00 mm
 
 SECOND FIXTURE (the 2x2 corner, `Tests/corner_model.py`): a FOUR-valent
-junction, so the rolling construction refuses it BY NAME (its cut lives on the
-patch that carries the triangular member and a 4-valent ring has none), the
+junction, so the rolling construction refuses it BY NAME (it needs a third,
+uncut seam and a triangular remainder, and a 4-valent ring has neither), the
 corner stage builds the shipped construction and says so, and the 4-valent
 corner is otherwise exactly what it was: 36 poles, 0 coincident pairs, no
 member.
@@ -345,12 +354,23 @@ def test_the_two_patch_corner_is_fold_free_without_the_smoothing(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_the_tri_sits_beside_the_quad_not_inside_it(doc):
-    """(d) THE TWO SURFACES TILE: the tri's interior, measured to the quad.
+def test_the_tri_is_beside_the_quad_not_inside_it(doc):
+    """(d) THE TWO SURFACES ARE ADJACENT, NOT OVERLAPPING -- the property
+    that makes them two patches, with a known-answer control.
 
-    The maintainer's own corner reads 8.0..31.0 mm on a 50 mm diagonal
-    (16 %..62 %).  The shipped corner reads 0.0002..0.017 mm (0.1 %..10 %):
-    its 66 sweeps over the member's cell, i.e. the tri is INSIDE the quad.
+    THE BAR IS NON-OVERLAP, and it is two-sided: the two faces must have no
+    common area, and the tri's interior must lie strictly OUTSIDE the quad.
+    A positive control runs in the same test -- the quad against ITSELF, whose
+    common area is the quad's whole face -- so the reading is not a zero that
+    an instrument that cannot see an overlap would also give.
+
+    THE PERCENTAGE IS A READING, NOT THE BAR.  The maintainer's file reads
+    8.0..31.0 mm on a 50 mm diagonal (16 %..62 %); the shipped fallback reads
+    0.1 %..10 % because its 66 sweeps over the member's cell.  This corner
+    reads 7.5 %..53.5 %, i.e. its MINIMUM is BELOW his floor -- so the
+    percentage cannot be the pass line (an earlier version of this row
+    compared only the maximum, and passed while reading 7.5 %).  What it
+    cannot be used for is hidden: it is printed with the floor beside it.
     """
     errors, checks = [], []
     strips, corner, member = _two_patch(doc)
@@ -364,17 +384,47 @@ def test_the_tri_sits_beside_the_quad_not_inside_it(doc):
     extent = max(bb.XLength, bb.YLength, bb.ZLength) or 1.0
     lo, hi = min(ds) / extent * 100.0, max(ds) / extent * 100.0
     checks.append("tri interior -> quad: %.5f .. %.5f mm = %.1f %%..%.1f %% of "
-                  "the corner's %.4f mm extent (his: %.0f..%.0f %%)"
+                  "the corner's %.4f mm extent (his: %.0f..%.0f %%; our "
+                  "minimum is %s his floor -- a reading, not the bar)"
                   % (min(ds), max(ds), lo, hi, extent,
-                     HIS_TRI_QUAD_PERCENT[0], HIS_TRI_QUAD_PERCENT[1]))
+                     HIS_TRI_QUAD_PERCENT[0], HIS_TRI_QUAD_PERCENT[1],
+                     "BELOW" if lo < HIS_TRI_QUAD_PERCENT[0] else "inside"))
     checks.append("areas: quad %.6f mm^2, tri %.6f mm^2"
                   % (corner.Shape.Area, member.Shape.Area))
-    if hi < HIS_TRI_QUAD_PERCENT[0]:
-        errors.append("the tri's interior lies entirely inside %.0f %% of the "
-                      "quad's extent (%.1f %%) -- the 66 sweeps over the "
-                      "member's cell"
-                      % (HIS_TRI_QUAD_PERCENT[0], hi))
+    # THE BAR (1): the two surfaces share no area.  The control is the quad
+    # against ITSELF: same code, same tolerance, an overlap that must show.
+    try:
+        shared = _shared_area(corner.Shape, member.Shape)
+        control = _shared_area(corner.Shape, corner.Shape)
+    except Exception as exc:            # a boolean that will not run is not
+        return {"pass": False,             # a pass
+                "errors": ["the overlap instrument did not run: %r" % (exc,)],
+                "checks": checks}
+    checks.append("common area: quad & tri %.6f mm^2, control quad & quad "
+                  "%.6f mm^2 (the bar: the first is 0, the second is the "
+                  "quad's own area)"
+                  % (shared, control))
+    if control <= 0.5 * (corner.Shape.Area or 0.0):
+        errors.append("the overlap instrument cannot see an overlap (the "
+                      "quad against itself reads %.6f mm^2 of %.6f) -- the "
+                      "reading below is vacuous"
+                      % (control, corner.Shape.Area))
+    if shared > 1e-9:
+        errors.append("the quad and the tri share %.6f mm^2 -- the 66 sweeps "
+                      "over the tri's cell" % shared)
+    # THE BAR (2): the tri's interior is strictly outside the quad
+    if min(ds) <= 1e-9:
+        errors.append("the tri's interior lies ON the quad (%.3e mm)"
+                      % min(ds))
     return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def _shared_area(a, b):
+    """The area `a` and `b` have in common, in mm^2."""
+    common = a.common(b)
+    if common is None:
+        return 0.0
+    return sum(f.Area for f in common.Faces)
 
 
 def test_the_cut_is_c0_and_the_seams_read_a_k_gap(doc):
@@ -467,8 +517,8 @@ def test_the_shipped_fallback_is_still_byte_identical(doc):
     patches' band edges and leader cuts are exactly what the fixture had.
 
     The 4-valent corner is unchanged too: it takes the shipped construction
-    and says so (the rolling cut lives on the member patch, and a 4-valent
-    ring has none).
+    and says so (a rolled corner needs a third, uncut seam and a triangular
+    remainder, and a 4-valent ring has neither).
     """
     errors, checks = [], []
     strips = _fixture(doc)
@@ -505,8 +555,8 @@ def test_the_2x2_corner_takes_the_shipped_construction_and_says_so(doc):
     """THE SECOND FIXTURE: the 2x2 corner model (`Tests/corner_model.py`).
 
     It is a FOUR-valent junction, and the rolling construction is 3-valent:
-    its cut lives on the patch that carries the triangular member, and a
-    4-valent ring has none.  Cutting any other patch is not an option either
+    it needs a third, uncut seam and a triangular remainder, and a 4-valent
+    ring has neither.  Cutting any other patch is not an option either
     -- a second cut on a patch that carries a ring PAIR splits that pair's
     shared corner.  So the 2x2 corner takes the shipped construction, the
     corner stage says so, and nothing about it moved (#128 leaves the
@@ -581,7 +631,7 @@ ALL_TESTS = [
     test_the_ring_closes_with_the_cut_on_the_member_patch_only,
     test_the_two_patch_corner_has_no_coincident_poles,
     test_the_two_patch_corner_is_fold_free_without_the_smoothing,
-    test_the_tri_sits_beside_the_quad_not_inside_it,
+    test_the_tri_is_beside_the_quad_not_inside_it,
     test_the_cut_is_c0_and_the_seams_read_a_k_gap,
     test_the_two_patch_corner_settles,
     test_the_shipped_fallback_is_still_byte_identical,

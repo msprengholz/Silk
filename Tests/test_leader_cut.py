@@ -17,7 +17,8 @@ WHAT IS PINNED HERE
      band edge already cuts further out) and `leader_cut_problem` says so, so
      a caller cannot build a corner cell that is really the band's own cell.
 
-WHY THE TICKET'S TWO-SURFACE CORNER IS NOT BUILT ON IT YET: with the
+WHY THE TICKET'S TWO-SURFACE CORNER IS NOT BUILT ON IT YET (SUPERSEDED by
+#128/#129 -- kept as history): with the
 leader-bounded cell the ring assembles with the member's REAL row as its ring
 row and the 66 stops at the member's cell (0.0633 mm^2 against the member's
 0.0206, no collapsed side) — measured, and rendered in
@@ -25,10 +26,12 @@ row and the 66 stops at the member's cell (0.0633 mm^2 against the member's
 interior rows are extrapolated from the member's own rows and flip the normal
 field 25/53/96 times at n = 39/81/150, with the fine mesh self-intersecting.
 `SilkMachinery.smooth_degenerate_cap` fixes a COLLAPSED side, and this
-arrangement has none there.  So the corner stage keeps the cut it has always
-used (the band edge) until the member side has a re-solve; the cut, the cell
-rule and the refusals are what this file pins in the meantime.  Numbers:
-`docs/research/silk-rolling-corner-66.md`.
+arrangement has none there.  **The two-surface corner shipped anyway (#128):**
+read REAL-ROW-FIRST, that arrangement measures 0/0/0 flips and needs no
+re-solve (`Tests/test_two_patch_corner.py`), and #129 placed the cut by a
+length in mm.  The cut, the cell rule and the refusals are what this file
+pins.  Numbers: `docs/research/silk-rolling-corner-66.md`, and the corner
+itself: `docs/adr/0006-rolled-corner-is-two-patches.md`.
 """
 
 import FreeCAD
@@ -174,7 +177,10 @@ def test_the_ring_loop_closes_at_one_cut_and_opens_at_two(doc):
     name the axes the other way round, so the corner is one point exactly
     when the band edge and the along start are the same number at each end
     -- one cut per axis end. A real second cut (the rolling leader) splits
-    them, and `ring_corner_gap` names the two numbers.
+    them, and `ring_corner_gap` names the two numbers.  That is CORRECT on
+    the one patch per corner that carries the triangular patch (its two ring
+    corners are two different points there, #127), and it is what the corner
+    stage refuses on any other patch.
     """
     errors, checks = [], []
     strips = _cube(doc)
@@ -198,10 +204,10 @@ def test_the_ring_loop_closes_at_one_cut_and_opens_at_two(doc):
     elif gap != ("U", 0.1, 0.25):
         errors.append("the gap names %r, not the (axis, band edge, leader) "
                       "that split it" % (gap,))
-    # THE MEMBER PATCH IS THE ONE PATCH WHERE TWO PAIRS MEET, so its two
+    # THE CARRYING PATCH IS THE ONE PATCH WHERE TWO PAIRS MEET, so its two
     # ring corners are the two ENDS of the member's one row -- two DIFFERENT
-    # points are correct there, and #119's arrangement (the cut on the
-    # member patch only) assembles.
+    # points are correct there, and #119's arrangement (the cut on that
+    # patch alone) assembles.
     import SilkCorner as SC
     _grids, _cells, why = SC.corner_inputs(strips, SC.CORNER_DEFAULT_TOL)
     checks.append("corner_inputs with the cut on the member patch only: %r"

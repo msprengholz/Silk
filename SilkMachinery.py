@@ -358,10 +358,10 @@ def leader_cut_problem(p):
     A leader says where the band is cut back from the junction corner, so it
     only means something BEYOND the band edge at its own end (`axis_cuts`).
     Inside the band the band edge already cuts further out, and the corner
-    cell the corner stage builds would then be the band's own cell -- a
-    member surface lying on top of the blend it is supposed to sit beside.
-    Naming that here means the corner stage falls back to the shipped corner
-    with a reason instead of building a corner nobody meant."""
+    cell the corner stage builds would then be the band's own cell -- so the
+    corner would reach no further than the blend it is supposed to sit
+    beside.  Naming that here means the corner stage falls back to the
+    shipped corner with a reason instead of building a corner nobody meant."""
     name = getattr(p, "Name", "?")
     for letter in ("U", "V"):
         s1, s2 = split_pair(p, letter)
@@ -446,9 +446,9 @@ def normalize_leader_on_set(obj, prop):
 # leader is where the band is cut back from the junction corner (how far
 # the corner fill reaches along the seam). The maintainer has them as two
 # separate cuts, and the corner's two-patch look needs both: the triangular
-# member's cell is the region BETWEEN the setback and the leader, so its two
-# neighbours' rows meet it at two DIFFERENT corners instead of the one point
-# a corner cell can offer.
+# member's cell is the region BETWEEN the setback and the leader, so the two
+# divided blends' cut rows meet the triangular patch as its two sides instead
+# of at the one point a corner cell can offer.
 #
 # ADDITIVE and default-off: a patch that has never carried a leader reads
 # exactly the two band edges it always read, so every existing document
@@ -793,8 +793,8 @@ def corner_cell_index(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2, end=None):
     """`(index, n_intervals, end)` of the CORNER cell at the junction end of
     one axis, or `(None, n_intervals, end)` when the axis cannot name one.
 
-    THE CORNER CELL is the interval the corner fill and the triangular
-    member are built from. It is the interval that ENDS at the LEADER cut
+    THE CORNER CELL is the interval the corner fill and the carrying
+    patch's triangular cell are built from. It is the interval that ENDS at the LEADER cut
     when that end carries one (#119) -- the region between the setback and
     the leader -- and the end interval itself when it does not, which is
     the single rule that reduces to the pre-#119 behaviour exactly (`end`
@@ -936,12 +936,16 @@ def ring_corner_gap(p):
         the leader cut  ==  the band edge  (or there is no leader).
 
     One cut per axis end satisfies that by construction -- which is why
-    the shipped corner stands, and why one cut puts the triangular
+    the SHIPPED corner stands, and why one cut puts the triangular
     member's APEX on the loop. A second cut (the rolling leader) breaks
     it: the band's across width stays at the setback while the along
     start moves out to the leader, so the two strips' rows end at
     (setback, leader) and (leader, setback) -- two different points --
-    and `corner_grid` refuses `the two grids share no corner`. The two
+    and `corner_grid` refuses `the two grids share no corner`. That is
+    CORRECT on the one patch that carries the triangular patch: its two
+    ring corners ARE two different points there, the two ends of the
+    member's row (#127). A second cut on any OTHER patch opens a pair
+    nothing closes, and that is what the corner stage refuses. The two
     numbers are returned so the refusal can quote them.
 
     Returns (`letter`, across, along) of the first end that breaks it, or
@@ -1727,8 +1731,9 @@ def _basis6(u):
 
 def _collapsed_side(poles36, tol):
     """The name of the 6x6 side whose six poles all coincide ('u0', 'u1',
-    'v0', 'v1'), or None. The triangular member's collapsed junction row
-    lands on exactly one side of the assembled corner."""
+    'v0', 'v1'), or None. In the SHIPPED construction the triangular
+    member's collapsed junction row lands on exactly one side of the
+    assembled corner; a rolled corner has no collapsed side at all."""
     sides = {
         "u0": [v * 6 + 0 for v in range(6)],
         "u1": [v * 6 + 5 for v in range(6)],
@@ -1797,8 +1802,9 @@ def _coons_target(net_p, net_w, u, v):
 def smooth_degenerate_cap(poles36, weights36, tol=1e-6):
     """Fold-free cap smoothing for a corner with a collapsed side.
 
-    Detects a side of the 6x6 whose six poles coincide (the triangular
-    4th member's collapsed junction row), re-indexes the net so that side
+    Detects a side of the 6x6 whose six poles coincide (in the SHIPPED
+    construction, the triangular member's collapsed junction row), re-indexes
+    the net so that side
     is V1, and re-solves the eight interior poles of its two neighbouring
     rows (frame u = 1..4, v = 3,4) as the least-squares projection of the
     transfinite (Coons) fill of the corner's own boundary loop -- with
@@ -2076,20 +2082,24 @@ def smooth_folding_interior(poles36, weights36, tol=1e-6, n=12):
     transfinite (Coons) fill of its own boundary loop.
 
     `smooth_degenerate_cap` is the collapsed-side half of this rule, and this
-    is the other half.  A collapsed side is a STRUCTURAL statement -- the
-    triangular member's junction row is one point -- and the cap smoothing
-    re-solves the eight interior poles beside it against the Coons target.
-    The two-patch corner has no collapsed side at all: the member contributes
-    its real row, the 6x6 has 36 distinct poles -- and its interior is still
+    is the other half.  A collapsed side is a STRUCTURAL statement -- in the
+    shipped construction the triangular member's junction row is one point --
+    and the cap smoothing re-solves the eight interior poles beside it
+    against the Coons target.  A rolled corner has no collapsed side at all
+    (the member contributes its real row and the 6x6 has 36 distinct poles,
+    so this step returns it unchanged), and its interior is still
     upstream's tangent-ratio extrapolation, which is scale-relative and
     fitted to two rows per member.  On a cell whose own net is anisotropic
     the two one-sided estimates diverge and their average lands outside the
     boundary quad, so the net folds while nothing about it is degenerate
-    (measured: the demo model's junction CB_J1_FrontTopRight, 0/630
+    (measured on the demo model's junction CB_J1_FrontTopRight in the
+    arrangement of before the leader/length work: 0/630
     coincident pole pairs, no collapsed side, 30/56/86 normal-field flips at
     n = 39/81/150, the fold in the two subgrids that touch the triangular
     member while the two strip-to-strip subgrids are clean --
-    `Tests/demo_corner_row_diff.py`).
+    `Tests/demo_corner_row_diff.py`).  **This step is a SAFETY NET, not part
+    of the rolling construction**: on the built rolled corner the 6x6 is the
+    raw assembly and a fold-free net comes back as the SAME lists.
 
     THREE conditions, all read off the net, and the input is returned
     UNCHANGED unless every one holds:

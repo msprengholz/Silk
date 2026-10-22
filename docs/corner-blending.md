@@ -18,7 +18,7 @@ lie, so the terms first. The words marked **(author)** are his; the rest are our
 | **corner cell** | the subgrid cell where two bands meet at a patch corner; reserved for the corner, never part of a band |
 | **corner blend** | a `CornerBlend` object: the surface closing the junction of 3 or 4 patches |
 | **corner fill** | FreeCAD's `Surface::Filling` over a boundary wire — the `Silk_CornerFill` command. A different object from a corner blend |
-| **triangular member** | `ControlGrid64_3_1Grid44`: the degenerate 6×4 grid with a *collapsed row* that fakes a fourth blend at a 3-valent corner. **(author)** calls it a *"scaffolding piece"* with a *"spiderweb"* grid. `docs/research/silk-corner-type-taxonomy.md` |
+| **triangular member** | `ControlGrid64_3_1Grid44`: the degenerate 6×4 grid with a *collapsed row*. In a rolled corner it is one of the quad's four ring members AND the triangular patch's own net; in the shipped fallback it fakes a fourth blend at a 3-valent corner. **(author)** calls it a *"scaffolding piece"* with a *"spiderweb"* grid. `docs/research/silk-corner-type-taxonomy.md` |
 | **rolling** **(author)** | *"the separation of the blending into two zones with different sizes — a large fillet in one direction and a small fillet in another"*, where *"this small fillet rolls around this big one"*. **Two convex fillets of different radii.** An effect you judge by eye |
 | **mushing** **(author)** | his opposite: blending that averages into *"one thing"*, i.e. one uniform round |
 | **anisotropy** | a measured property: the corner's curvature differs by direction (`k_max / k_min` away from 1) |
@@ -31,8 +31,8 @@ lie, so the terms first. The words marked **(author)** are his; the rest are our
 
 | valence | what Silk ships | how | measured continuity |
 |---|---|---|---|
-| **3** (hard corner) | one `CornerBlend` | 3 strip blends + the invisible triangular member → 4 subgrids → one 6×6 surface | C0 exact, **G1 ≤ 0.48°**, not G2 (`k_gap` ≤ 3.1e-2 /mm on the demo). The member's collapsed row gives a *degenerate-boundary* normal on the two seams that reach it |
-| **4** | one `CornerBlend` | 4 strip blends → 4 subgrids → one 6×6 surface | G1 ≤ 2.0e-4°, `k_gap` ≤ 1.0e-2 /mm |
+| **3** (hard corner) | one `CornerBlend` | **`rolling` (the default, #119/#128):** the 66 quad over the ring's four members plus the triangular patch beside it and five preserved pieces — `docs/adr/0006-rolled-corner-is-two-patches.md`. **`shipped` (the fallback):** the 3 strip blends + the member inside the 66 → 4 subgrids → one 6×6 surface | C0 exact, **G1 ≤ 0.48°**, not G2 (`k_gap` ≤ 3.1e-2 /mm on the demo). In the shipped construction the member's collapsed row gives a *degenerate-boundary* normal on the two seams that reach it |
+| **4** | one `CornerBlend`, shipped construction | 4 strip blends → 4 subgrids → one 6×6 surface (a 4-valent ring has no third, uncut seam, so no rolling corner) | G1 ≤ 2.0e-4°, `k_gap` ≤ 1.0e-2 /mm |
 | **5 or more** | **nothing** | `CornerBlend` refuses by name and creates nothing | — |
 
 **For five or more surfaces, use FreeCAD's `Surface::Filling` directly** — the
@@ -45,8 +45,8 @@ expose it (`docs/research/silk-corner-type-taxonomy.md`).
 | the video does | Silk today |
 |---|---|
 | sets the two setbacks **asymmetrically** (its own numbers: 0.25 and 0.125) so one fillet is large and the other small | the setback is already the user's, per patch and per end, in the panel. Asymmetry **reaches the corner's shape**: curvature spread 1.04 → 2.29 — but see the ruling below: that is **not** the two-zone look |
-| the small fillet **rolls around** the large one | **not achieved** — the owner's own look at the render (2026-10-21) is the ruling: *"the patch has weirdly rounded edges. I would not consider this to be a rolling corner"* |
-| **sections** each blend along its seam, backfills the rest with the original surface, **trims** the 66 back, and **inserts a separate fill** | one 6×6 surface spans the whole corner, and the band it consumes is **not** re-created. The segmented recipe is **opt-in, not built**: #119, staged, and limited to tools Silk or FreeCAD already provide |
+| the small fillet **rolls around** the large one | **built since #119/#128**, as a construction: the default 3-valent corner is two surfaces meeting along the leader. Whether it has the two-zone LOOK is the owner's eye, not a measurement — and the construction is checked by a construction diff (ADR 0006), not by a render |
+| **sections** each blend along its seam, backfills the rest with the original surface, **trims** the 66 back, and **inserts a separate fill** | **built** (the rolling construction): the seams are cut back at the leader, the remainder is kept as **five preserved pieces**, and the triangular patch is a surface of its own — `docs/adr/0006-rolled-corner-is-two-patches.md` |
 
 ## Is our corner a rolling fillet? The **ruled** answer: **no**
 
@@ -78,10 +78,12 @@ own class help (`ControlGrid66_4Sub.py`, quoted in
 | 1. cut the base surface | the base `CubicSurface_44` is **sectioned** into cells (`ControlGrid44_2EdgeSegments` = a *2-edge rectangular cut*; `ControlGrid44_EdgeSegment` = a *single strip cut*) | the patch is divided into subgrid cells and the **band** is the cut — but the **whole band** is consumed | partly |
 | 2. **preserve what is not blended** | the un-blended remainder is **re-created as its own surface** — the demo's `*_Segment_surfaces` groups hold 11 extra `CubicSurface_44` whose tooltip is *"re-create the portions of the original surface that are to be preserved and not blended"* | **nothing is preserved.** The band is consumed and the patch's own surface is hidden under it (auto-hide), never re-created | **no** |
 | 3. "2 small blends, and one larger blend" | the three ring members differ in **how far they run along the seam** — small = near the corner, large = continuing past it | the three ring members differ in **band depth** (the setback) | **no — the wrong parameter** |
-| 4. the triangular 4th member | `ControlGrid64_3_1Grid44` opposite the large blend | ported, faithful (pole parity 0.000e+00) | yes |
-| 5. 4 subgrids → one surface | `ControlGrid66_4Sub` → `CubicSurface_66` | the same chain, our 6×6 | yes |
+| 4. the triangular 4th member | `ControlGrid64_3_1Grid44` opposite the large blend | ported, faithful (pole parity 0.000e+00); it is the quad's fourth **member** and the triangular patch's own net | yes |
+| 5. 4 subgrids → one surface | `ControlGrid66_4Sub` → `CubicSurface_66` | the same chain, our 6×6 — the quad, with the triangular patch beside it | yes (the ARRANGEMENT is what differs: `docs/adr/0006-rolled-corner-is-two-patches.md`) |
 
-**The two divergences are the whole answer.** Step 2 is missing, so the corner's
+**The two divergences were the whole answer.** *(Written against the shipped
+fallback; step 2 is closed since #130, see "Consequence" below.)* Step 2 is
+missing, so the corner's
 neighbours are the blends themselves and the 66's outline is the **band edge** —
 one closed loop at a roughly constant distance from the junction, which is
 exactly the "weirdly rounded edges": a rounded triangle with rounded corners, a
@@ -90,17 +92,31 @@ seam**, and we varied **depth** instead — the same numbers, a different
 parameter. So the video's 0.25 / 0.125 are read as *where the segment ends along
 the seam*, not as *how deep the band is*.
 
-**Consequence.** #119 is **not** a refinement of the look — it **is** the look.
-Its first stage (section each blend along its seam and re-create the preserved
-remainder) is what produces the second surface and the seam where the small
-fillet rolls into the large one. Until that is built, the honest sentence is:
+**Consequence, updated.** The step-2 gap is **closed** since #119/#128: the
+default 3-valent corner is two surfaces (the quad and the triangular patch
+beside it) and the remainder is kept as **five preserved pieces**. Step 3's
+"small" and "large" are about **extent along the seam**; the shipped
+construction cuts each seam back at a **length in mm from the junction**
+(#129), equalised by default, which is the same idea in the owner's unit.
+The honest sentence is now:
 
 > the corner **responds directionally** to asymmetric setbacks — measured, seam
-> continuity untouched — and it is **one surface with a rounded outline**, not the
-> maintainer's two-zone rolling fillet. The two-zone look needs the segmented
-> recipe (#119).
+> continuity untouched — and since #119/#128 it is **two surfaces meeting along
+> one curve**, with the patches' remainders preserved. Whether it has the
+> maintainer's two-zone **look** is the owner's judgement, and the construction
+> is checked by a construction diff (`docs/adr/0006-rolled-corner-is-two-patches.md`),
+> not by a render.
 
-## The rolling corner, built (opt-in) — #119
+## The rolling corner — the path (B) attempt of #119 (history)
+
+**Superseded.** What follows is the **path (B)** build of #119: split blends,
+a FreeCAD `Surface::Filling` over a chord across the corner, and **no**
+`ControlGrid66` at all. The shipped rolling corner is the path (A) the corner
+stage builds — 66 quad over the ring's four members, triangular patch beside
+it — and it is stated once in
+`docs/adr/0006-rolled-corner-is-two-patches.md`. Path (B) is kept here as the
+record of an arrangement that was tried and measured, not as a description of
+what ships.
 
 The segmented recipe is **built** as an opt-in
 (`SilkWorkflowOps.create_split_blend` /

@@ -244,16 +244,16 @@ HIDE_GRIDS_TOOLTIP = (
 
 # Placeholder shown in an empty collection list, so "nothing yet" reads
 # as deliberate rather than as a list that failed to load.
-# The CORNER CHOICES (#117 / #119): the two things the corner stage cannot
-# decide for the owner -- WHICH patch carries the triangular member, and HOW
-# FAR ALONG each seam the band is cut (the rolling leader). Every seam of the
-# ring gets its own leader row, so the choice reaches EVERY patch of the ring
-# and not only the one that carries the member.
+# The CORNER CHOICES (#117 / #119 / #129): the two things the corner stage
+# cannot decide for the owner -- WHICH CORNER carries the triangular patch
+# (its patch and grid corner), and HOW FAR ALONG each seam the band is cut
+# back (the rolling leader, a LENGTH in mm). Every seam of the ring gets its
+# own leader row, so the choice reaches every seam of the ring.
 CORNER_MEMBER_AUTO = "(automatic)"
 CORNER_MEMBER_AUTO_TIP = (
     "Leave the corner's own placement alone. The corner stage searches for "
-    "the first ring patch/corner a triangular member assembles at; pick a "
-    "patch here to make it build at THAT patch instead.")
+    "the first ring corner a triangular patch assembles at; pick a patch "
+    "here to put the triangular patch at THAT patch instead.")
 # The leader is a LENGTH IN MM along the seam, measured from the junction
 # corner (#129) -- the owner's unit: *"not u or v values between 0 and 1, but
 # the actual length in eg. mm"*.  The maximum is a mile wide on purpose: a
@@ -279,9 +279,10 @@ CORNER_LEADER_AUTO_TEXT = "equal"
 CORNER_LEADER_TIP = (
     "The rolling leader of THIS seam: where the band is cut back, as a "
     "LENGTH IN MM measured from the junction corner along the seam. The "
-    "ROLLING construction writes it as the member patch's own leader cut "
+    "ROLLING construction writes it as the carrying patch's own leader cut "
     "(its band edge stays the setback), so only the seams of the patch that "
-    "carries the triangular surface are cut; the SHIPPED construction "
+    "carries the triangular patch are cut and the third blend is left "
+    "full-length; the SHIPPED construction "
     "writes it into the seam-parallel band edge of both patches of the "
     "seam.\n"
     "At 'equal' (the default) the stage's EQUAL-SIDING rule places the cut "
@@ -1158,13 +1159,14 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         lay.addLayout(row)
         lay.addWidget(self._instruction(
             "The corner stage's three choices are yours: the CONSTRUCTION "
-            "(rolling or shipped), which patch and corner carries the small "
-            "triangular surface, and the SETBACK of each seam -- how far "
+            "(rolling or shipped), the CORNER that carries the small "
+            "triangular surface (which patch, and which of its grid "
+            "corners), and the SETBACK of each seam -- how far "
             "along it the band is cut back, in mm from the junction corner. "
             "Left at 'equal' the stage makes the two cuts that bound the "
             "triangle the same length, so it comes out roughly equal-sided."))
-        # WHICH CONSTRUCTION (#128): the rolling corner (the 66 over the
-        # member patch's cut cell plus the triangular member beside it) is
+        # WHICH CONSTRUCTION (#128): the rolling corner (the quad over the
+        # ring's four members plus the triangular patch beside it) is
         # the DEFAULT; the shipped corner is the fallback, and it is the
         # only one a 4-valent ring can take. A choice made when the corner
         # is BUILT, so it is read-only once the corner exists -- the panel
@@ -1175,8 +1177,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         for name in CORNER_CONSTRUCTIONS:
             self.corner_construction.addItem(name)
         self.corner_construction.setToolTip(
-            "rolling (the default): the corner fill over the member patch's "
-            "cut cell, plus the small triangular surface beside it -- the "
+            "rolling (the default): the quad over the ring's four members, "
+            "plus the small triangular surface beside it -- the "
             "maintainer's two-patch corner.\n"
             "shipped: the corner fill with the spiderweb member, the "
             "construction of before -- the fallback, and the only one a "
@@ -1188,9 +1190,9 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             lambda _i: self._render_corner_choices())
         construction_row.addWidget(self.corner_construction, 1)
         lay.addLayout(construction_row)
-        # WHICH PATCH carries the triangular member (#117).
+        # WHICH CORNER carries the triangular patch (#117).
         member_row = QtWidgets.QHBoxLayout()
-        member_row.addWidget(QtWidgets.QLabel("Triangular member on:"))
+        member_row.addWidget(QtWidgets.QLabel("Triangular patch on:"))
         self.corner_member_patch = QtWidgets.QComboBox()
         self.corner_member_patch.addItem(CORNER_MEMBER_AUTO)
         self.corner_member_patch.setToolTip(CORNER_MEMBER_AUTO_TIP)
@@ -2506,8 +2508,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                 self.corner_construction.setCurrentIndex(max(idx, 0))
                 self.corner_construction.setEnabled(bool(patches))
                 self.corner_construction.setToolTip(
-                    "rolling (the default): the corner fill over the "
-                    "member patch's cut cell, plus the small triangular "
+                    "rolling (the default): the quad over the ring's four "
+                    "members, plus the small triangular "
                     "surface beside it -- the maintainer's two-patch "
                     "corner.\n"
                     "shipped: the corner fill with the spiderweb member, "
@@ -2598,7 +2600,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         (#91), so one Enter is one undo step.
 
         A selection that is not the ring of 3 blends (a junction where three
-        patches meet, the triangular 4th member built invisibly) or of 4
+        patches meet, the triangular patch beside the quad built by the stage)
+        or of 4
         blends around one shared junction is refused LOUDLY by name
         (SilkWorkflowOps), with the collection left intact and nothing
         created. A junction that already has a corner is an idempotent no-op

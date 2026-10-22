@@ -25,10 +25,12 @@ The built corner has 36 poles, one face, a non-empty Shape and an
 idempotent second ask.
 
 MEASURED STATE (#128, the DEFAULT construction): the corner stage's default
-is the ROLLING construction, and since #128 that is the maintainer's
-two-patch corner -- the leader is the member patch's own cut, so the member's
-REAL row is the ring row and the 66 stops at the member's cell. On this
-fixture that corner has 0 coincident pole pairs on the 6x6, NO collapsed side,
+is the ROLLING construction -- two surfaces, the quad over the ring's four
+members and the triangular patch beside it, plus five preserved pieces
+(`docs/adr/0006-rolled-corner-is-two-patches.md`).  The leader is its own cut,
+so the member's REAL row is the ring row and the quad stops at the member's
+cell.  On this fixture that corner has 0 coincident pole pairs on the 6x6, NO
+collapsed side,
 and 0 normal-field flips at n=39/81/150 without any smoothing; its numbers
 live in `Tests/test_two_patch_corner.py`, which is the measurement module for
 that construction. The tests below that mention `smooth_degenerate_cap` build
@@ -716,7 +718,7 @@ def test_3valent_member_pin_moves_the_member_to_the_named_corner(doc):
     automatic build, so the difference is asserted, not just the build.
 
     A PIN CHANGE TAKES THE CUT WITH IT (#128).  The rolling construction's
-    leader is a cut of the MEMBER PATCH's cell, so moving the member to
+    leader is a cut of the carrying patch's cell, so moving the member to
     another patch without moving the cut leaves the old patch carrying a
     real second cut -- and a patch that carries a ring PAIR cannot carry one
     (`the ring's corner is OPEN on PatchA`).  That refusal is measured here

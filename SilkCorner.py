@@ -76,7 +76,8 @@ CORNER_TOL = 1e-6
 # the 6x6, one whole side of the corner fill becomes a point, and the fill
 # sweeps over the member's own cell instead of sitting beside it (measured
 # #119: the member's face lies 0.0002-0.017 mm off the corner fill, i.e.
-# inside it).
+# inside it).  The rolled corner has no collapsed side at all: the tri is a
+# patch BESIDE the quad, and the quad's fourth side is the member's real row.
 #
 # AS-BUILT IS THE ORDER FOR EVERY CORNER WHOSE PATCH CARRIES ONE CUT PER
 # AXIS END, and that is what keeps every pre-#119 corner pole-identical --
@@ -185,12 +186,17 @@ def _member_row_order(pth):
     member's REAL row, not its collapsed one.  Read as-built, the ring would
     hand the 6x6 the collapsed row (one whole side on a point) and the fill
     would sweep over the member's own cell; read REAL-ROW-FIRST, the member's
-    real row is the ring row at V = 3 like every strip's and the 66 stops at
-    the member's cell.  Measured on the cube-corner fixture: the 66 comes out
-    with 0 coincident pole pairs, NO collapsed side, 0 normal-field flips at
-    n = 39/81/150 without any smoothing, and the member's interior sits
-    7.5 %..53.5 % of the corner's extent from the 66 -- the maintainer's own
-    two-surface corner.  (`Tests/test_two_patch_corner.py`.)
+    real row is the ring row at V = 3 like every strip's, and the quad stops
+    at the member's cell.  Measured on the cube-corner fixture: the 66 comes
+    out with 0 coincident pole pairs, NO collapsed side, 0 normal-field flips
+    at n = 39/81/150 without any smoothing, and the member's interior sits
+    7.5 %..53.5 % of the corner's extent from the 66 (his file: 16..62 %).
+    The percentage is a READING and its minimum is BELOW his floor, so it is
+    not the acceptance: the quad and the tri are accepted for being ADJACENT
+    -- one shared curve, no common area -- and for not folding.  The corner
+    itself is stated once in
+    `docs/adr/0006-rolled-corner-is-two-patches.md`.
+    (`Tests/test_two_patch_corner.py`.)
 
     The order is tried, not assumed: a patch whose real-row reading does not
     assemble still falls through to the other one.
@@ -289,8 +295,9 @@ def _orient_ring_columns(grids, ordered):
 def _member_ring(base_grids, ordered, patch, member):
     """The 4-grid ring with `member` at `patch`'s corner.
 
-    The triangular 4th member stands in for the blend the missing fourth
-    surface would have contributed, so it sits between the TWO ring
+    The triangular member's net is the quad's fourth MEMBER: it takes the
+    place of the fourth curve of the quad's ring -- the curve the quad and
+    the triangular patch share -- so it sits between the TWO ring
     strips that meet at `patch` -- not blindly appended, because
     `corner_ring_3`'s direction follows document order and a ring built
     the other way round needs the member at the mirrored position. The
@@ -324,11 +331,12 @@ def _assemble_square_ring(base, ordered):
 def resolve_member_pin(pin, patches):
     """(patch, corner) for a triangular-member pin, or (None, reason).
 
-    `pin` is `(patch or its Name, corner index)` -- which ring patch's
-    grid corner the triangular 4th member must be built at (#117). Both
-    halves are validated here so the refusal can name what it could not
-    honour: a pin that names a patch outside THIS ring, or a corner
-    outside 0..3, is refused before any candidate is tried."""
+    `pin` is `(patch or its Name, corner index)` -- WHICH CORNER carries
+    the triangular patch, spelled as the ring patch whose grid corner it is
+    (#117). Both halves are validated here so the refusal can name what it
+    could not honour: a pin that names a patch outside THIS ring, or a
+    corner outside 0..3, is refused before any candidate is tried. The
+    stage decides everything else about the corner; this names the corner."""
     ref, corner = pin
     name = getattr(ref, "Name", None) or str(ref)
     target = None
@@ -638,11 +646,11 @@ def ensure_member_pin(obj):
 def ensure_construction(obj):
     """Which construction the corner stage BUILT, recorded on the corner.
 
-    `Construction` is `"rolling"` (the 66 over the member patch's cut cell
-    plus the triangular member beside it), `"shipped"` (the fallback: the 66
+    `Construction` is `"rolling"` (the quad over the ring's four members
+    plus the triangular patch beside it) or `"shipped"` (the fallback: the 66
     with the spiderweb member, byte for byte the construction of before
-    #119) or EMPTY -- a corner built before this was recorded, which is the
-    shipped machinery, and which reads as such (`corner_construction`).
+    #119). A corner built before this was recorded carries EMPTY, which is
+    the shipped machinery, and which reads as such (`corner_construction`).
 
     It is recorded because the construction is not recoverable from the
     geometry alone and three callers need to say which one they got: the
@@ -657,8 +665,9 @@ def ensure_construction(obj):
     if not hasattr(obj, "Construction"):
         obj.addProperty("App::PropertyString", "Construction", "Inputs",
                         "the construction the corner stage built: 'rolling' "
-                        "(the 66 over the member patch's cut cell plus the "
-                        "triangular member) or 'shipped' (the fallback)")
+                        "(the quad over the ring's four members plus the "
+                        "triangular patch beside it) or 'shipped' (the "
+                        "fallback)")
         obj.Construction = ""
         obj.setEditorMode("Construction", 2)
 

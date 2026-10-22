@@ -39,8 +39,17 @@ ControlGrid66_4Sub_012  ->  4 x SubGrid33_2Grid64
 So the corner is **four** members -- three blends
 (`ControlGrid64_2Grid44`, each over two `ControlGrid44_2EdgeSegments`)
 and one **triangular member** (`ControlGrid64_3_Grid44_000`, over one
-cell).  There is no separate triangle beside the 66: the "smaller
-triangular surface" of the owner's reading IS the member's own face.
+cell).  The triangle beside the 66 **is a surface of its own**: his file
+stores the member's own face (`CubicSurface_64_052` over the member
+net), and the 66's fourth side runs along that member's ring row.  So the
+member is read by **two** consumers (the member's own 64 and the two
+`SubGrid33_2Grid64` that feed the 66), and the two surfaces are
+**adjacent, sharing one curve** -- the quad does not cover the tri's
+cell.  (This paragraph used to say the opposite -- "there is no separate
+triangle beside the 66" -- which was the reading that produced the wrong
+build.  The rolled corner as Silk builds it, and why that sentence is
+wrong, is stated once in
+`docs/adr/0006-rolled-corner-is-two-patches.md`.)
 
 ### 1.1 The ring members are CUTS of the base surfaces
 
@@ -87,12 +96,23 @@ surfaces).
 
 ### 1.3 The structure to aim for, in Silk's words
 
-Silk's shipped 3-valent corner is the same OBJECTS (a 66 over four
-members, one of them the triangular member, plus the member's own face
-as a separate surface) with a different REGION: Silk's member is the
-patch's corner CELL, and its collapsed row -- the apex the 66 pinches
-at -- is AT THE JUNCTION.  The maintainer's is the cell between the
-setback and the leader, and its apex is at the leader/leader corner.
+Silk's corner is the same OBJECTS (a 66 over four members, one of them the
+triangular member, plus the member's own face as a separate surface) with
+the same REGION read from the LEADER: the member's cell is the region
+between the setback and the leader on BOTH axes of the patch that carries
+it, and the member is read REAL-ROW-FIRST so the 66's fourth side is the
+member's **real** row, not the collapsed one (#128).  What used to stand
+here -- "Silk's member is the patch's corner CELL and its apex is AT THE
+JUNCTION" -- describes the **shipped fallback**, before the leader existed
+as a cut of its own.
+
+**Superseded in part (#129):** every number in sections 2-3 below was
+measured with the leader as a **fraction of each seam's own parameter**.
+Since #129 the leader is a **LENGTH in mm from the junction corner**,
+equalised by default -- see
+`docs/adr/0006-rolled-corner-is-two-patches.md` and
+`Tests/corner_even_cuts.py`.  The readings are kept as the record of that
+build; they are not the corner's current acceptance.
 
 ---
 
@@ -105,8 +125,9 @@ subgrid net, so that row sits at the patch's named band edge on the
 seam-parallel axis, at the junction end.  **That one split value is
 what the leader moves.**
 
-The consequence, stated plainly and not hidden: Silk's patch carries ONE
-named band edge per axis end (#82), and that edge is at once
+The consequence, stated plainly and not hidden: in the build measured
+here, Silk's patch carried ONE named band edge per axis end (#82), and
+that edge was at once
 
   * the setback of the PERPENDICULAR seam (the band's width across it),
     and
@@ -114,8 +135,10 @@ named band edge per axis end (#82), and that edge is at once
 
 Moving the leader therefore moves that setback with it.  The
 maintainer's model has the two as separate cuts (1/16 and 0.25) and does
-not have this coupling; Silk's cell structure cannot hold both numbers
-at one axis end, and this build keeps one number.
+not have this coupling; the build measured here could not hold both
+numbers at one axis end.  **Fixed by #119's leader cut** (`ULeader1/2`,
+`VLeader1/2` -- a second cut per axis end) and by #129's length rule: the
+setback no longer rides along with the leader.
 
 **A uniform leader is a pure scaling.**  Measured (cube-corner fixture,
 all three seams at the same setback, no rolling construction at all):
@@ -126,7 +149,7 @@ seams.
 
 ---
 
-## 3. The numbers (the acceptance instrument)
+## 3. The numbers (readings, not an acceptance)
 
 Fixture: `Tests/cube_corner_model.py` (three exact planar squares).  The
 rolling corner is `create_rolling_corner_66` with the leader on the two
@@ -202,11 +225,14 @@ Path (B) left **0.2915 mm** there (and 0.1522 mm at the triangle); both
 are gone.
 
 **The small triangular surface against the 66**: worst 0.04855 mm at
-leader 0.25 (0.05846 mm at 0.5), 0 mm at the apex.  The member's face
-and the 66 share only the collapsed (degenerate) row, so the member's
-base edge is not on the 66's boundary -- in the maintainer's file it is
-(his 66 takes the member's setback edges, because his member's cell is
-the region between the setback and the leader).  The owner's FreeCAD
+leader 0.25 (0.05846 mm at 0.5), 0 mm at the apex.  In THAT build
+(the member read AS-BUILT, its collapsed row on the loop) the member's
+face and the 66 share only the collapsed (degenerate) row, so the
+member's base edge is not on the 66's boundary.  **That is the defect
+#128 fixed**: read REAL-ROW-FIRST the 66's fourth side is the member's
+real row, so the two share the curve the maintainer's file shares.  His
+66 takes the member's setback edges, because his member's cell is the
+region between the setback and the leader.  The owner's FreeCAD
 replacement of that face matches the face it replaces to **2.781e-17 mm**
 and stands the same 0.04855 mm from the 66.
 
@@ -408,13 +434,21 @@ against the maintainer's 16–62 %) are the other two numbers to close.
 end): tri → quad 0.03078 mm = 2.32 %, k_gap 492.9 /mm, saddle 39.6 %,
 tri bbox (0.1,0.1,0)→(0.9375,0.9375,0).
 
-**WHAT IS STILL OPEN.**
+**WHAT IS STILL OPEN.**  *(As of this session.  Two of these closed since:
+#119's leader cut ended the coupling, and the member-side re-solve landed
+-- see the #128 and #129 sections below.  Both remaining bullets are
+readings of the arrangement, not of the shipped one.)*
 
 * The member-side re-solve (the fold above) — the one thing between the
-  machinery and the owner's two-patch corner.
-* The seam `k_gap`: the cut is on the member patch only, so the strips'
+  machinery and the owner's two-patch corner.  **Landed**
+  (`SilkMachinery.smooth_degenerate_cap`, then `smooth_folding_interior`);
+  on the built rolled corner it is a no-op, because the 6x6 there is the
+  raw assembly and has no collapsed side.
+* The seam `k_gap`: the cut sat on one patch only, so the strips'
   corner-side boundary is skewed.  Matching the leader on both patches needs
-  two cuts per axis end on the OTHER patches as well.
+  two cuts per axis end on the OTHER patches as well.  **Superseded:** the
+  owner's answer is not a cut on every patch — the third blend is NOT cut;
+  it is one full-length side of the quad (`docs/adr/0006-rolled-corner-is-two-patches.md`).
 * The saddle fraction (5.1 % → 32 % with the cut, still the degenerate
   apex's cells): the rotational LARGE/SMALL pattern the video shows is still
   out of reach with one leader per seam.
@@ -631,21 +665,27 @@ used to run; on the two-patch 6x6 there is no collapsed side, so it returns
 the input.  The corner stage also writes TWO cut properties instead of four
 band edges, so the patches recompute less.
 
-**The one place we are outside his range is (d), and it is not a fold:** his
-tri-to-quad figure starts at 16 %, ours at 7.5 %.  The reading is a MINIMUM
-over the tri's interior samples, so it says how close the tri comes to the
-quad's surface at its nearest interior point; ours is a flatter, smaller cell
-(0.15² against his 0.1875² of a 50 mm corner) on a fixture whose patches are
-exact planes.  The MAXIMUM -- the figure that says the two surfaces are
-distinct bodies rather than one surface folded over itself -- is 53.5 %
-against his 62 %.
+**Row (d) is the one reading that is OUTSIDE his range, and it is reported as
+such, not explained away:** his tri-to-quad figure starts at 16 %, ours at
+7.5 %.  The figure is a MINIMUM over the tri's interior samples — how close
+the tri comes to the quad at its nearest interior point — and on the demo it
+reads 3.51 % after #129, further from his floor, not closer.  So that
+percentage is a **reading**, and it may not be used as the corner's pass
+line: what makes the corner right is the construction (two surfaces, one
+shared curve, **no overlap**, five own-cell pieces) plus no fold, and that
+is what `Tests/test_two_patch_corner.py` row (d) asserts.  Why his figure and
+ours differ is **not** established; the standing statement of the corner is
+`docs/adr/0006-rolled-corner-is-two-patches.md`.
 
 ## What changed in the code, in one paragraph each
 
-**The cut.**  The rolling construction writes the leader as the MEMBER
-PATCH's own `ULeader1/2` / `VLeader1/2` (`SilkMachinery.leader_cut_prop`),
-not into the band edge, and on the member patch only.  So the setback stays
-the user's and the other patches keep one cut per axis end.  Both cuts go
+**The cut.**  The rolling construction writes the leader as the carrying
+patch's own `ULeader1/2` / `VLeader1/2` (`SilkMachinery.leader_cut_prop`),
+not into the band edge.  So the setback stays the user's, the other patches
+keep one cut per axis end, and the third blend is not cut at all — it is one
+full-length side of the quad.  (#129 made the leader a LENGTH in mm from the
+junction corner, equalised by default; see
+`docs/adr/0006-rolled-corner-is-two-patches.md`.)  Both cuts go
 through one arithmetic (`SilkWorkflowOps._seam_cut_home`, the mirror at the 1
 end included), and the corner stage REFUSES by name when the planned writes
 do not cut the member patch's cell back on BOTH axes -- a leader that rests on

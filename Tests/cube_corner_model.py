@@ -17,7 +17,7 @@ Shared seams (one Edge object each, referenced by both patches):
 
 plus six outer edges (E_A1/E_A2, E_B1/E_B2, E_C1/E_C2). Three Blend strips
 (B_AB, B_BC, B_CA) round the three seams; the 3-valent CornerBlend then
-rings the shared origin vertex, with the triangular 4th ring member
+rings the shared origin vertex, with the triangular patch's net
 auto-built by `SilkCorner.corner_inputs` (no fourth strip exists).
 
 Every edge is a straight cubic (2N node sketches, interior poles at the

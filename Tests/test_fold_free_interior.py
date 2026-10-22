@@ -23,8 +23,8 @@ calibration is here, on nets whose answer is known:
     already is the transfinite fill;
   * the SAME net with one interior pole pushed through the surface -- a
     known fold, count > 0, and the refill takes it back to 0;
-  * a net with a collapsed side (the triangular member's junction row on a
-    point, which is what every corner built before #119 carries) -- the step
+  * a net with a collapsed side (in the SHIPPED construction, the triangular
+    member's junction row on a point) -- the step
     must NOT touch it, because `smooth_degenerate_cap` owns that case and
     the shipped construction is byte-identical through it.
 

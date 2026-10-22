@@ -17,17 +17,21 @@ WHAT IS MEASURED, per config (see CONFIGS)
 
   1. per-seam `k_gap` -- the built corner vs each neighbouring strip, on the
      exact control net (`Tests/continuity_analytic`), with the calibrated
-     floor beside it.  Two of the three strip seams terminate in the
+     floor beside it.  In the SHIPPED construction two of the three strip
+     seams terminate in the
      triangular member's COLLAPSED row (all six poles at the ring's shared
      corner), so their boundary normal is degenerate at the apex-side
      station: `g1_deg` reads 90 deg there by construction (the same reading
      `Tests/g2_edge_blend_probe.py` records for the demo's hard-corner
      members) and only their `k_gap` is a continuity number.  The third seam
-     does not touch the collapse and reads a genuine g1 ~ 0.
+     does not touch the collapse and reads a genuine g1 ~ 0.  A rolled corner
+     has no collapsed side at all (the quad's fourth side is the member's
+     real row), so no seam is degenerate there.
   2. the corner surface's OWN curvature spread at and near the junction: a
      directional normal-curvature sample on the stored 6x6 net, reported as
-     `k_max`, `k_min` and their ratio.  A rolling corner has a large spread;
-     a mushed one a small spread.
+     `k_max`, `k_min` and their ratio.  **A reading, not an acceptance**: no
+     spread makes a rolled corner (ADR 0006), it only differs between the
+     constructions.
 
 FLOOR.  Every number is reported next to the calibrated floor from
 `Tests/continuity_calibration.error_floor`.  `k_gap` (and the curvature
@@ -371,8 +375,10 @@ def print_config(res, floor):
               % (r["strip"], r["corner_edge"], "y" if r["reversed"] else "n",
                  _fmt(r["c0_controlnet"]), _fmt(r["exact"]["k_gap"]),
                  _fmt(r["sampled"]["k_gap"]), r["exact"]["g1_deg"]))
-    print("    (the 4th side is the triangular member's COLLAPSED row -- no")
-    print("     strip sits on it; its boundary normal is degenerate.)")
+    print("    (in the SHIPPED construction the 4th side is the triangular")
+    print("     member's COLLAPSED row -- no strip sits on it; its boundary")
+    print("     normal is degenerate.  A rolled corner has no collapsed")
+    print("     side: the quad's 4th side is the member's real row.)")
     print()
     j = res["junction"]
     kmax, kmin, ratio = j["centre"]

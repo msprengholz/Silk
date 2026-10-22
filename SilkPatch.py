@@ -126,8 +126,9 @@ class Patch:
         # #119: the LEADER cut, one more cut per axis end and a different
         # thing from the band edge -- the band edge is the user's SETBACK
         # (how wide the blend is), the leader is how far the band is cut
-        # back from the junction corner. The rolling corner needs both: the
-        # triangular member's cell is the region BETWEEN them. ADDITIVE and
+        # back from the junction corner. The rolled corner needs both: the
+        # two cuts bound the cell the triangular patch occupies, on the one
+        # patch that carries it. ADDITIVE and
         # default-off: a patch that never carries one reads exactly the two
         # band edges it always read, so every existing document builds
         # byte-identically. Same sentinel rule (each property's OWN

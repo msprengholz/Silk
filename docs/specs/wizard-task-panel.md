@@ -75,8 +75,8 @@ Collect inputs, then confirm:
 - **Blend** — one merged table: every seam with its status (blendable / blended by X / blocked);
   clicking collects it, collected rows are highlighted and removable.
 - **Corner Blend** (added by #91, after this spec was settled) — collect the **3 or 4 blends**
-  that ring one shared junction: three where three patches meet (the triangular fourth member
-  is built invisibly), four where four do. The section's bound is a RANGE, so its count line
+  that ring one shared junction: three where three patches meet (the triangular patch beside the
+  quad is built by the corner stage), four where four do. The section's bound is a RANGE, so its count line
   reads "N collected -- ready" or "need 3 or 4" -- never "incomplete" at a confirmable 3.
   Enter or OK builds ONE `CornerBlend` in ONE transaction (one undo step); a selection that is
   not a ring around one shared junction is refused BY NAME and creates nothing, and a junction

@@ -124,9 +124,9 @@ a simple closed quad → a two-patch chain with a blendable seam → a four
   4. **Corner Blend × 1.** Select the **three** ring blends and click
      **Silk Corner Blend**. Expect **1 CornerBlend** with **36 poles**, a
      valid surface and no console refusal: the three strips ring the
-     shared corner, and the triangular fourth member is built invisibly
-     from the patches' junction corner cells. A second ask over the same
-     three strips is a no-op (the existing corner is returned).
+     shared corner, and the triangular patch beside the quad is built by the
+     corner stage from the patches' junction corner cells. A second ask over
+     the same three strips is a no-op (the existing corner is returned).
 
 - **Result:** 9 Edges, 3 Patches, 3 Blends, 1 CornerBlend. **No
   continuity label is asserted anywhere** — this fixture carries geometry

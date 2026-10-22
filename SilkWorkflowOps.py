@@ -332,10 +332,11 @@ def existing_corner(strips):
 # ruled which one is the default (2026-10-21: *"the rolling corner fill
 # should be the default fill!"*).
 #
-#   "rolling"  THE DEFAULT.  The maintainer's rolling corner: the 66
-#               over the ring's CUT cells (the band's corner-side cut
-#               IS the rolling leader), plus the small triangular
-#               member beside it.
+#   "rolling"  THE DEFAULT.  The quad -- the 66 over the ring's four
+#               members -- plus the small triangular patch beside it, with
+#               the patches' remainders kept as five preserved pieces.  The
+#               corner is stated once, in
+#               `docs/adr/0006-rolled-corner-is-two-patches.md`.
 #   "shipped"  THE FALLBACK.  The 66 with the spiderweb member -- the
 #               construction this workbench shipped until #119.  It is
 #               selected BY NAME and is byte for byte the construction
@@ -353,9 +354,10 @@ def existing_corner(strips):
 # build the rolling corner, with NO new button (the visible set stays
 # Edge -> Patch -> Blend -> Corner Blend).
 #
-# The rolling construction is a 3-VALENT thing: its fourth side is the
-# triangular member, and a 4-valent ring has no such member.  A 4-valent
-# ring therefore keeps the shipped corner, and says so by name.
+# The rolling construction is a 3-VALENT thing: it needs a THIRD, UNCUT
+# seam (one full-length side of the quad) and a triangular remainder to close
+# the corner with, and a 4-valent ring has neither.  A 4-valent ring
+# therefore keeps the shipped corner, and says so by name.
 
 CORNER_CONSTRUCTION_ROLLING = "rolling"
 CORNER_CONSTRUCTION_SHIPPED = "shipped"
@@ -374,7 +376,7 @@ CORNER_CONSTRUCTION_DEFAULT = CORNER_CONSTRUCTION_ROLLING
 # parameter 0.25 there), which is why the cube corner reads the same numbers.
 ROLLING_LEADER = 0.25
 
-# The TRIANGULAR MEMBER'S FACE (#119 follow-up): the maintainer's corner
+# The TRIANGULAR PATCH'S FACE (#119 follow-up): the maintainer's corner
 # carries a `CubicSurface_64` over the member net beside the 66 (file 27/28/
 # 29: `ControlGrid64_3_Grid44_000 -> CubicSurface_64_052`), and that is what
 # the corner stage builds by default. The owner's own recommendation is to
@@ -394,14 +396,14 @@ def create_corner_blend(*strips, name="CornerBlend", pin=None,
     strips meet (#28; rebuilt on the subgrid chain in #91).
 
     `strips` are the ring Blend strips, in any order (or one list): three
-    where three patches meet (the triangular 4th member is built
-    invisibly), four where four do.
-    `pin` is the optional triangular-member placement (#117):
-    `(ring patch, corner index 0..3)`, the corner the member must be
-    built at; None leaves the automatic search in charge.
+    where three patches meet (the triangular patch beside the quad is built
+    by the corner stage), four where four do.
+    `pin` is the optional CORNER choice (#117):
+    `(ring patch, corner index 0..3)`, the corner the triangular patch must
+    be built at; None leaves the automatic search in charge.
     `construction` is the corner stage's CONSTRUCTION (#119): "rolling"
-    (the maintainer's rolling corner -- the 66 over the ring's cut cells
-    plus the small triangular member whose face is a FreeCAD filling) or
+    (the quad over the ring's four members plus the small triangular patch
+    beside it, and the five preserved pieces) or
     "shipped" (the 66 with the spiderweb member this workbench shipped
     until #119).  None means the module default, which is "rolling" (the
     owner, 2026-10-21: "the rolling corner fill should be the default
@@ -494,14 +496,14 @@ def create_corner_blend(*strips, name="CornerBlend", pin=None,
                 "blends, so this corner keeps the shipped construction.\n"
                 % len(strips))
         else:
-            # The rolling corner is a 3-valent construction: its fourth
-            # side is the TRIANGULAR MEMBER, and a 4-valent ring has no
-            # such member.  A 4-valent ring therefore keeps the shipped
-            # corner, and says so.
+            # The rolling corner is a 3-valent construction: it needs a
+            # THIRD, UNCUT seam (one full-length side of the quad) and a
+            # triangular remainder to close the corner with.  A 4-valent
+            # ring has neither, so it keeps the shipped corner, and says so.
             FreeCAD.Console.PrintMessage(
-                "Silk: the rolling corner is a 3-valent construction (the "
-                "triangular member is its fourth side); this ring has 4 "
-                "strips, so it keeps the shipped corner.\n")
+                "Silk: the rolling corner is a 3-valent construction (it "
+                "needs one uncut seam and a triangular remainder); this ring "
+                "has 4 strips, so it keeps the shipped corner.\n")
     grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL, pin)
     if grids is None:
         FreeCAD.Console.PrintError(
@@ -610,33 +612,39 @@ def _create_rolling_corner_blend(strips, name="CornerBlend", pin=None,
                                   member_face=MEMBER_FACE_DEFAULT):
     """The ROLLING construction of the corner stage (#119) -- the default.
 
-    Returns the CornerBlend (the 66 over the ring's cut cells) -- the
+    Returns the CornerBlend (the quad over the ring's four members) -- the
     same kind of object the shipped path returns, so the wizard and the
     toolbar command need no change -- or None when the rolling
     construction refuses by name.
 
-    WHAT IT BUILDS, in the maintainer's order:
+    WHAT IT BUILDS (stated in full once, in
+    `docs/adr/0006-rolled-corner-is-two-patches.md`):
 
-      1. the CUT: the rolling leader is written as the member patch's own
-         LEADER CUT (its seam-parallel axis, at the junction end), and the
+      1. the CUT: the rolling leader is written as the carrying patch's own
+         LEADER CUT (its seam-parallel axes, at the junction end), and the
          patch re-cuts its base surface there.  It is PLACED BY LENGTH
          (#129): `leader` is millimetres from the junction corner along
          each seam, and with no leader asked for the two cuts that bound
-         the member are EQUALISED (`equal_cut_length`).  The cut is a knot line of
-         the net, so the pieces meet exactly, and the band edge is left
-         alone -- the setback and the leader are two numbers, as they are in
-         the maintainer's model.  The other patches of the ring are NOT cut:
-         the member patch is the only patch whose two ring corners may be two
-         different points (`SilkMachinery.ring_corner_gap`).
-      2. the 66: the corner fill over the ring's CUT cells -- the member's
+         the triangular patch are EQUALISED (`equal_cut_length`).  The cut
+         is a knot line of the net, so the pieces meet exactly, and the
+         band edge is left alone -- the setback and the leader are two
+         numbers, as they are in the maintainer's model.  The other patches
+         of the ring are NOT cut: the carrying patch is the only patch whose
+         two ring corners may be two different points
+         (`SilkMachinery.ring_corner_gap`), and the third blend stays
+         full-length as one side of the quad.
+      2. the quad: the 66 over the ring's four members -- the carrying
          patch contributes the cell BETWEEN its setback and its leader.
-      3. the small triangular member BESIDE it, whose FACE is a
+      3. the triangular patch BESIDE it, whose FACE is a
          `CubicSurface_64` over the member net by default -- the
          construction the maintainer's own files store -- or, when
          `member_face` asks for it, the owner's FreeCAD
          `Surface::Filling` replacement.  The silk member that carries
          that fill's boundary is kept (hidden) in the fill case, because
          the fill's boundary edges live on it.
+      4. the FIVE preserved pieces (#130): the patches' own cells beyond
+         the corner, kept as `PreservedPiece` objects on the corner's
+         `Pieces` list.
 
     The member's placement is read with `SilkCorner.corner_member_pin`,
     the SAME automatic search the corner's own derivation runs, so the
@@ -1003,7 +1011,7 @@ def create_rolling_corner(strips, patch, leader=ROLLING_LEADER, order=1,
 #
 #   ControlGrid66_4Sub_012 -> 4 x SubGrid33_2Grid64, whose ring members
 #   are three blends (ControlGrid64_2Grid44) and one TRIANGULAR MEMBER
-#   (ControlGrid64_3_1Grid44 over the corner patch's corner cell).
+#   (ControlGrid64_3_1Grid44 over the carrying patch's corner cell).
 #
 # and, read off the stored cells (their parametric spans against the
 # corner patch's own net), the corner patch is cut at TWO positions per
@@ -1028,18 +1036,21 @@ def create_rolling_corner(strips, patch, leader=ROLLING_LEADER, order=1,
 # points -- the member's real row runs between them -- and the 66 stops at
 # the member's cell instead of sweeping over it (#127).
 #
-# THE CUT IS ON THE MEMBER PATCH ONLY.  It has to be: the member patch is the
-# one patch where two ring pairs meet, so it is the one patch whose two ring
-# corners are legitimately two different points (the two ends of the member's
-# row).  On any other patch a second cut splits the corner cell's far corner
-# in two and the pair no longer meets (`SilkMachinery.ring_corner_gap` names
-# the two numbers; the corner stage refuses with that sentence).  The member
-# patch is also where the maintainer cuts: his corner patch carries the
+# THE CUT IS ON THE PATCH THAT CARRIES THE TRI, and nowhere else.  It has to
+# be: that patch is the one patch where two ring pairs meet, so it is the one
+# patch whose two ring corners are legitimately two different points (the two
+# ends of the member's row).  On any other patch a second cut splits the
+# corner cell's far corner in two and the pair no longer meets
+# (`SilkMachinery.ring_corner_gap` names the two numbers; the corner stage
+# refuses with that sentence) -- which is also why the THIRD blend is never
+# cut.  The maintainer cuts the same patch: his corner patch carries the
 # setback AND the leader, and his two blends' cells run out to the leader.
 #
 # The face of the tri is the member's own `control_grid64_3_1` net -- its
 # REAL row on the ring, its collapsed row inside the loop -- and the member
 # is read REAL-ROW-FIRST on that patch (`SilkCorner._member_row_order`).
+# The whole construction is stated once, in
+# `docs/adr/0006-rolled-corner-is-two-patches.md`.
 
 def seam_junction_end(strip, patch, ring, tol=None):
     """`(end, None)` or `(None, why)`: which parametric end of `strip`'s
@@ -1810,8 +1821,8 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     whose boundary sits AT THE LEADER, plus the small triangular surface
     the maintainer's file carries beside it.
 
-    `strips` are the ring's three (or four) blends; `patch` the
-    pinned patch whose corner carries the member.  `leader` is a LENGTH IN
+    `strips` are the ring's three (or four) blends; `patch` the patch
+    whose corner carries the triangular surface.  `leader` is a LENGTH IN
     MM along the seam, measured from the junction corner (#129) -- the
     measurement `create_split_blend` and `create_rolling_triangle` take as a
     FRACTION of the same curve.  None, the default, equalises the two cuts
@@ -1819,12 +1830,12 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     owner's rule; a number places every rolled seam's cut at that many
     millimetres, and is refused by name when a seam cannot carry it.
 
-    `seams` are the strips whose seam is rolled (default: the two the
-    pinned patch carries).  The leader is written into the band edge
-    that carries it -- on BOTH patches of the seam, because the seam's
-    cut is one curve -- and the patches re-cut their base surfaces
-    there.  The ring strips, the corner fill (the 66) and the member
-    are then rebuilt from those cut cells.
+    `seams` are the two strips the division cuts back (default: the two the
+    named patch carries); the third blend is never cut.  The leader is
+    written as the patch's own LEADER CUT (`ULeader1/2`, `VLeader1/2`),
+    the band edge staying the setback, and the patches re-cut their base
+    surfaces there.  The ring strips, the quad (the 66) and the triangular
+    patch are then rebuilt from those cut cells.
 
     The SMALL TRIANGULAR SURFACE is the maintainer's second surface, and
     its face is a `CubicSurface_64` over the member net by DEFAULT -- the
@@ -1878,16 +1889,17 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
             "(got %d). Nothing was created.\n" % len(strips))
         return None
     if len(strips) == 4:
-        # THE ROLLING CUT LIVES ON THE MEMBER PATCH, and a 4-valent ring has
-        # no member: its fourth side is a real blend.  The cut cannot go
-        # anywhere else either -- a second cut on a patch that carries a ring
-        # PAIR splits that pair's shared corner in two, so the four strips
+        # THE ROLLING CUT LIVES ON THE PATCH THAT CARRIES THE TRI, and a
+        # 4-valent ring has none: it has no third, uncut seam and no
+        # triangular remainder.  The cut cannot go anywhere else either -- a
+        # second cut on a patch that carries a ring PAIR splits that pair's
+        # shared corner in two, so the four strips
         # would stop meeting (`SilkMachinery.ring_corner_gap`).  A 4-valent
         # ring therefore takes the shipped construction, and this says so
         # rather than cutting a cell the ring cannot close around.
         FreeCAD.Console.PrintError(
-            "Silk: the rolling corner is a 3-valent construction -- its cut "
-            "lives on the patch that carries the triangular member -- and "
+            "Silk: the rolling corner is a 3-valent construction -- it needs "
+            "one uncut seam and a triangular remainder -- and "
             "this ring has 4 strips. Nothing was created; a 4-valent corner "
             "takes the shipped construction.\n")
         return None

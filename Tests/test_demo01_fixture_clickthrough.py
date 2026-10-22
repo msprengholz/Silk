@@ -190,9 +190,9 @@ def _assert_corners(result, doc):
     # second cut is OPEN (#127), so the corner stage refuses it BY NAME and
     # creates NOTHING.  That is measured, not hidden: the junctions that build
     # are held to the full contract below, and a junction that refuses must
-    # say why and leave no object behind.  WHICH PATCH CARRIES THE MEMBER when
+    # say why and leave no object behind.  WHICH CORNER carries the tri when
     # a ring patch already carries a neighbouring corner's cut is the
-    # placement decision #126 hands to the owner.
+    # placement question #126 hands to the owner.
     built_names = sorted(result["corners"])
     refused = [name for name, _ring, _pt in MODEL.CORNERS
                if name not in result["corners"]]

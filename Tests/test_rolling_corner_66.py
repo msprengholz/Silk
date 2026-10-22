@@ -1,16 +1,21 @@
 """
-The rolling corner, path (A): the 66 chain over the CUT cells (ticket #119).
+The rolling corner, path (A): the quad over the ring's four members
+(ticket #119).
 
 WHAT IS PINNED HERE
 
-  1. THE ROLLING CORNER BUILDS.  `create_rolling_corner_66` moves the
-     rolling leader -- the band's CORNER-SIDE CUT -- and builds the
-     corner fill (Silk's own 66, over the ring's cut cells), the SMALL
-     TRIANGULAR SURFACE beside it (the maintainer's second surface) and
-     the FreeCAD filling that replaces it (the owner's spec).
+  1. THE ROLLING CORNER BUILDS.  `create_rolling_corner_66` places the
+     rolling leader -- the patch's own LEADER CUT, placed by a length
+     in mm (#129) -- and builds the quad (Silk's own 66, over the ring's
+     four members), the TRIANGULAR PATCH beside it (the maintainer's second
+     surface) and the FreeCAD filling that replaces that face (the owner's
+     spec).  The construction is stated once, in
+     `docs/adr/0006-rolled-corner-is-two-patches.md`.
 
-  2. THE LEADER MOVES THE CORNER'S SHAPE.  This is the acceptance
-     instrument of the build: the previous build measured the SAME
+  2. THE LEADER MOVES THE CORNER'S SHAPE (a supporting reading, not the
+     acceptance -- the acceptance is the construction diff plus no overlap,
+     `docs/adr/0006-rolled-corner-is-two-patches.md`).  The previous
+     build measured the SAME
      curvature spread (1.036938) with and without its leader, because
      its leader was an extra cut INSIDE the band.  The leader that
      moves the corner is the band's own corner-side cut -- the patch's
@@ -139,11 +144,14 @@ def test_the_rolling_corner_builds_the_66_the_member_and_the_fill(doc):
 
 
 def test_the_leader_moves_the_corner_s_shape(doc):
-    """THE ACCEPTANCE INSTRUMENT: the leader must change the shape.
+    """(A SUPPORTING READING, not the acceptance) The leader must change the
+    corner's shape, however the construction is judged.
 
     The previous build measured the same spread (1.036938) with and
     without its leader.  Here the leader is the band's own corner-side
-    cut, so the corner's spread MUST move.
+    cut, so the corner's spread MUST move.  A curvature spread does not
+    make a rolled corner (ADR 0006); it only says the cut is doing
+    something to the surface.
 
     THE TWO CORNERS ARE TWO OBJECTS.  The rolling build REUSES the
     corner object of the ring it rolls -- the corner follows the
@@ -374,8 +382,8 @@ def test_the_leader_is_measured_from_the_junction_corner(doc):
         patches carry the junction at the 1 end of an axis: the arithmetic
         is the same expression the stage writes with (`_leader_cut_home`),
         called directly, because a 4-valent ring cannot build a rolling
-        corner at all (#128: its cut lives on the member patch and a
-        4-valent ring has no member).
+        corner at all (#128: it has no third, uncut seam and no
+        triangular remainder).
     """
     errors, checks = [], []
     from SilkBlend import side_and_end

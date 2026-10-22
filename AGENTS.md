@@ -113,58 +113,67 @@ creates them anymore.
 ### Corner Blend (`SilkCorner.py`)
 - `Part::FeaturePython`; object_type="CornerBlend"; input = `Strips`, the
   ring `Blend`s around one junction — **four** at a 4-patch junction,
-  **three** at a 3-patch hard corner (the triangular 4th member is then
-  built invisibly; the user never picks upstream types) — **in any order**.
+  **three** at a 3-patch hard corner (the triangular patch beside the quad is
+  then built by the corner stage from the ring itself; the user never picks
+  upstream types) — **in any order**.
 - **The corner stage builds ONE OF TWO CONSTRUCTIONS, and the rolling one
   is the DEFAULT** (#119; the owner, 2026-10-21: *"the rolling corner fill
   should be the default fill!"*). The switch lives in the OPS LAYER
   (`SilkWorkflowOps.create_corner_blend(..., construction=...)`):
-  `"rolling"` (the default) = his TWO-PATCH corner — the 66 over the member
-  patch's CUT cell plus the small triangular member beside it, with the 66
-  STOPPING at that cell (#128, measured below); `"shipped"` (the fallback) =
-  the 66 with the spiderweb member, byte for byte the construction of before
-  #119. No new button: the wizard's corner step and the toolbar command both
-  call the ops layer, and the PANEL offers the construction as a selector
-  (build-time choice; read-only once the corner exists) and SAYS WHICH ONE
-  WAS BUILT — a refused rolling corner no longer falls back silently, the
-  status line carries the refusal's own wording (#128).
+  `"rolling"` (the default) = the quad over the ring's four members plus the
+  triangular patch beside it, the quad NOT covering the tri's cell (#128);
+  `"shipped"` (the fallback) = the 66 with the spiderweb member, byte for
+  byte the construction of before #119. **What those two words mean is stated
+  once, in `docs/adr/0006-rolled-corner-is-two-patches.md`** — read it before
+  touching the corner; the numbers below are that ADR's, not a second
+  definition. No new button: the wizard's corner step and the toolbar command
+  both call the ops layer, and the PANEL offers the construction as a
+  selector (build-time choice; read-only once the corner exists) and SAYS
+  WHICH ONE WAS BUILT — a refused rolling corner no longer falls back
+  silently, the status line carries the refusal's own wording (#128).
   `CornerBlend.Construction` records what the stage built (`"rolling"` /
   `"shipped"`; empty on an older object = the shipped machinery, read by
-  `SilkCorner.corner_construction`). The tri's FACE is the member's own
+  `SilkCorner.corner_construction`). The tri's FACE is its own net's
   `CubicSurface_64` by DEFAULT (the construction the maintainer's files
   store) and a FreeCAD `Surface::Filling` is the selectable option
   (`member_face="fill"`, the owner's replacement of that surface). The
-  owner's two choices ride the ops layer and the panel: WHICH patch carries
-  the tri (`MemberPatch` / `MemberCorner`, honoured on the rolling path too)
-  and the LEADER PER SEAM (`leaders={seam: value}`, one panel editor per seam
-  of the ring).
-- **THE CORNER IS TWO PATCHES, like his** (#128, measured). The member
-  patch carries TWO cuts per axis — the SETBACK (band edge) and the LEADER
-  (`ULeader1/2`, `VLeader1/2`) — so the member's cell is the region BETWEEN
-  them, its two ring corners are that cell's two MIXED corners, and the
-  member is read REAL-ROW-FIRST (`SilkCorner._member_row_order`, gated on
-  `ring_corner_gap(patch) is not None`). The cube-corner fixture, default
-  build, leader 0.25 / setback 0.1: **0 of 630 coincident pole pairs** on the
-  6x6 (his: 0), no collapsed side, **0 normal-field flips at n=39/81/150
-  without `smooth_degenerate_cap`** (the smoothing is a byte-identical no-op
-  there; the controls that make that reading worth something are in
-  `Tests/test_two_patch_corner.py`: the SHIPPED raw assembly folds 19/23/24
-  and its built form reads 0), the tri's interior **7.5 %..53.5 % of the
-  corner's extent** from the 66 (his 16..62 %), seam `k_gap` 7.8e-15..1.6e-14
-  /mm exact and 0.0067..0.0093 sampled (floor 0), the cut C0 1.4e-17..5.6e-17
-  mm, and the document settles (0 Touched, 0.0001 s a pass, poles move
-  0.000e+00). Areas: 66 0.046713 mm², tri 0.020609 mm². The unchanged-ring
-  facts: `ring_corner_gap` reads OPEN on the member patch ('U', 0.1, 0.25) and
-  CLOSED on the other two — the member patch is the one patch where two
-  different ring corners are CORRECT (#127), and `corner_inputs` assembles.
+  owner's two choices ride the ops layer and the panel: WHICH CORNER carries
+  the tri (`MemberPatch` / `MemberCorner` name that corner's patch and grid
+  corner, honoured on the rolling path too) and the LEADER PER SEAM
+  (`leaders={seam: mm}`, one panel editor per seam of the ring).
+- **THE CORNER IS TWO PATCHES** (#128/#130, stated once in
+  `docs/adr/0006-rolled-corner-is-two-patches.md`): the **quad** (a 66 over
+  four ring members — the two cut-back cells, the third **uncut** blend, and
+  the triangular member's net read REAL-ROW-FIRST) and the **tri** (a patch
+  of its own, sharing **one curve** with the quad, covering none of its area),
+  plus **five preserved pieces**. The division is carried by the patch that
+  carries the tri: it holds TWO cuts per axis — the SETBACK (band edge) and
+  the LEADER (`ULeader1/2`, `VLeader1/2`) — so its cell is the region BETWEEN
+  them, its two ring corners are that cell's two MIXED corners, and
+  `ring_corner_gap` reads it OPEN while the other two read CLOSED (it is the
+  one patch per corner where two different ring corners are CORRECT, #127).
+  Cube-corner fixture, default build, leader 0.25 / setback 0.1: **0 of 630
+  coincident pole pairs** on the 6x6, no collapsed side, **0/0/0 normal-field
+  flips at n=39/81/150 without `smooth_degenerate_cap`** (a byte-identical
+  no-op: the built 6x6 IS the raw assembly; the controls that make the
+  reading worth something are in `Tests/test_two_patch_corner.py` — the
+  SHIPPED raw assembly folds 19/23/24 and its built form reads 0), seam
+  `k_gap` 7.8e-15..1.6e-14 /mm exact and 0.0067..0.0093 sampled (floor 0), the
+  cut C0 1.4e-17..5.6e-17 mm, the document settles (0 Touched, 0.0001 s a
+  pass, poles move 0.000e+00), areas 66 0.046713 mm² / tri 0.020609 mm². The
+  tri's interior reads **7.5 %..53.5 %** of the corner's extent from the 66
+  (his 16..62 %): the minimum is BELOW his floor, so that percentage is a
+  READING and the acceptance is non-overlap, one shared curve and no fold —
+  see the ADR.
 - **The setback no longer rides along with the leader.** The rolling cut is
-  the member patch's own property, so the band edge stays the user's setback
-  and only the member patch is cut at all. `apply_corner_choices` writes the
-  leader where the corner's RECORDED construction reads it (the leader cut
-  for `"rolling"`, the band edge for `"shipped"`) and CLEARS a leader cut
-  left on a patch that is no longer the member's — a second cut on a patch
-  that carries a ring PAIR opens that pair's shared corner.
-- **The rolling cut must clear the setback on BOTH axes of the member patch.**
+  the carrying patch's own property, so the band edge stays the user's
+  setback and the third blend is not cut at all. `apply_corner_choices`
+  writes the leader where the corner's RECORDED construction reads it (the
+  leader cut for `"rolling"`, the band edge for `"shipped"`) and CLEARS a
+  leader cut left on a patch that is no longer the carrying one — a second
+  cut on a patch that carries a ring PAIR opens that pair's shared corner.
+- **The rolling cut must clear the setback on BOTH axes of the carrying
+  patch.**
   A leader resting on the band edge is INERT (`axis_cuts`), the cell on that
   axis stays the band's, and the assembly either refuses or comes out
   degenerate (measured: 4 coincident pole pairs). The stage refuses that by
@@ -172,8 +181,8 @@ creates them anymore.
   no leader cut that clears the setback`), atomically, and the fallback is the
   shipped corner. That is also why the default leader is **0.25**, the video's
   number, and not 1/16: at the default 0.1 band a 1/16 leader has nothing to
-  cut. A 4-valent ring refuses the rolling construction outright — its cut
-  lives on the member patch and a 4-valent ring has none.
+  cut. A 4-valent ring refuses the rolling construction outright — it has no
+  third, uncut seam and no triangular remainder.
 - A `Surface::Filling` whose boundary lives on a Silk object needs that
   object's shape to be a **COMPOUND** (the face + the boundary curves):
   a fill's boundary is a LINK to a sub-shape, and a FACE's sub-names are
@@ -338,23 +347,20 @@ creates them anymore.
   held fixed. Upstream's interior is a scale-relative tangent-ratio
   extrapolation fitted to two rows per member, so on a cell whose own net is
   anisotropic the two one-sided estimates diverge and their average lands
-  outside the boundary quad — measured on the demo's CB_J1_FrontTopRight
-  (0/630 coincident, no collapsed side, 30/56/86 flips at n=39/81/150, the
-  fold in the two subgrids that touch the triangular member while the two
-  strip-to-strip subgrids are clean): 0/0/0 flips after the step, the tri's
-  nearest interior sample 0.0179 → 0.30967 mm off the quad
-  (`Tests/demo_corner_row_diff.py`, `Tests/test_fold_free_interior.py`). The
-  step cannot reach a shipped corner — a collapsed side is
-  `smooth_degenerate_cap`'s case and gates it off structurally — and a
-  fold-free net is returned as the SAME lists, so the cube fixture stays
-  byte-identical. After the fix: **0 normal-field flips** (n=39/81/150,
-  Part surface + exact net; was 19/1521 at n=39), cap samples inside the
-  boundary box (was +0.0101 mm), Shape valid, no self-intersections; the
-  non-reversed seam `k_gap` 4.563e-03 sampled / 6.888e-15 exact; the two seams
-  that terminate in the collapsed row read a **degenerate-boundary normal**
-  (g1 90° at their apex-side stations — the same reading the demo's hard-corner
-  members give, `Tests/g2_edge_blend_probe.py`) and their `k_gap` drops from
-  3.5e+2 /mm to ~2e-13 exact / 2.4e-3 sampled. 4-valent reference on the same
+  outside the boundary quad. **It is a SAFETY NET, not part of the rolling
+  construction**: on the built rolled corner the 6x6 IS the raw
+  assembly, a fold-free net is returned as the SAME lists, and the cube
+  fixture is byte-identical — the step engages only on a net that unfolds
+  wrong. It cannot reach a shipped corner either (a collapsed side is
+  `smooth_degenerate_cap`'s case and gates it off structurally). Its one
+  measured case is the demo's `CB_J1_FrontTopRight` in the arrangement of
+  before the leader/length work — 0/630 coincident, no collapsed side, 30/56/86
+  flips at n=39/81/150 in the two subgrids that touch the triangular member
+  while the two strip-to-strip subgrids are clean — after which it reads
+  0/0/0 flips and the tri's nearest interior sample moves 0.0179 → 0.30967 mm
+  off the quad (`Tests/demo_corner_row_diff.py`,
+  `Tests/test_fold_free_interior.py`). Read that as a dated record of the
+  step, not as the thing that makes a rolled corner work. 4-valent reference on the same
   code (untouched by the smoothing; CB2 still poles-matches the legacy chain):
   g1 ≤ 2.0e-4°, `k_gap` ≤ 1.0e-2 /mm.
 - Fourth wizard step and fourth toolbar command (`Silk_CreateCornerBlend`);
@@ -379,7 +385,8 @@ Sketches (9 reference sketches)
     → Patch (2 from 4 Edges each)
       → Blend (1 between the 2 Patch)
         → Corner Blend (at a junction where 3 or 4 Patch meet; fed the ring
-          Blend(s) — the 3-patch triangular 4th member is built invisibly)
+          Blend(s) — the triangular patch beside the quad is built by the
+          corner stage, not picked by the user)
 ```
 
 ## Module Reload Pattern

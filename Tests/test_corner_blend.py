@@ -502,8 +502,9 @@ def test_check_corner_blend_refuses_wrong_input_shapes_by_name(doc):
 
 
 def test_corner_blend_member_pin_is_refused_on_a_4_valent_ring(doc):
-    """#117: the pin places the TRIANGULAR 4th member, which a 4-valent
-    ring does not have (its fourth member is a real strip). A pin on such
+    """#117: the pin names the CORNER that carries the triangular patch,
+    and a 4-valent ring has no triangular patch (its fourth member is a real
+    strip). A pin on such
     a ring is refused by name and creates nothing rather than being
     silently ignored."""
     errors, checks = [], []

@@ -132,6 +132,15 @@ corner as the 66 we already have, and finally replace the member's face with
 the FreeCAD fill (the owner's *"smaller triangular surface … replaced with a
 freecad surface patch"*).
 
+> **Superseded in part by the owner's 2026-10-22 process**
+> (`docs/adr/0006-rolled-corner-is-two-patches.md`, §"The process"): the
+> leader is now a cut of its **own** (`ULeader1/2`, `VLeader1/2`), placed by a
+> **length in mm** and equalised by default (#129), the third blend is **not**
+> cut, and the corner is built as **two surfaces** — the quad beside the
+> triangular patch — with the patches' remainders kept as **five preserved
+> pieces** (#130). The paragraph above is the 2026-10-19 prescription, kept as
+> the record of where the work started; the ADR is the standing statement.
+
 **If it turns out impossible in our machinery, say so with the evidence and
 what it would take.** Do not fake it, and do not fall back to Path B silently.
 

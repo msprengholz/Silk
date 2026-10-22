@@ -1,5 +1,12 @@
 # The rolling corner, built (ticket #119) -- path (B)
 
+> **SUPERSEDED (2026-10-22).** Path (B) is **not** what ships: the corner
+> stage builds the **path (A)** rolled corner -- the quad over the ring's four
+> members plus the triangular patch beside it, with the leader as the patch's
+> own cut placed by a **length in mm** -- stated once in
+> `docs/adr/0006-rolled-corner-is-two-patches.md`. This note is kept as the
+> dated record of the arrangement that was tried and measured before it.
+
 **What this is.** The opt-in construction the owner specified for the
 rolling corner: split two of the three edge blends at a *rolling leader*
 (a position on the seam curve, measured from the junction corner), give
