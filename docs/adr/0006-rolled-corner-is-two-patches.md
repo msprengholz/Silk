@@ -53,3 +53,44 @@ test **cannot** separate the two — upstream's own boxes overlap — so the
 - Anything that needs a **second cut per axis end** to reproduce the reference
   (the leader independent of the setback) is part of this decision, not a
   detail to be improvised per build.
+
+---
+
+## The process, as the owner states it (2026-10-22, confirmed step by step)
+
+This supersedes any earlier description in this repo of "how we build it". Our
+implementation diverged from it at step 3, and that divergence is the reason
+our quad covers the triangular patch instead of sitting beside it.
+
+1. **Start:** three patches meet at a corner; three edge blends lie along the
+   three seams.
+2. **Choose the corner** where the triangular patch goes -- equivalently, the
+   **two patches adjacent to it**. (It is *not* a choice of "which patch
+   carries the member grid"; that was our invention.)
+3. **Divide TWO of the three patches** at the leader. Two of the three blends
+   are therefore cut back, and each divided patch yields a **small piece
+   toward the corner** and a **large remainder**.
+4. **The two small pieces are two sides of the triangular patch.**
+5. **Roll the corner:** build the **66 quad** *across* the two divided blends
+   -- the owner's words: *"we basically do another edge blend across two of
+   the existing blends."* Its four sides are:
+   - the cut end of divided blend **A**,
+   - the cut end of divided blend **B**,
+   - the **third, uncut seam blend**,
+   - the **edge shared with the triangular patch**.
+6. **The triangular patch** closes the remainder: two sides are the small
+   pieces from step 4, the third side is **the same curve** the quad's fourth
+   side runs along (one shared curve, not two coincident ones).
+
+**Two consequences that are now normative:**
+
+- The **third blend is not cut**; it is one full-length side of the quad.
+- The quad and the tri **share one curve**. They are adjacent, never
+  overlapping.
+
+**The measurement that distinguishes a correct corner from a wrong one:** the
+triangular patch's interior must lie **away** from the quad -- measured on the
+maintainer's own file, its interior samples sit **4.6-35.5 mm** from the quad,
+**16-62 %** of the corner's extent. A corner assembled "around" a member grid
+instead measures **~1 mm** (0.5-2.6 %): the quad and the tri then describe the
+same area and two objects are drawn where one surface belongs.
