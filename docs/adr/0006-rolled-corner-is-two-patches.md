@@ -144,9 +144,21 @@ This supersedes any earlier description in this repo of "how we build it".
 2. **Choose the corner** where the triangular patch goes -- equivalently, the
    **two patches adjacent to it**. (It is *not* a choice of "which patch
    carries the member grid"; that was our invention.)
-3. **Divide TWO of the three patches** at the leader. Two of the three blends
-   are therefore cut back, and each divided patch yields a **small piece
-   toward the corner** and a **large remainder**.
+3. **Divide the patch that carries the triangular patch** -- and, as the
+   owner clarified the same day, **one** patch is divided, **once in u and
+   once in v**, not two patches once each:
+
+   > *"one of the three base patches get divided once in both u and v dir
+   > making it 3 patches and thus, making 5 pieces in total"* ... *"dividing a
+   > patch once in u and v gives four parts, but the corner piece will become
+   > the triangular corner fill"*
+
+   So the divided patch's 2x2 of cells resolves as: **the corner cell is the
+   triangular patch**, the **other three** are preserved pieces, and **each
+   of the other two patches contributes one piece** -- 3 + 2 = **5**, which is
+   exactly what the maintainer's file stores. The earlier phrasing ("divide
+   two of the three patches") names the same outcome; the mechanism is one
+   patch divided on both axes.
 4. **The two small pieces are two sides of the triangular patch.**
 5. **Roll the corner:** build the **66 quad** *across* the two divided blends
    -- the owner's words: *"we basically do another edge blend across two of
