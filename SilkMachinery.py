@@ -472,6 +472,15 @@ def leader_cut_prop(letter, end):
     return "%sLeader%d" % (letter, end + 1)
 
 
+def is_leader_cut_prop(prop):
+    """True when `prop` names a LEADER CUT (`ULeader1` / `VLeader2`).
+
+    The reading side of `leader_cut_prop`, so a caller that has a property
+    NAME in hand -- the corner's write log, a panel editor -- can say what
+    kind of cut it is without spelling the four names again."""
+    return str(prop) in ("ULeader1", "ULeader2", "VLeader1", "VLeader2")
+
+
 def leader_pair(p, letter):
     """`(Leader1, Leader2)` of axis `letter` ("U" / "V") of object `p`.
 

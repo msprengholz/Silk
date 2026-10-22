@@ -286,6 +286,37 @@ creates them anymore.
   identical), and a 4-valent ring has no member either.
   `Tests/test_preserved_pieces.py` pins the ten roles, the cells, the nets,
   the C0 table, the settle and the shipped/4-valent pairs.
+- **A rolled corner is REVERTIBLE, and more than one can live in a document
+  (#131) -- measured on the demo, `Tests/test_two_rolled_corners.py`.**
+  `CornerBlend` keeps a WRITE LOG (`_CutRecord`: patch|property|before|written)
+  of every LEADER CUT it places -- the ops layer records it at build and at the
+  panel's `apply_corner_choices` -- and `SilkCorner.release_corner`, fired by
+  the corner's own one-shot `_CornerDeleteWatcher` (`onDocumentRestored`
+  installs it too), removes the corner's own roles (the tri, its fill, the five
+  pieces) and puts each cut back to the value it FOUND. A slot whose value has
+  changed since is reported and left alone, not overwritten. Two corners on
+  the demo (J1 on P_Top, J2 on P_Bottom, sharing P_Front and P_Right through
+  B_FR, neither cut) both roll, both read their own cells, and the document
+  settles. Delete J1: the survivor's 36 poles, weights, member and five pieces
+  read `0.000e+00`, its cuts stay, P_Top's cut goes back to its sentinel
+  (subgrids 12 -> 6, hidden `[0,3,5,7,10]` -> `[0,2,3,4,5]`). Delete J2 as
+  well: 41 objects again and **0 differences** across every patch's cuts,
+  poles, weights, subgrid count and hidden set and all 8 strips' poles. A
+  shared patch keeps its piece TWICE (both corners' `beyond_both` is the same
+  cell: 3368.106687 mm^2 on P_Front, 6692.122665 on P_Right twice) -- recorded,
+  not deduped.
+  **The limit is ONE LEADER PER AXIS END, and it is the owner's decision.** A
+  corner's cut is a claim about a whole axis end of its member patch, so two
+  junctions that share one end cannot both be rolled there: J1 and J3 both
+  carry the tri on P_Top and want `P_Top.ULeader2` (0.643019 vs 0.641844 mm)
+  -- J3 falls back to the shipped corner. Worse, one corner's cut can break
+  another's ring: J2 then J4 -> J4 builds NOTHING (its ring reads the end J2
+  cut), and J3 then J4 -> J4 rolls while J3's net goes EMPTY. The demo's pair
+  matrix (both build orders, `Tests/two_rolled_corners.py` section 3) reads:
+  J1+J2, J1+J4, J2+J3, J4+J1, J4+J2, J3+J2 two rolling; J1+J3 shipped
+  fallback; J2+J4 and J3+J1 nothing; J3+J4 one empty. A LIST of cuts per axis
+  instead of one property per end is what lifting this takes, and it is not
+  implemented.
 - **The 3-valent path builds (measured on the cube-corner fixture).** The
   member is derived from the patch's ring **corner cell** (not its full base
   net), and a multi-corner match is admitted by `pair_common` only when it is

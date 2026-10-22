@@ -520,11 +520,16 @@ def _linked_band_cells(fp, p):
     # corner cells owned by corner blends on this patch (#28): the
     # strip must not wipe them, else the display ping-pongs between
     # the strip writing its band cells and the corner blend
-    # re-unioning the corner cell on the next recompute pass.
+    # re-unioning the corner cell on the next recompute pass.  A DYING
+    # corner (#131) owns no cell, exactly like a dying blend: the cut it
+    # wrote goes back while the strips recompute, and those passes must
+    # re-derive the set without the cell the deleted corner covered.
     try:
         from SilkCorner import CornerBlend as _CB
         for ob in doc.Objects:
             if getattr(ob, "object_type", "") != "CornerBlend":
+                continue
+            if getattr(getattr(ob, "Proxy", None), "_dying", False):
                 continue
             for so in list(getattr(ob, "Strips", []) or []):
                 if so.PatchA is p or so.PatchB is p:

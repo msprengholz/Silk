@@ -698,6 +698,242 @@ def ensure_pieces(obj):
         obj.Pieces = []
 
 
+# ---- a corner's own UNDO (#131) -----------------------------------------
+#
+# A ROLLED corner does not only draw a surface: it CHANGES its member patch
+# (the leader cut, `ULeader1/2` / `VLeader1/2`, is a property of that patch)
+# and it owns objects of its own (the triangular member, the fill over it, the
+# five preserved pieces).  Deleting the corner must give the patch back --
+# the owner's rule (2026-10-22): *"of course, this also has to be revertible
+# when the rolling corners get deleted"*.
+#
+# The cut is undone from a WRITE LOG, not from a derivation.
+# `SilkWorkflowOps` is the only writer of a leader cut and the corner is the
+# only thing that asks it to, so the corner records what it wrote: one entry
+# per (patch, property), holding the value that property carried BEFORE the
+# corner touched it.  "Reset the leader to its sentinel" would be a different
+# claim -- it would erase a cut somebody else placed in the same slot, which
+# on a patch two corners touch is exactly the case that has to be told apart
+# (`Tests/test_two_rolled_corners.py` measures both).
+
+def ensure_cut_record(obj):
+    """The corner's `_CutRecord` write log, added once (#131).
+
+    Internal and read-only in the data tab: it is a statement about what this
+    corner did to the model, not an input.  A corner built before this
+    property existed -- or restored from such a document -- carries none and
+    reads as "wrote nothing", which is what the shipped construction writes.
+    """
+    if not hasattr(obj, "_CutRecord"):
+        obj.addProperty("App::PropertyStringList", "_CutRecord", "Internal",
+                        "the leader cuts this corner wrote: "
+                        "patch|property|before|written")
+        obj.setEditorMode("_CutRecord", 1)
+
+
+def record_cut(corner, patch, prop, old, new):
+    """Record that `corner` moved `patch.prop` from `old` to `new` (#131).
+
+    ONE entry per (patch, property): a corner that rewrites its own cut keeps
+    the value it FIRST found, so `release_corner` restores the patch's
+    pre-corner state however many times the leader was moved in between (the
+    panel's Apply, a rebuild)."""
+    ensure_cut_record(corner)
+    name = getattr(patch, "Name", "?")
+    key = "%s|%s|" % (name, prop)
+    rec = [str(e) for e in (getattr(corner, "_CutRecord", None) or [])]
+    first = float(old)
+    for entry in rec:
+        if entry.startswith(key):
+            parts = entry.split("|")
+            if len(parts) == 4:
+                first = float(parts[2])
+            break
+    kept = [e for e in rec if not e.startswith(key)]
+    kept.append("%s%.17g|%.17g" % (key, float(first), float(new)))
+    corner._CutRecord = kept
+
+
+def recorded_cuts(corner):
+    """`[(patch, patch_name, property, before, written)]` -- the corner's
+    write log, with each patch resolved when it is still in the document
+    (None throughout when it is not: a deleted patch's cut needs no undo)."""
+    doc = getattr(corner, "Document", None)
+    out = []
+    for entry in (getattr(corner, "_CutRecord", None) or []):
+        parts = str(entry).split("|")
+        if len(parts) != 4:
+            continue
+        name, prop = parts[0], parts[1]
+        patch = doc.getObject(name) if doc is not None else None
+        out.append((patch, name, prop, float(parts[2]), float(parts[3])))
+    return out
+
+
+def release_corner(corner):
+    """Undo a corner that is being DELETED (#131): its own surfaces go, and
+    the cuts it wrote on the ring's patches go back to the values it found.
+
+    WHAT BELONGS TO THE CORNER and what does not, exactly:
+
+      * the corner fill (the object being deleted), the triangular MEMBER and
+        the `Surface::Filling` over it when one was built, and the five
+        PRESERVED PIECES -- all of them are the corner's own roles, they are
+        consumed by nothing else, and they are removed;
+      * the RING STRIPS and the PATCHES are the user's model: untouched, and
+        a cut is only restored in the slot the corner itself wrote (a slot
+        whose value has changed since is somebody else's and is reported,
+        not overwritten).
+
+    The patch is marked dying on its proxy FIRST, so the strips that recompute
+    while the cut goes back re-derive their hidden-cell set without this
+    corner's corner cell (`SilkBlend._linked_band_cells` skips a dying
+    owner), and the document settles with the cell visible again.
+
+    Returns a report dict: `pieces`, `member`, `fill`, `cuts` (restored) and
+    `kept` (a clause per cut that was not restored, with its reason)."""
+    doc = getattr(corner, "Document", None)
+    report = {"pieces": [], "member": None, "fill": None, "cuts": [],
+              "kept": []}
+    if doc is None:
+        return report
+    try:
+        corner.Proxy._dying = True
+    except Exception:
+        pass
+    member = None
+    for o in doc.Objects:
+        if (getattr(o, "object_type", "") == "RollingMemberFace"
+                and getattr(o, "Corner", None) is corner):
+            member = o
+            break
+    doomed = []
+    if member is not None:
+        fill = fill_of_member(doc, member)
+        if fill is not None:
+            doomed.append(fill)
+            report["fill"] = fill.Name
+        doomed.append(member)
+        report["member"] = member.Name
+    for piece in list(getattr(corner, "Pieces", None) or []):
+        doomed.append(piece)
+        report["pieces"].append(getattr(piece, "Name", "?"))
+    for obj in doomed:
+        name = getattr(obj, "Name", None)
+        try:
+            if name is not None and doc.getObject(name) is not None:
+                doc.removeObject(name)
+        except Exception as exc:
+            report["kept"].append("%s could not be removed: %r" % (name, exc))
+    for patch, name, prop, before, written in recorded_cuts(corner):
+        if patch is None:
+            report["kept"].append("%s.%s stays: the patch is gone"
+                                  % (name, prop))
+            continue
+        current = float(getattr(patch, prop, before) or 0.0)
+        if abs(current - written) > 1e-12:
+            report["kept"].append(
+                "%s.%s stays %g: it has held that since, not the %g this "
+                "corner wrote" % (name, prop, current, written))
+            continue
+        try:
+            setattr(patch, prop, before)
+            report["cuts"].append((name, prop, before, written))
+        except Exception as exc:
+            report["kept"].append("%s.%s could not be restored: %r"
+                                  % (name, prop, exc))
+    try:
+        corner._CutRecord = []
+    except Exception:
+        pass
+    # a releasing corner can be releasing a DOCUMENT that is closing, so
+    # every step past the restore is best-effort: the geometry is already
+    # back by here, and a teardown must not raise inside a C++ slot.
+    try:
+        doc.recompute()
+        doc.recompute()
+    except Exception:
+        pass
+    if report["cuts"] or report["pieces"] or report["member"]:
+        FreeCAD.Console.PrintMessage(
+            "Silk: released the corner's %d preserved piece(s), its member%s "
+            "and %d cut(s) (%s)\n"
+            % (len(report["pieces"]),
+               " and its fill" if report["fill"] else "",
+               len(report["cuts"]),
+               ", ".join("%s.%s" % (n, p) for n, p, _b, _w in report["cuts"])
+               or "none"))
+    for line in report["kept"]:
+        FreeCAD.Console.PrintError("Silk: corner release: %s\n" % line)
+    return report
+
+
+class _CornerDeleteWatcher:
+    """One-shot document observer that releases a corner when it is deleted
+    (#131).
+
+    WHY AN OBSERVER: FreeCAD 1.1.3 has no `DocumentObjectPy::onDelete` -- the
+    live trigger is `signalDeletedObject`, which fires BEFORE the links are
+    nullified, so `Pieces` and the patches a corner wrote to are still
+    readable inside the slot.  This is the same trigger and the same retire
+    rules `SilkBlend._DeleteWatcher` uses, and the rules are the ones #80 paid
+    for: retire on our own object (do the work) or when our object is already
+    gone (we can never match again); on any OTHER name KEEP WAITING -- the
+    slot fires for every deletion in the document, so spending the watcher on
+    the first unrelated one would disarm it before the corner dies.
+
+    Removing the corner's pieces and member inside the slot re-enters the
+    slot with THEIR names, which is exactly the "other name" case."""
+
+    def __init__(self, fp):
+        self._fp = fp
+        self._fired = False
+
+    def _spend(self):
+        self._fired = True
+        try:
+            FreeCAD.removeDocumentObserver(self)
+        except Exception:
+            pass
+
+    def slotDeletedObject(self, obj):
+        if self._fired:
+            return
+        try:
+            mine = getattr(self._fp, "Name", None)
+            mine_doc = getattr(self._fp.Document, "Name", None)
+        except (ReferenceError, AttributeError):
+            self._spend()
+            return
+        try:
+            theirs = getattr(obj, "Name", None)
+            their_doc = getattr(obj.Document, "Name", None)
+        except (ReferenceError, AttributeError):
+            return
+        if theirs != mine:
+            return
+        # THE DOCUMENT IS PART OF THE IDENTITY.  An observer is registered per
+        # APPLICATION and sees every document's deletions, so matching on the
+        # name alone fires for a corner of the same name in ANOTHER document --
+        # and `release_corner` would then strip a LIVE corner's pieces and cuts
+        # in the document nobody asked about.  Measured: a run that deletes a
+        # `CB_J1_FrontTopRight` in a test document emptied the open artifact's
+        # two corners (12 objects, both cut records) with both corners still in
+        # the tree.
+        if their_doc != mine_doc:
+            return
+        self._spend()
+        try:
+            release_corner(self._fp)
+        except Exception as exc:
+            FreeCAD.Console.PrintError(
+                "Silk: the corner %s could not be released cleanly: %r\n"
+                % (mine, exc))
+
+    def slotDeletedDocument(self, doc):
+        pass
+
+
 def fill_of_member(doc, member):
     """The `Surface::Filling` whose boundary is this member's shape, or
     None.
@@ -779,6 +1015,7 @@ class CornerBlend:
         # when it builds; an object built here directly has none yet).
         ensure_construction(obj)
         ensure_pieces(obj)
+        ensure_cut_record(obj)
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs",
                         "corner grid poles (6x6)").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "Outputs",
@@ -791,6 +1028,32 @@ class CornerBlend:
         obj.setEditorMode("object_type", 1)
         obj.Proxy = self
         self._in_execute = False
+        # set by the delete path: a dying corner owns no corner cell, so the
+        # strips that recompute while its cut goes back re-derive their hidden
+        # set without it.
+        self._dying = False
+        self._delete_watcher = None
+        self._install_delete_watcher(obj)
+
+    def _install_delete_watcher(self, fp):
+        """Install the one-shot observer that releases the corner's cuts and
+        its own surfaces when the corner is deleted (#131).
+
+        Idempotent, and called from `__init__` and `onDocumentRestored` for
+        the same reason `SilkBlend`'s does: a restored corner never runs
+        `__init__`, so without this a reopened corner would die unwatched and
+        leave its patch cut and its pieces in the tree.  The attribute is read
+        through `getattr` because the restore path reaches here without
+        `__init__` having run."""
+        if getattr(self, "_delete_watcher", None) is not None:
+            return
+        try:
+            if fp.Document is None:
+                return
+            self._delete_watcher = _CornerDeleteWatcher(fp)
+            FreeCAD.addDocumentObserver(self._delete_watcher)
+        except Exception:
+            self._delete_watcher = None
 
     def onDocumentRestored(self, obj):
         # #95: same two restore fixes as a Blend, for the same reasons --
@@ -804,6 +1067,8 @@ class CornerBlend:
         ensure_member_pin(obj)
         ensure_construction(obj)
         ensure_pieces(obj)
+        ensure_cut_record(obj)
+        self._install_delete_watcher(obj)
 
     def onChanged(self, fp, prop):
         if prop in ("Strips", "tolerance", "MemberPatch", "MemberCorner"):

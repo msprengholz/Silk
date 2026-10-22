@@ -1727,8 +1727,16 @@ def apply_corner_choices(strips, pin=None, leaders=None):
                           "%s" % why)
     if not plan and target is None:
         return corner, None
+    from SilkCorner import record_cut
+    from SilkMachinery import is_leader_cut_prop
     for p, prop, write in plan:
+        before = float(getattr(p, prop, write) or 0.0)
         setattr(p, prop, write)
+        if is_leader_cut_prop(prop):
+            # the corner's own UNDO (#131): a leader this Apply wrote is a
+            # debt the corner carries, exactly like the one it placed when
+            # it was built.
+            record_cut(corner, p, prop, before, write)
     if target is not None:
         corner.MemberPatch = target[0]
         corner.MemberCorner = int(target[1])
@@ -2139,6 +2147,16 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
         corner.ViewObject.ShapeColor = (1.00, 0.67, 0.00)
         corner.ViewObject.Transparency = 30
         doc.recompute()
+    # THE CUT IS THE CORNER'S TO UNDO (#131): record what it wrote on the
+    # member patch, so deleting the corner gives the patch its own values
+    # back (`SilkCorner.release_corner`).  Recorded on the EXISTING corner
+    # too -- a second ask that moved the leader is the same debt.
+    from SilkCorner import record_cut
+    from SilkMachinery import is_leader_cut_prop
+    for pname, prop, cur, value in written:
+        p = doc.getObject(pname)
+        if p is not None and is_leader_cut_prop(prop):
+            record_cut(corner, p, prop, cur, value)
 
 
     # 3. the SMALL TRIANGULAR SURFACE beside it (the maintainer's own
