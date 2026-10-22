@@ -39,7 +39,7 @@ import ArachNURBS as AN
 from SilkBlend import band_cells, side_and_end, seam_direction, BLEND_TYPES, \
     ensure_grid_toggle, migrate_shaded_display
 from SilkMachinery import (build_intervals, axis_intervals, split_pair,
-    leader_pair, band_edge, corner_cell_index, corner_ring,
+    leader_pair, band_edge, axis_cuts, corner_cell_index, corner_ring,
     corner_grid, orient_junction_row, corner_ring_3,
     control_grid64_3_1, reverse_grid_rows, set_grid_display,
     ring_corner_gap)
@@ -89,6 +89,76 @@ CORNER_TOL = 1e-6
 # leader (`_member_row_order` states which, and why).
 _MEMBER_ROW_ORDER_LEADER = (True, False)
 _MEMBER_ROW_ORDER = (False, True)
+
+
+# Which CELL CORNER becomes the member's collapsed row, per corner pair of
+# the 4x4 cell `_corner_cell_net` reads (index 0 is the cell's (u, v) = (0, 0)
+# corner, index 3 its (3, 3) one).  `control_grid64_3_1` collapses the row AT
+# the corner it is given, so this is the inverse of its own rotation.
+_APEX_CORNER_OF = {(3, 3): 0, (3, 0): 1, (0, 0): 2, (0, 3): 3}
+
+
+def member_apex_corner(p, cell):
+    """`control_grid64_3_1`'s corner index that puts the triangular member's
+    collapsed row on the cell's LEADER/LEADER corner, or None when the cell
+    carries no real leader cut on one of its axes.
+
+    HIS MEMBER PINCHES AT THE LEADER, NOT AT THE JUNCTION (measured on
+    `Silk_CopyPasta_29`, corner `CubicSurface_66_013`): its cell is the region
+    between the SETBACK and the LEADER, and the collapsed row sits at the
+    corner where both LEADERS meet -- `(0.25, 0.25)`, the corner FARTHEST from
+    the junction, while the junction square `(0 .. 1/16)^2` is preserved
+    original surface and belongs to neither the quad nor the tri.
+    (`docs/research/silk-rolling-corner-66.md` sections 1.2 and 1.3.)
+
+    WHY IT IS DERIVED AND NOT SEARCHED.  `_tri_ring_member` walks the four
+    corners until the ring assembles, and on a ring whose cell is lopsided
+    more than one corner assembles: measured on the demo's
+    `CB_J1_FrontTopRight`, the first assembling corner put the apex on the
+    SETBACK/SETBACK corner (the junction side), the triangular member then
+    filled the cell's junction-side half, and the 66 -- whose fourth side is
+    the member's real row -- closed its loop AROUND that member: the tri's
+    interior read 0.35..1.47 mm off the quad, 0.6 %..2.6 % of the corner's
+    57.5 mm extent, i.e. the two surfaces described the same area.  With the
+    apex on the leader/leader corner the tri is outside the 66's boundary
+    loop and reads 0.89..8.37 mm, 1.6 %..14.6 %.
+
+    The cell's two boundary values say which corner that is: the leader is a
+    REAL cut (`axis_cuts`) strictly beyond the setback at the junction end, so
+    the cell's end that carries the leader is the one FARTHER from the
+    junction and the apex takes the cell's index 0 or 3 on that axis."""
+    if cell is None:
+        return None
+    _pth, iu_c, iv_c, _nu, _nv = cell
+    us = axis_intervals(p, "U")
+    vs = axis_intervals(p, "V")
+    if not (0 <= iu_c < len(us) and 0 <= iv_c < len(vs)):
+        return None
+    idx = []
+    for letter, ivs, i in (("U", us, iu_c), ("V", vs, iv_c)):
+        s1, s2 = split_pair(p, letter)
+        l1, l2 = leader_pair(p, letter)
+        cuts = axis_cuts(s1, s2, l1, l2)
+        leads = [v for v in (band_edge(l1), band_edge(l2))
+                 if v is not None and v in cuts]
+        lo, hi = ivs[i]
+        if lo in leads:
+            idx.append(0)
+        elif hi in leads:
+            idx.append(3)
+        else:
+            return None
+    return _APEX_CORNER_OF[(idx[0], idx[1])]
+
+
+def _apex_corner_order(pth, cell):
+    """The four cell corners in the order `_tri_ring_member` tries them: the
+    member's own apex corner first (`member_apex_corner` -- his rule), then the
+    rest in index order.  On a cell with no leader the order is 0..3, exactly
+    as before."""
+    apex = member_apex_corner(pth, cell)
+    rest = [c for c in range(4) if c != apex]
+    return ([apex] + rest) if apex is not None else rest
 
 
 def _member_row_order(pth):
@@ -321,7 +391,7 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
         poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
         if poles_c is None:
             continue
-        for corner in range(4):
+        for corner in _apex_corner_order(pth, corner_cells.get(pth.Name)):
             for rev in _member_row_order(pth):
                 mp, mw = control_grid64_3_1(poles_c, weights_c, corner)
                 if mp is None:
