@@ -505,7 +505,11 @@ def artifact():
     lines = []
     label = "_demo_corner_even"
     for name, d in list(FreeCAD.listDocuments().items()):
-        if d.Label == label:
+        # `saveAs` renames the document to the FILE's own label, so a copy an
+        # earlier run left open is matched by its path, not by `label`.
+        if d.Label == label or (d.FileName and
+                                os.path.abspath(d.FileName)
+                                == os.path.abspath(ARTIFACT)):
             FreeCAD.closeDocument(name)
     doc = FreeCAD.newDocument(label)
     FreeCAD.setActiveDocument(doc.Name)
