@@ -1739,20 +1739,48 @@ def apply_corner_choices(strips, pin=None, leaders=None):
     if not plan and target is None:
         return corner, None
     from SilkCorner import record_cut
-    from SilkMachinery import is_leader_cut_prop
-    for p, prop, write in plan:
-        before = float(getattr(p, prop, write) or 0.0)
-        setattr(p, prop, write)
-        if is_leader_cut_prop(prop):
-            # the corner's own UNDO (#131): a leader this Apply wrote is a
-            # debt the corner carries, exactly like the one it placed when
-            # it was built.
-            record_cut(corner, p, prop, before, write)
-    if target is not None:
-        corner.MemberPatch = target[0]
-        corner.MemberCorner = int(target[1])
-    doc.recompute()
-    doc.recompute()
+    from SilkMachinery import follow_deferred, is_leader_cut_prop
+    # #132: everything from here to the settling recompute is ONE PLAN -- the
+    # cut moves, the pin moves with it, the modes say what the placed cuts
+    # mean, and only then does the corner re-derive anything.  No corner may
+    # follow its inputs between two entries of that
+    # (`SilkMachinery.follow_deferred`: measured on the pin test, where a
+    # follower running between "clear the old patch" and "cut the new one"
+    # put the cleared cut back).
+    with follow_deferred():
+        for p, prop, write in plan:
+            before = float(getattr(p, prop, write) or 0.0)
+            setattr(p, prop, write)
+            if is_leader_cut_prop(prop):
+                # the corner's own UNDO (#131): a leader this Apply wrote is
+                # a debt the corner carries, exactly like the one it placed
+                # when it was built.
+                record_cut(corner, p, prop, before, write)
+        if target is not None:
+            corner.MemberPatch = target[0]
+            corner.MemberCorner = int(target[1])
+        # #132: a length somebody ASKED for is theirs -- the corner keeps it
+        # when its inputs change (`LeaderMode = "fixed"`).  "auto" is the
+        # default because it is the equalising rule's own mode, and that rule
+        # is what an untouched corner is placed by, so nothing a user typed is
+        # ever the thing "auto" re-derives.
+        if leaders:
+            from SilkCorner import LEADER_MODE_FIXED
+            set_follow_modes(corner, leader=LEADER_MODE_FIXED, settle=False)
+        _record_cut_reference(corner, ordered, member_patch)
+        # THE PLAN WRITES A MODEL UNDER THE OBJECTS THAT READ IT, and every
+        # write re-arms the chain -- so the corner, the triangular member,
+        # the fill over it and the preserved pieces run BETWEEN two entries of
+        # the plan, where the ring does not close yet, and refuse there.  An
+        # object that refused stays refused unless something touches it
+        # again, and the final `doc.recompute()` below finds it up to date:
+        # measured on the cube corner, Apply moved the member onto PatchC and
+        # left the member EMPTY behind.  So they are touched -- the corner's
+        # touch propagates to the member and the fill -- and the recompute
+        # rebuilds them from the plan's FINAL state.
+        _rebuild_after_plan(corner)
+        doc.recompute()
+        doc.recompute()
     for strip_name, value in seam_writes:
         FreeCAD.Console.PrintMessage(
             "Silk: seam %s is rolled at leader %g\n" % (strip_name, value))
@@ -1761,6 +1789,367 @@ def apply_corner_choices(strips, pin=None, leaders=None):
             "Silk: the triangular member is pinned to %s[%d]\n"
             % (target[0].Name, target[1]))
     return corner, None
+
+
+# ---- the corner FOLLOWING its inputs (#132) ------------------------------
+#
+# MEASURED, and the gap this section closes (the demo's
+# `CB_J1_FrontTopRight`, `Tests/corner_follows_inputs.py`):
+#
+#     built    corner area 567.064425  sides 17.435446 / 17.435446 mm
+#     edit     P_Top.VSplit1 0.100 -> 0.150
+#     after    corner area 702.170677  sides 17.435446 /  5.965472 mm
+#
+# The corner REBUILDS on the input edit (the #109 chain works, #125 keeps it
+# settling) but its CUT stayed in the property the corner stage wrote, so the
+# band moved out from under it and the triangle stopped being the triangle it
+# was placed as.  The two modes on the corner (`SilkCorner.ensure_follow_modes`)
+# say what happens on the next recompute:
+#
+#   LeaderMode  "auto"  the cut is re-derived by the stage's OWN rule
+#                       (`equal_cut_legs`) from the current band edges, so the
+#                       two sides are equal again at the new geometry;
+#               "fixed" the stored cut is kept -- this ticket's "before".
+#   SetbackMode "fixed" the band edges are never written (the default: a band
+#                       edge is the user's own width, #64);
+#               "auto"  the carrying patch's setback AND the triangle's own cut
+#                       side are the corner's, and both are put back where the
+#                       corner PLACED them (`_CutReference`).
+#
+# WHY IT CANNOT LOOP.  A follow writes a PATCH property, and a patch write
+# re-arms the chain, so each branch is a derivation whose answer does not
+# depend on the value it is about to write:
+#
+#   * the leader branch reads the BAND EDGES only (`equal_cut_legs` seeds the
+#     rule from `ROLLING_LEADER`'s own parameter, never from the stored cut),
+#     so its second run places the value the first one placed;
+#   * the setback branch is a RESTORE of the recorded pair, i.e. of two
+#     constants -- neither the band edge nor the cut it is about to write is a
+#     term in it.
+#
+# So the second pass of a document recompute finds nothing to write and the
+# document settles (#125's bar: 3 x `doc.recompute()`, nothing Touched, poles
+# 0.000e+00 -- measured in `Tests/test_corner_follows_inputs.py`, both modes,
+# after an edit).  The WRITE itself is guarded the way this repo guards its
+# other writes from inside an execute (`SilkMachinery.refollowing`): the
+# patch's onChanged still touches it -- the framework re-runs it, and then the
+# corner, in the next pass -- but does NOT open a nested `doc.recompute()`
+# from inside an execute.  Every branch is decided BEFORE the first write, so
+# a refusal leaves the model as it was.
+
+
+def _record_cut_reference(corner, strips, member_patch):
+    """Record where the corner placed the triangle's cut (#132).
+
+    `SilkCorner._CutReference` is what `SetbackMode = "auto"` puts back, so it
+    is written by the two PLACEMENTS (the building stage and the panel's
+    Apply) and by nothing else.  Both numbers come from the one instrument
+    that measures a cut side (`seam_cut_length`) and from the band edge it
+    measures FROM (`seam_cut_reach`), so the pair recorded and the pair a
+    follow restores are one reading.
+    """
+    from SilkCorner import record_cut_reference
+    placed = {}
+    for s in strips:
+        if member_patch not in (getattr(s, "PatchA", None),
+                                getattr(s, "PatchB", None)):
+            continue
+        reach, why = seam_cut_reach(s, member_patch, ring=strips)
+        if reach is None:
+            continue
+        length, _why = seam_cut_length(s, member_patch, ring=strips)
+        if length is not None:
+            placed[s.Name] = (length, reach["setback"])
+    if placed:
+        record_cut_reference(corner, placed)
+        # the corner has been placed -- the record must not leave it dirty
+        # (the same rule `_record_construction` follows, #125)
+        try:
+            corner.purgeTouched()
+        except Exception:
+            pass
+    return placed
+
+
+def _rebuild_after_plan(corner):
+    """Touch what a cut plan's intermediate passes could have left refused.
+
+    A corner's cuts, its member's placement and its size are written as a
+    PLAN, and each write re-arms the chain (`SilkMachinery.follow_deferred`
+    covers the follower; this covers the OBJECTS).  The corner, the
+    triangular member and the fill over it, and the five preserved pieces run
+    between two entries of the plan, where the ring does not close yet, and
+    refuse there -- and an object that refused carries no shape until
+    something touches it again.  Measured on the cube corner
+    (`test_the_panel_exposes_the_member_pin_and_a_leader_per_seam`): Apply
+    moved the member from `PatchB[0]` to `PatchC[0]` and left the member
+    EMPTY, because the plan's last pass found nothing to rebuild.
+
+    The corner's own touch propagates to the member and to the fill (they link
+    it); the pieces link their PATCH, so they are touched one by one.  The
+    caller recomputes once afterwards.
+    """
+    for obj in [corner] + list(getattr(corner, "Pieces", None) or []):
+        try:
+            obj.touch()
+        except Exception:
+            pass
+
+
+def set_follow_modes(corner, leader=None, setback=None, settle=True):
+    """Write the corner's FOLLOW modes (#132) and report which are in force.
+
+    `settle` clears the touch flag the write raises, for a corner that is
+    already built (the same rule `_record_construction` follows: a property
+    written after the build would otherwise leave the document dirty for
+    nothing -- #125).  Returns `(leader_mode, setback_mode)`."""
+    from SilkCorner import (ensure_follow_modes, follow_modes, LEADER_MODES,
+                            SETBACK_MODES)
+    ensure_follow_modes(corner)
+    writes = []
+    if leader is not None:
+        leader = str(leader)
+        if leader not in LEADER_MODES:
+            FreeCAD.Console.PrintError(
+                "Silk: the corner's LeaderMode must be %s -- got %r, so it is "
+                "left at %r\n"
+                % (" or ".join(repr(m) for m in LEADER_MODES), leader,
+                   follow_modes(corner)[0]))
+        elif corner.LeaderMode != leader:
+            writes.append((corner, "LeaderMode", leader))
+    if setback is not None:
+        setback = str(setback)
+        if setback not in SETBACK_MODES:
+            FreeCAD.Console.PrintError(
+                "Silk: the corner's SetbackMode must be %s -- got %r, so it "
+                "is left at %r\n"
+                % (" or ".join(repr(m) for m in SETBACK_MODES), setback,
+                   follow_modes(corner)[1]))
+        elif corner.SetbackMode != setback:
+            writes.append((corner, "SetbackMode", setback))
+    for obj, prop, value in writes:
+        setattr(obj, prop, value)
+    if writes and settle:
+        try:
+            corner.purgeTouched()
+        except Exception:
+            pass
+    return follow_modes(corner)
+
+
+def _follow_setback_plan(strips, member_patch, placed, leader_auto):
+    """`([(patch, prop, before, after)], None)` for `SetbackMode = "auto"`,
+    or `(None, why)` when the recorded pair no longer fits the model.
+
+    THE RULE, stated once: the carrying patch's SETBACK and the triangle's own
+    CUT SIDE are the corner's, and this mode puts both back where the corner
+    placed them -- the band edge at the recorded parameter, and (when the
+    leader mode is `"auto"`, i.e. the cut is the corner's too) the cut at the
+    recorded side measured from it.  The two recorded numbers come from
+    `SilkCorner._CutReference` and are CONSTANTS, so this is a restore and not
+    a search: it lands on the same pair from any state, and it cannot chase
+    the leader rule -- which is why the two modes are decided here ONCE, in
+    one plan, instead of writing and re-deriving in turns.
+
+    The band edge is the parameter, so the triangle keeps its SHARE of the
+    patch when the patch's geometry moves; the cut side is millimetres, so it
+    keeps its SIZE.  Both are checked against the seam as it is NOW before
+    anything is written: a setback the axis cannot carry, or a cut side the
+    band between it and the far edge cannot hold, is refused BY NAME and the
+    user's model is left exactly as it was.
+    """
+    from SilkBlend import band_edge_prop
+    from SilkMachinery import (band_edge, leader_cut_prop,
+                              seam_parameter_at_length)
+    plan = []
+    for s in strips:
+        if member_patch not in (getattr(s, "PatchA", None),
+                                getattr(s, "PatchB", None)):
+            continue
+        recorded = placed.get(s.Name)
+        if recorded is None:
+            return None, ("seam %s carries no recorded cut, so there is "
+                          "nothing to put back" % s.Name)
+        leg, setback = recorded
+        reach, why = seam_cut_reach(s, member_patch, ring=strips)
+        if reach is None:
+            return None, why
+        prop = band_edge_prop(reach["along"], reach["corner_end"])
+        if band_edge(setback) is None:
+            return None, ("the recorded band edge of seam %s is %g, which is "
+                          "the junction corner itself" % (s.Name, setback))
+        far = band_edge(reach["t_far"])
+        if far is not None and abs(float(far) - float(setback)) < 1e-12:
+            return None, ("the recorded band edge of seam %s is %g, which is "
+                          "the band's own far edge -- the band would vanish"
+                          % (s.Name, setback))
+        writes = [(prop, setback)]
+        if leader_auto:
+            cut, why = seam_parameter_at_length(
+                member_patch, reach["side"], setback, reach["t_far"], leg)
+            if cut is None:
+                return None, ("seam %s cannot hold the recorded cut side "
+                              "%.6f mm from its recorded band edge %g: %s"
+                              % (s.Name, leg, setback, why))
+            writes.append((leader_cut_prop(reach["along"],
+                                          reach["corner_end"]), cut))
+        for name, value in writes:
+            cur = float(getattr(member_patch, name, 0.0) or 0.0)
+            if abs(cur - value) < 1e-12:
+                continue
+            plan.append((member_patch, name, cur, value))
+    return plan, None
+
+
+def _follow_leader_plan(strips, member_patch):
+    """`([(patch, prop, before, after)], None)` for `LeaderMode = "auto"`,
+    or `(None, why)` when the rule cannot be placed.
+
+    THE RULE: `equal_cut_legs`, the exact placement a fresh build with no
+    length asked for makes -- the two cuts that bound the triangular member
+    come out the same absolute length (the owner's #129 rule), at whatever
+    the band edges are NOW."""
+    reaches = []
+    for s in strips:
+        if member_patch not in (getattr(s, "PatchA", None),
+                                getattr(s, "PatchB", None)):
+            continue
+        reach, why = seam_cut_reach(s, member_patch, ring=strips)
+        if reach is None:
+            return None, why
+        reaches.append(reach)
+    if not reaches:
+        return None, ("the ring carries no seam of %s" % member_patch.Name)
+    _target, leg, why = equal_cut_legs(reaches, member_patch, strips)
+    if leg is None:
+        return None, why
+    plan = []
+    for reach in reaches:
+        prop, value, why = seam_cut_at_leg(reach["seam"], member_patch, leg,
+                                          ring=strips)
+        if prop is None:
+            return None, why
+        cur = float(getattr(member_patch, prop, 0.0) or 0.0)
+        if abs(cur - value) < 1e-12:
+            continue
+        plan.append((member_patch, prop, cur, value))
+    return plan, None
+
+
+def follow_corner_inputs(corner):
+    """Make the corner follow its inputs (#132) -- the derivation, no UI.
+
+    Returns `{"writes": [(patch, property, before, after)], "branch":
+    "setback" | "leader" | None, "modes": (LeaderMode, SetbackMode), "note":
+    why nothing was written}`.  An EMPTY `writes` is the settled answer: a
+    corner that already sits where its inputs say has nothing to do, which is
+    the case on every pass after the first.
+
+    Called from `CornerBlend.execute`, so it runs on any recompute -- the
+    inputs it reads are the ring's band edges, and those only move when
+    somebody (the user, an expression, the panel) moves them.
+
+    WHICH BRANCH RUNS.  `SetbackMode = "auto"` takes precedence, and it is
+    ONE plan: the corner puts the carrying patch's band edge back where it
+    placed it, and (when the leader mode is `"auto"` too) the cut with it --
+    both from the recorded pair, so the corner comes back to the state it was
+    BUILT in from any edit, exactly (`SetbackMode` fixed leaves the band edge
+    to the user and only the cut follows).  Both `"fixed"` is this ticket's
+    "before", byte for byte.
+
+    The SHIPPED construction is skipped whole: it has no triangular member
+    and it cuts with the BAND EDGE, so "following" there would mean rewriting
+    the user's setback -- which is what `SetbackMode` gates, not the leader
+    mode."""
+    from SilkCorner import (LEADER_MODE_AUTO, LEADER_MODE_FIXED,
+                            SETBACK_MODE_AUTO, corner_construction,
+                            corner_member_pin, ensure_follow_modes,
+                            cut_reference, follow_modes, record_cut,
+                            CORNER_DEFAULT_TOL)
+    from SilkMachinery import is_follow_deferred, refollowing
+    ensure_follow_modes(corner)
+    leader_mode, setback_mode = follow_modes(corner)
+    report = {"writes": [], "branch": None, "modes": (leader_mode,
+                                                        setback_mode),
+              "note": None}
+    if getattr(getattr(corner, "Proxy", None), "_dying", False):
+        # #131: a corner being DELETED gives its cuts back; re-deriving one on
+        # the way out would re-cut the patch the release has just restored.
+        report["note"] = "the corner is being deleted"
+        return report
+    if is_follow_deferred():
+        report["note"] = ("a caller is placing this corner's cuts; the plan "
+                          "settles them")
+        return report
+    if leader_mode == LEADER_MODE_FIXED and setback_mode != SETBACK_MODE_AUTO:
+        report["note"] = "both modes fixed: the stored cut is kept"
+        return report
+    construction, _note = corner_construction(corner)
+    if construction != CORNER_CONSTRUCTION_ROLLING:
+        report["note"] = ("the shipped construction has no triangular member "
+                          "and cuts with the band edge")
+        return report
+    strips = [s for s in (getattr(corner, "Strips", None) or [])
+              if s is not None]
+    if len(strips) != 3:
+        report["note"] = ("a rolled corner is 3-valent (this ring has %d "
+                          "blend(s))" % len(strips))
+        return report
+    ordered, why = _ring_of(strips)
+    if ordered is None:
+        report["note"] = why
+        return report
+    member_patch = getattr(corner, "MemberPatch", None)
+    if member_patch is None:
+        found, _why = corner_member_pin(ordered, CORNER_DEFAULT_TOL)
+        member_patch = found[0] if found is not None else None
+    if member_patch is None:
+        report["note"] = "no patch of this ring can carry the triangular member"
+        return report
+    plan, why = None, None
+    if setback_mode == SETBACK_MODE_AUTO:
+        placed = cut_reference(corner)
+        if not placed:
+            report["note"] = ("the corner has not recorded where it placed "
+                              "the triangle's cut, so there is nothing to put "
+                              "back")
+        else:
+            plan, why = _follow_setback_plan(
+                ordered, member_patch, placed,
+                leader_mode == LEADER_MODE_AUTO)
+            if plan is None:
+                report["note"] = ("the recorded cut does not fit the model "
+                                  "any more: %s" % why)
+                plan = None
+    if plan is None and leader_mode == LEADER_MODE_AUTO:
+        plan, why = _follow_leader_plan(ordered, member_patch)
+        if plan is None:
+            report["note"] = "the cut cannot be re-derived: %s" % why
+            return report
+        report["branch"] = "leader"
+    elif plan is not None:
+        report["branch"] = "setback"
+    if not plan:
+        return report
+    # FROM HERE DOWN THE MODEL CHANGES.  The patch's onChanged must not open a
+    # nested document recompute from inside this execute (the corner is
+    # already inside one); `refollowing` is that guard, and the framework
+    # re-runs the patch and this corner in the next pass on its own.
+    with refollowing():
+        for patch, prop, before, after in plan:
+            setattr(patch, prop, after)
+            record_cut(corner, patch, prop, before, after)
+    try:
+        corner.touch()      # this pass built nothing; the next one derives it
+    except Exception:
+        pass
+    report["writes"] = plan
+    for patch, prop, before, after in plan:
+        FreeCAD.Console.PrintMessage(
+            "Silk: corner %s follows its inputs: %s.%s %g -> %g (%s mode)\n"
+            % (corner.Name, patch.Name, prop, before, after,
+               report["branch"]))
+    return report
 
 
 def _existing_rolling_member(doc, strips):
@@ -2108,9 +2497,23 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     for p, prop, cur, value in planned:
         setattr(p, prop, value)
         written.append((p.Name, prop, cur, value))
+
+    def _keep_the_asked_length(obj):
+        """#132: a length the caller asked for is the caller's -- the corner
+        keeps it instead of re-deriving it away (`LeaderMode = "fixed"`).
+        Nothing asked for leaves the default `"auto"`, which is the
+        equalising rule's own mode."""
+        if per_seam or leader is not None:
+            from SilkCorner import LEADER_MODE_FIXED
+            set_follow_modes(obj, leader=LEADER_MODE_FIXED, settle=False)
+
     if written:
-        doc.recompute()
-        doc.recompute()
+        # #132: a PLAN, not a derivation -- no corner may re-derive its cut
+        # between two entries of it (`SilkMachinery.follow_deferred`).
+        from SilkMachinery import follow_deferred
+        with follow_deferred():
+            doc.recompute()
+            doc.recompute()
     for pname, prop, old, new in written:
         FreeCAD.Console.PrintMessage(
             "Silk: the rolling leader moved %s.%s from %g to %g (the member "
@@ -2121,14 +2524,16 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     def _undo_cut():
         """Put the cut back: the rolling corner did not build, so the
         user's model must not keep the leader."""
-        for p, prop, cur, _value in planned:
-            try:
-                setattr(p, prop, cur)
-            except Exception:
-                pass
-        if planned:
-            doc.recompute()
-            doc.recompute()
+        from SilkMachinery import follow_deferred
+        with follow_deferred():
+            for p, prop, cur, _value in planned:
+                try:
+                    setattr(p, prop, cur)
+                except Exception:
+                    pass
+            if planned:
+                doc.recompute()
+                doc.recompute()
 
     # 2. the corner fill: the 66 chain, fed with the ring's cut cells.
     grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL, pin)
@@ -2141,6 +2546,7 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     existing = _existing_corner_blend(doc, strips)
     if existing is not None:
         corner = existing
+        _keep_the_asked_length(corner)
     else:
         if len(strips) == 3:
             from SilkMachinery import corner_ring_3
@@ -2158,6 +2564,10 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
         corner.ViewObject.DisplayMode = "Flat Lines"
         corner.ViewObject.ShapeColor = (1.00, 0.67, 0.00)
         corner.ViewObject.Transparency = 30
+        # #132 BEFORE the first recompute: a length the caller asked for is
+        # the caller's, and the corner must not re-derive it away on its own
+        # first pass (`LeaderMode = "fixed"`).
+        _keep_the_asked_length(corner)
         doc.recompute()
     # THE CUT IS THE CORNER'S TO UNDO (#131): record what it wrote on the
     # member patch, so deleting the corner gives the patch its own values
@@ -2261,6 +2671,9 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     #    beside the two surfaces above -- three cells from the patch that
     #    carries the tri, one from each of the other two.
     pieces = create_preserved_pieces(corner, member_patch=patch)
+    # #132: what the corner was just PLACED at -- the size `SetbackMode =
+    # "auto"` holds (`SilkCorner._CutReference`).
+    _record_cut_reference(corner, strips, patch)
     return {"corner": corner, "member": member, "member_fill": member_fill,
             "member_fill_gap": member_fill_gap,
             "member_junction_c0": member_junction_c0,

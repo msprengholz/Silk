@@ -707,6 +707,167 @@ def ensure_pieces(obj):
         obj.Pieces = []
 
 
+# ---- the corner FOLLOWING its inputs (#132) -----------------------------
+#
+# The owner (2026-10-22): *"to make the rolling corner look nice, i need
+# control of the initial blends.  can i already update these and rolling
+# corner will follow?  ideally, the patch setback would also recalculate
+# (make it optional though) to make the triangle patch again."*
+#
+# The corner already REBUILDS when a ring patch's band edge moves (#109), but
+# its CUT stayed where it was stored -- so the band moved out from under it
+# and the triangle stopped being the triangle it was placed as.  Measured on
+# the demo's `CB_J1_FrontTopRight`: the two sides are 17.435446 / 17.435446
+# mm at the 0.1 setback, and 17.435446 / 5.965472 mm once `P_Top.VSplit1` is
+# set to 0.15.
+#
+# TWO MODES, one property each, and the derivation behind both is the one the
+# corner stage itself places with (`SilkWorkflowOps.follow_corner_inputs`),
+# so a corner that follows its inputs lands where a fresh build would:
+#
+#   LeaderMode = "auto" (the default) | "fixed"
+#       auto  -- the cut is RE-DERIVED from the current band edges by the
+#                stage's own rule, so the two sides that bound the triangle
+#                are equal again at the new geometry;
+#       fixed -- the stored cut is kept, exactly as before this ticket (a
+#                length the user typed survives).
+#
+#   SetbackMode = "fixed" (the default) | "auto"
+#       fixed -- the band edges are the USER's and are never written: a band
+#                edge is the user's own width (#64), and silently moving it
+#                is the failure mode this workbench already paid for;
+#       auto  -- the carrying patch's setback and the triangle's own cut side
+#                are the corner's, and both are put back where the corner
+#                PLACED them (`_CutReference`): the band edge at the recorded
+#                parameter, so the triangle keeps its share of the patch, and
+#                (with `LeaderMode = "auto"`) the cut at the recorded side in
+#                mm, so it keeps its size.
+
+LEADER_MODE_AUTO = "auto"
+LEADER_MODE_FIXED = "fixed"
+LEADER_MODES = (LEADER_MODE_AUTO, LEADER_MODE_FIXED)
+SETBACK_MODE_FIXED = "fixed"
+SETBACK_MODE_AUTO = "auto"
+SETBACK_MODES = (SETBACK_MODE_FIXED, SETBACK_MODE_AUTO)
+
+# What a corner saved BEFORE the modes existed reads as (#132): the cut it
+# stores is kept.  "auto" is the default for a corner the stage builds now,
+# but a corner that never recorded a mode made no such promise, and opening a
+# document must not move a number its user typed.
+FOLLOW_MODE_RESTORED = LEADER_MODE_FIXED
+
+
+def ensure_follow_modes(obj, restored=False):
+    """The two FOLLOW modes (#132), added once.
+
+    `restored` is the case the property is being added to an EXISTING object
+    -- `__init__` does not run on restore, so a corner built before this
+    ticket arrives without them.  Such a corner reads `LeaderMode = "fixed"`:
+    it was built under no promise to follow its inputs, and the alternative
+    ("auto") would re-derive and MOVE a cut the moment the document is
+    recomputed, which is a silent change of the user's model on file open.
+    """
+    if not hasattr(obj, "LeaderMode"):
+        obj.addProperty("App::PropertyEnumeration", "LeaderMode", "Inputs",
+                        "does this corner re-derive its cut when its inputs "
+                        "change?  'auto' = yes, by the corner stage's own "
+                        "rule, so the two sides of the triangle are equal "
+                        "again at the new geometry; 'fixed' = no, the "
+                        "stored cut is kept")
+        obj.LeaderMode = list(LEADER_MODES)
+        obj.LeaderMode = (FOLLOW_MODE_RESTORED if restored
+                          else LEADER_MODE_AUTO)
+    if not hasattr(obj, "SetbackMode"):
+        obj.addProperty("App::PropertyEnumeration", "SetbackMode", "Inputs",
+                        "does this corner re-derive the carrying patch's "
+                        "SETBACK (its band edge) too?  'fixed' = no, the "
+                        "band edges are the user's; 'auto' = yes, put back "
+                        "where the corner placed the triangle's cut")
+        obj.SetbackMode = list(SETBACK_MODES)
+        obj.SetbackMode = SETBACK_MODE_FIXED
+
+
+def follow_modes(obj):
+    """`(LeaderMode, SetbackMode)` of a corner -- the pair in force.
+
+    ONE reader, used by the follower (`SilkWorkflowOps.follow_corner_inputs`)
+    and by the panel, so "what mode is this corner in" cannot be answered two
+    ways.  A corner that carries neither property reads the defaults a corner
+    built by this stage would have."""
+    leader = str(getattr(obj, "LeaderMode", "") or LEADER_MODE_AUTO)
+    if leader not in LEADER_MODES:
+        leader = LEADER_MODE_AUTO
+    setback = str(getattr(obj, "SetbackMode", "") or SETBACK_MODE_FIXED)
+    if setback not in SETBACK_MODES:
+        setback = SETBACK_MODE_FIXED
+    return leader, setback
+
+
+def ensure_cut_reference(obj):
+    """The corner's `_CutReference`: where it PLACED the triangle (#132).
+
+    One entry per rolled seam, `seam|leg_mm|setback`, holding the two numbers
+    the corner's own cut consists of: the triangle's cut side in millimetres
+    (`seam_cut_length`, the arc from the SETBACK to the cut) and the band edge
+    the cut was measured from.  They are written when the corner PLACES its
+    cut -- the build, the panel's Apply -- and by nothing else, which is what
+    makes `SetbackMode = "auto"` a RESTORE rather than a search: the recorded
+    pair is a constant, so re-deriving it lands on the same numbers however
+    many times it runs.
+
+    Two numbers and not one, on purpose.  A setback's own unit is the axis
+    parameter, so putting the recorded parameter back is what keeps the
+    triangle's SHAPE (its proportion of the patch) when the patch's geometry
+    moves, and the recorded leg is what keeps its SIZE in mm; either alone
+    would drift on the other's axis.
+
+    Internal and read-only in the data tab: it is what the corner was PLACED
+    at, not an input.
+    """
+    if not hasattr(obj, "_CutReference"):
+        obj.addProperty("App::PropertyStringList", "_CutReference",
+                        "Internal",
+                        "where the corner placed the triangular member's cut, "
+                        "per rolled seam: seam|cut side in mm|band edge")
+        obj.setEditorMode("_CutReference", 1)
+
+
+def record_cut_reference(corner, placed):
+    """Record where the corner placed the triangle's cut (#132).
+
+    `placed` is `{seam name: (leg_mm, setback)}` -- the cut side
+    (`SilkWorkflowOps.seam_cut_length`) and the band edge it was measured
+    from, both read off the patch the moment the corner had placed them.
+    Written by the two PLACEMENTS (the building stage and the panel's Apply)
+    and by nothing else: a corner following its own inputs must not re-anchor,
+    or each edit would hold the state of the previous one instead of the
+    corner's own."""
+    ensure_cut_reference(corner)
+    entries = []
+    for name, pair in sorted((placed or {}).items()):
+        leg, setback = pair
+        if leg is None or setback is None:
+            continue
+        entries.append("%s|%.17g|%.17g" % (str(name), float(leg),
+                                           float(setback)))
+    corner._CutReference = entries
+
+
+def cut_reference(corner):
+    """`{seam name: (leg_mm, setback)}` -- where the corner PLACED the
+    triangle's cut (#132); empty for a corner that has never recorded one."""
+    out = {}
+    for entry in (getattr(corner, "_CutReference", None) or []):
+        parts = str(entry).split("|")
+        if len(parts) != 3:
+            continue
+        try:
+            out[parts[0]] = (float(parts[1]), float(parts[2]))
+        except ValueError:
+            continue
+    return out
+
+
 # ---- a corner's own UNDO (#131) -----------------------------------------
 #
 # A ROLLED corner does not only draw a surface: it CHANGES its member patch
@@ -1025,6 +1186,8 @@ class CornerBlend:
         ensure_construction(obj)
         ensure_pieces(obj)
         ensure_cut_record(obj)
+        ensure_follow_modes(obj)
+        ensure_cut_reference(obj)
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs",
                         "corner grid poles (6x6)").Poles
         obj.addProperty("App::PropertyFloatList", "Weights", "Outputs",
@@ -1041,6 +1204,7 @@ class CornerBlend:
         # strips that recompute while its cut goes back re-derive their hidden
         # set without it.
         self._dying = False
+        self._follow_report = None
         self._delete_watcher = None
         self._install_delete_watcher(obj)
 
@@ -1077,6 +1241,12 @@ class CornerBlend:
         ensure_construction(obj)
         ensure_pieces(obj)
         ensure_cut_record(obj)
+        # #132: a corner saved before the FOLLOW modes existed keeps the cut
+        # it stores ("fixed") -- it was built under no promise to follow its
+        # inputs, and re-deriving on the next recompute would move a number
+        # its user typed.
+        ensure_follow_modes(obj, restored=True)
+        ensure_cut_reference(obj)
         self._install_delete_watcher(obj)
 
     def onChanged(self, fp, prop):
@@ -1104,17 +1274,52 @@ class CornerBlend:
         # it, so a corner restored from an older file is editable the
         # moment it recomputes rather than only after a reopen.
         ensure_grid_toggle(fp)
+        ensure_follow_modes(fp)
+        ensure_cut_reference(fp)
         if not list(getattr(fp, "Strips", []) or []):
             return
         if getattr(self, "_in_execute", False):
             return
         self._in_execute = True
         try:
+            # #132: the cut is re-derived from the CURRENT inputs first, and a
+            # pass that moved it builds nothing -- the corner keeps the shape
+            # it had, the framework re-runs the patch (and then this object)
+            # in the next pass of the same document recompute, and that pass
+            # builds on the new cut. Measured: two passes, then nothing.
+            if self._follow_inputs(fp):
+                return
             self._do_execute(fp)
         finally:
             self._in_execute = False
 
     # ---- derivation -------------------------------------------------
+
+    def _follow_inputs(self, fp):
+        """Re-derive the cut from the CURRENT inputs (#132).
+
+        True when the derivation MOVED a patch property: the caller then ends
+        this pass without building, because the patch has not rebuilt itself
+        at the new cut yet and a 66 assembled now would be assembled around
+        the old one.  The report is kept on the proxy (`_follow_report`) for
+        the panel and the instruments to read -- it is a statement about what
+        this pass did, not an input, so it is not a property and never makes
+        the object dirty.
+
+        `follow_corner_inputs` is the ops layer's, imported HERE: the ops
+        layer imports this module lazily in both directions, and a top-level
+        import would close that cycle.
+        """
+        from SilkWorkflowOps import follow_corner_inputs
+        try:
+            report = follow_corner_inputs(fp)
+        except Exception as exc:      # never let the follow break the object
+            report = {"writes": [], "branch": None, "note": repr(exc)}
+            FreeCAD.Console.PrintError(
+                "Silk: corner %s could not follow its inputs: %r\n"
+                % (fp.Name, exc))
+        self._follow_report = report
+        return bool(report.get("writes"))
 
     @staticmethod
     def _corner_cell(p, strips, tol):

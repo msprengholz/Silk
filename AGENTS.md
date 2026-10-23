@@ -326,6 +326,53 @@ creates them anymore.
   fallback; J2+J4 and J3+J1 nothing; J3+J4 one empty. A LIST of cuts per axis
   instead of one property per end is what lifting this takes, and it is not
   implemented.
+- **The corner FOLLOWS its inputs, in two modes (#132).** The owner:
+  *"can i already update these and rolling corner will follow?  ideally, the
+  patch setback would also recalculate (make it optional though) to make the
+  triangle patch again."*  The corner already REBUILDS on a band-edge edit
+  (the #109 chain, #125's settling), but its CUT stayed where the stage stored
+  it: on the demo's `CB_J1_FrontTopRight` the two sides are 17.435446 /
+  17.435446 mm at the 0.1 setback and 17.435446 / 5.965472 mm once
+  `P_Top.VSplit1` is 0.15.  `CornerBlend.LeaderMode` = `"auto"` (default) |
+  `"fixed"` and `CornerBlend.SetbackMode` = `"fixed"` (default) | `"auto"`;
+  the panel mounts both selectors on a built corner and says which pair is in
+  force (`CORNER_FOLLOW_IN_FORCE`).
+  **Leader auto** re-derives the cut with the equalising rule at the CURRENT
+  band edges — measured on that junction, 0.1 -> 0.15 gives 14.046000 /
+  14.046000 mm, which is byte for byte what a FRESH build at 0.15 places
+  (`ULeader2` 0.685686, `VLeader1` 0.215080) — and never writes a band edge
+  (the user's 0.15 reads back +0.000e+00).  **Leader fixed** keeps the stored
+  cut (17.435446 / 5.965472: this ticket's "before", on purpose), and a build
+  or Apply that ASKS for a length sets it, because a length somebody typed is
+  theirs.
+  **Setback auto** makes the carrying patch's band edge the corner's too: it
+  puts the band edge AND the cut back where the corner PLACED them
+  (`_CutReference`: `seam|cut side in mm|band edge` per rolled seam), so the
+  corner returns to the state it was built in from any edit — poles
+  0.000e+00 mm on the demo, setback 0.1 back to +0.000e+00 — and the triangle
+  keeps its SHARE of the patch (the band edge is a parameter) and its SIZE in
+  mm (the cut side).  **Setback fixed** is the default and never writes a band
+  edge: a band edge is the user's own width (#64).
+  **It cannot loop**, and that is measured rather than argued: both
+  derivations are pure functions of constants (the band edges, or the
+  recorded pair), so a second pass finds nothing to write — 3 x
+  `doc.recompute()` reads 0.0004/0.0002/0.0001 s with nothing Touched and
+  poles 0.000e+00, in every mode and after an edit.  A follow WRITES A PATCH
+  from inside the corner's own execute, so: it holds
+  `SilkMachinery.refollowing` (the patch still touches — the framework re-runs
+  it, then the corner, in the next pass — but does not open a nested
+  `doc.recompute()`), it returns without building that pass, a caller PLACING
+  cuts holds `SilkMachinery.follow_deferred` (a plan is atomic to the
+  follower; without it, Apply's clear-then-cut sequence was re-cut mid-plan),
+  and a corner being DELETED never re-derives (#131).  Guards:
+  `Tests/test_corner_follows_inputs.py` (fast tier, cube fixture: the two
+  modes, the two setback readings, the settle bar, 0/630 coincident poles and
+  0/0/0 flips at n=39/81/150 after a follow, the shipped construction never
+  written, and the panel driven); the demo junction's own hand-back table, the
+  fresh-build cross-check and the panel drive are the MANUAL
+  `Tests/corner_follows_inputs.py`, whose artifact
+  `Resources/Test_files/_inspect/demo_corner_reactive.FCStd` is left OPEN with
+  every role named.
 - **The 3-valent path builds (measured on the cube-corner fixture).** The
   member is derived from the patch's ring **corner cell** (not its full base
   net), and a multi-corner match is admitted by `pair_common` only when it is

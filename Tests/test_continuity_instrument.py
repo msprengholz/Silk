@@ -234,10 +234,13 @@ def test_manual_measurement_scripts_reachable(doc):
     # #129: the corner's cuts measured in MILLIMETRES, and the rule that
     # equalises them -- the instrument behind the cut-length table.
     import Tests.corner_even_cuts as even
+    # #132: the corner FOLLOWING its inputs -- the demo junction's hand-back
+    # table, the fresh-build cross-check and the panel drive behind the modes.
+    import Tests.corner_follows_inputs as follow
     errs = []
     checks = []
     for mod in (demo, cm, solve, edge, fill, roll, visual, rolling, ringref,
-                rss, fillprobe, twopatch, even):
+                rss, fillprobe, twopatch, even, follow):
         ok = callable(getattr(mod, "main", None))
         checks.append("%s.main callable: %s" % (mod.__name__, ok))
         if not ok:

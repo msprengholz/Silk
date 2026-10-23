@@ -108,10 +108,13 @@ from SilkEdge import classify_sketches
 from SilkBlend import BLEND_TYPES
 from SilkWorkflowOps import create_edge, create_patch, create_blend_by_edge, \
     create_corner_blend, apply_corner_choices, corner_ring_patches, \
-    existing_corner, seam_leader, \
+    existing_corner, seam_leader, set_follow_modes, \
     CORNER_CONSTRUCTIONS, \
     CORNER_CONSTRUCTION_ROLLING, CORNER_CONSTRUCTION_SHIPPED, \
     CORNER_CONSTRUCTION_DEFAULT
+from SilkCorner import LEADER_MODE_AUTO, LEADER_MODE_FIXED, LEADER_MODES, \
+    SETBACK_MODE_AUTO, SETBACK_MODE_FIXED, SETBACK_MODES, \
+    corner_construction, follow_modes
 from SilkMachinery import patch_side, side_of_edge, build_intervals, \
     corner_cells, split_pair, axis_splits, band_at_end, loop_order, \
     leader_pair, NO_LEADER_1, NO_LEADER_2
@@ -290,6 +293,43 @@ CORNER_LEADER_TIP = (
     "same length in mm, which is what makes the triangle roughly "
     "equal-sided. Type a number to place this seam's cut yourself; after "
     "the corner exists the editor shows the length each seam carries.")
+
+
+# The two FOLLOW modes (#132).  A corner that follows its inputs is what the
+# owner asked for -- *"can i already update these and rolling corner will
+# follow?  ideally, the patch setback would also recalculate (make it optional
+# though) to make the triangle patch again."* -- and the two questions are
+# SEPARATE, so they are two selectors and the page says which is in force:
+#
+#   Leader  auto  -- the cut is re-derived from the band edges the way a
+#                    fresh build places it (the equalising rule), so the
+#                    triangle's two sides are equal again;
+#           fixed -- the stored cut is kept, which is what a length the user
+#                    typed means (a build/Apply with a length sets this).
+#   Setback fixed -- the band edges are the user's and are never written (the
+#                    default: a band edge is the user's own width, #64);
+#           auto  -- the carrying patch's setback is put back where the
+#                    corner placed the triangle, so the triangle keeps its
+#                    share of the patch and its size.
+CORNER_FOLLOW_TIP_AUTO_LEADER = (
+    "The cut follows the band edges: when a band edge of the ring changes, "
+    "the corner re-derives where the band is cut back, exactly as a fresh "
+    "build with no length typed would (the equalising rule, so the "
+    "triangle's two sides come out the same length at the NEW geometry).")
+CORNER_FOLLOW_TIP_FIXED_LEADER = (
+    "The stored cut is kept when the band edges move -- the behaviour before "
+    "the corner could follow its inputs. A build or an Apply that TYPES a "
+    "length sets this, so the length you typed is never overwritten.")
+CORNER_FOLLOW_TIP_FIXED_SETBACK = (
+    "The band edges stay yours. A band edge is your own width, so nothing "
+    "here ever writes one.")
+CORNER_FOLLOW_TIP_AUTO_SETBACK = (
+    "The carrying patch's OWN setback (its band edge) becomes the corner's: "
+    "it is put back where the corner placed the triangular patch's cut, so "
+    "the triangle keeps its share of the patch and its size in mm. It is the "
+    "only patch this ever writes, and every move is reported.")
+CORNER_FOLLOW_IN_FORCE = (
+    "Following: leader %s (%s), setback %s (%s)")
 
 
 def _seam_seed(s, strips, patch=None, construction=None, fresh=False):
@@ -1164,7 +1204,11 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             "corners), and the SETBACK of each seam -- how far "
             "along it the band is cut back, in mm from the junction corner. "
             "Left at 'equal' the stage makes the two cuts that bound the "
-            "triangle the same length, so it comes out roughly equal-sided."))
+            "triangle the same length, so it comes out roughly equal-sided.\n"
+            "Once the corner exists, the CUT and SETBACK selectors say "
+            "whether it FOLLOWS the band edges: 'auto' re-derives, 'fixed' "
+            "keeps what is stored -- and a band edge stays yours unless you "
+            "ask for it to follow."))
         # WHICH CONSTRUCTION (#128): the rolling corner (the quad over the
         # ring's four members plus the triangular patch beside it) is
         # the DEFAULT; the shipped corner is the fallback, and it is the
@@ -1229,6 +1273,38 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         self.corner_leader_table.setMaximumHeight(
             CORNER_LEADER_ROW_HEIGHT * (CORNER_MAX + 1))
         lay.addWidget(self.corner_leader_table)
+        # DOES THE CORNER FOLLOW ITS INPUTS (#132)?  Two selectors, one per
+        # question, and a line that says what the pair in force MEANS -- the
+        # owner's two asks are separate (*"can i already update these and
+        # rolling corner will follow?  ideally, the patch setback would also
+        # recalculate (make it optional though)"*).  Live only once the
+        # corner exists: they are properties of a built corner, and its
+        # `execute` is what reads them.
+        follow_row = QtWidgets.QHBoxLayout()
+        follow_row.addWidget(QtWidgets.QLabel("Cut:"))
+        self.corner_leader_mode = QtWidgets.QComboBox()
+        for mode in LEADER_MODES:
+            self.corner_leader_mode.addItem(mode)
+        self.corner_leader_mode.setToolTip(
+            CORNER_FOLLOW_TIP_AUTO_LEADER + "\n\n"
+            + CORNER_FOLLOW_TIP_FIXED_LEADER)
+        self.corner_leader_mode.currentIndexChanged.connect(
+            lambda _i: self.on_corner_follow_mode())
+        follow_row.addWidget(self.corner_leader_mode, 1)
+        follow_row.addWidget(QtWidgets.QLabel("Setback:"))
+        self.corner_setback_mode = QtWidgets.QComboBox()
+        for mode in SETBACK_MODES:
+            self.corner_setback_mode.addItem(mode)
+        self.corner_setback_mode.setToolTip(
+            CORNER_FOLLOW_TIP_FIXED_SETBACK + "\n\n"
+            + CORNER_FOLLOW_TIP_AUTO_SETBACK)
+        self.corner_setback_mode.currentIndexChanged.connect(
+            lambda _i: self.on_corner_follow_mode())
+        follow_row.addWidget(self.corner_setback_mode, 1)
+        lay.addLayout(follow_row)
+        self.corner_follow_lbl = QtWidgets.QLabel("")
+        self.corner_follow_lbl.setWordWrap(True)
+        lay.addWidget(self.corner_follow_lbl)
         self.corner_apply_btn = QtWidgets.QPushButton(
             "Apply to the existing corner")
         self.corner_apply_btn.setToolTip(
@@ -2428,6 +2504,7 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                        self.corner_leader_table, self.corner_apply_btn):
             widget.setEnabled(live)
         self._render_corner_construction(ring, patches)
+        self._render_corner_follow_modes(ring)
 
         names = [s.Name for s in ring]
         if names == getattr(self, "_corner_leader_names", None):
@@ -2521,6 +2598,95 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
     def corner_construction_choice(self):
         """The construction the page asks for (the combo's own text)."""
         return self.corner_construction.currentText()
+
+    # ---- does the corner follow its inputs (#132)? -------------------
+
+    def _render_corner_follow_modes(self, ring):
+        """Mount the two FOLLOW selectors on the ring's corner, and say in
+        words what the pair in force means.
+
+        They are properties of a BUILT corner -- its `execute` is what reads
+        them -- so they are live exactly while the ring has one, and they show
+        what the corner CARRIES (`SilkCorner.follow_modes`), not what the page
+        last selected: the corner may be following its inputs because that is
+        what it was built with.
+
+        `LeaderMode` is `"auto"` on a corner this stage built with the
+        equalising rule, and `"fixed"` on one that was given a length (a
+        length somebody typed is theirs) -- so a length the user asked for is
+        never silently re-derived here.
+        """
+        corner = existing_corner(ring) if ring else None
+        leader, setback = follow_modes(corner) if corner is not None else (
+            LEADER_MODE_AUTO, SETBACK_MODE_FIXED)
+        for combo, value in ((self.corner_leader_mode, leader),
+                             (self.corner_setback_mode, setback)):
+            blocked = combo.blockSignals(True)
+            try:
+                combo.setCurrentIndex(max(combo.findText(value), 0))
+                combo.setEnabled(corner is not None)
+            finally:
+                combo.blockSignals(blocked)
+        self.corner_follow_lbl.setText(
+            "" if corner is None else
+            CORNER_FOLLOW_IN_FORCE
+            % (leader, "the cut follows the band edges"
+               if leader == LEADER_MODE_AUTO else "the cut is kept",
+               setback, "the setback follows the triangle"
+               if setback == SETBACK_MODE_AUTO else "your band edges are kept"))
+        self.corner_follow_lbl.setToolTip(
+            "Leader auto: %s\nLeader fixed: %s\nSetback fixed: %s\n"
+            "Setback auto: %s"
+            % (CORNER_FOLLOW_TIP_AUTO_LEADER, CORNER_FOLLOW_TIP_FIXED_LEADER,
+               CORNER_FOLLOW_TIP_FIXED_SETBACK,
+               CORNER_FOLLOW_TIP_AUTO_SETBACK))
+        return leader, setback
+
+    def corner_follow_choices(self):
+        """`(LeaderMode, SetbackMode)` as the page holds them."""
+        return (self.corner_leader_mode.currentText(),
+                self.corner_setback_mode.currentText())
+
+    def on_corner_follow_mode(self):
+        """A follow selector was flipped: write it onto the ring's corner.
+
+        The modes are properties of the CORNER, and the corner's own `execute`
+        reads them -- so the write is all it takes for the next recompute to
+        obey them, and the page then says which pair is in force (and, after
+        that recompute, what it did: `follow_report`).
+        """
+        ring = self._corner_ring()
+        corner = existing_corner(ring) if ring else None
+        if corner is None:
+            self._render_corner_follow_modes(ring)
+            return False
+        leader, setback = self.corner_follow_choices()
+        doc = self.doc
+        doc.openTransaction("Silk corner follow mode")
+        try:
+            # `settle=False`: the corner must still be Touched when the
+            # recompute below runs, or the new mode would only take effect on
+            # some later edit. The corner obeys at once -- that is what makes
+            # the selector an answer rather than a stored preference.
+            set_follow_modes(corner, leader=leader, setback=setback,
+                             settle=False)
+            doc.recompute()
+            doc.recompute()
+        finally:
+            doc.commitTransaction()
+        self._render_corner_follow_modes(ring)
+        report = getattr(getattr(corner, "Proxy", None), "_follow_report",
+                         None) or {}
+        writes = report.get("writes") or []
+        self.status_lbl.setText(
+            "%s: leader %s, setback %s%s"
+            % (corner.Name, leader, setback,
+               "" if not writes else
+               " -- it moved %s" % ", ".join(
+                   "%s.%s %.6g -> %.6g" % (p.Name, prop, before, after)
+                   for p, prop, before, after in writes)))
+        self.refresh()
+        return True
 
     def _corner_pin(self, patches=None):
         """The `(patch, corner)` the page asks for, or None for "(automatic)"

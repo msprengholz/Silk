@@ -297,6 +297,17 @@ class Patch:
                 # still in flight above and will settle the axis once. Doing
                 # it here too would run the whole chain twice per edit.
                 return
+            from SilkMachinery import is_refollowing
+            if is_refollowing():
+                # #132: a corner is re-deriving its own cut from this patch's
+                # band edges, and it is doing so from inside its OWN execute.
+                # The patch must still be rebuilt -- the framework marks it
+                # Touched after this write and re-runs it, then the corner, in
+                # the next pass of the same document recompute -- but a NESTED
+                # doc.recompute() from inside an execute is exactly the
+                # re-entrancy #125 removed, so only that is skipped.
+                fp.touch()
+                return
             if 'Restore' not in fp.State and hasattr(fp, "Edges") and fp.Edges:
                 fp.touch()
                 # #109: a band-edge write is the one property that feeds the

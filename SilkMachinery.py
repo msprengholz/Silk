@@ -406,6 +406,81 @@ def ensure_leader_cuts(obj):
 _normalizing_leaders = [False]
 
 
+# The re-entrancy guard for a corner FOLLOWING its inputs (#132).  A rolled
+# corner re-derives its cut from the band edges it can see, and that cut is a
+# property of the patch -- so the re-derivation writes a patch from inside the
+# corner's own execute, and the patch's onChanged would open a NESTED
+# `doc.recompute()` there.  Inside `follow_corner_inputs` the guard is held:
+# the patch is still touched (the framework re-runs it, then the corner, in
+# the next pass of the SAME document recompute -- measured, 2 passes), only
+# the nested pass is skipped.  Same shape as `_normalizing_leaders`: one
+# derivation, one settle, never a second pass through onChanged.
+_refollowing = [False]
+
+
+class refollowing:
+    """While this context is open, a band-edge / leader-cut write does NOT
+    recompute the document from the patch's onChanged (#132).
+
+    The writer is a corner re-deriving its cut; it is already inside a
+    document recompute, the framework owns the passes (`Document.recompute`
+    repeats until nothing is touched -- measured), and a nested recompute
+    from inside an execute is exactly the re-entrancy the #125 work removed.
+    """
+
+    def __enter__(self):
+        self._was = _refollowing[0]
+        _refollowing[0] = True
+        return self
+
+    def __exit__(self, *args):
+        _refollowing[0] = self._was
+
+
+def is_refollowing():
+    """True while a corner is re-deriving its own cut (#132)."""
+    return bool(_refollowing[0])
+
+
+# The OTHER half of the same guard: while a caller is PLACING a corner's cuts
+# (#132), the corner must stand down.
+#
+# `create_rolling_corner_66` and the panel's Apply write a PLAN of patch
+# properties, and every write re-arms the chain -- so the corner's own execute
+# runs between two entries of one plan, with the model half-way through it.
+# A corner following its inputs there would derive from a state nobody meant:
+# measured on `test_3valent_member_pin_moves_the_member_to_the_named_corner`,
+# Apply clears the OLD member patch's cut first and writes the new one second,
+# and the follower -- still reading the pin the corner had not stored yet --
+# put a fresh cut back on the patch Apply had just cleared, leaving a ring
+# that does not close.  A plan is atomic from the follower's point of view:
+# it derives after the plan, not inside it.
+_defer_follow = [0]
+
+
+class follow_deferred:
+    """While this context is open, no corner re-derives its cut (#132).
+
+    Set by the two callers that write a corner's cuts as a PLAN
+    (`SilkWorkflowOps.create_rolling_corner_66`,
+    `SilkWorkflowOps.apply_corner_choices`).  Nestable, and never held across
+    a user interaction -- only across the writes and the recompute that
+    settles them.
+    """
+
+    def __enter__(self):
+        _defer_follow[0] += 1
+        return self
+
+    def __exit__(self, *args):
+        _defer_follow[0] -= 1
+
+
+def is_follow_deferred():
+    """True while a caller is placing a corner's cuts (#132)."""
+    return bool(_defer_follow[0])
+
+
 def normalize_leader_on_set(obj, prop):
     """Put one axis's LEADER pair into canonical form after a write to
     `prop` (#119).
