@@ -536,6 +536,10 @@ def main():
     test_filter = args[0] if args else None
     inspect = "--inspect" in sys.argv
     save = "--save" in sys.argv
+    # #132: the orphan census costs ~9 s and grows with session age; it is
+    # opt-in, and the env var carries it into the FreeCAD process.
+    if "--leak" in sys.argv:
+        os.environ["SILK_LEAK_CENSUS"] = "1"
     force_reload = "--force-reload" in sys.argv
     keep_namespace = "--keep-namespace" in sys.argv
     save_dir = _INSPECT_SAVE_DIR if save else None

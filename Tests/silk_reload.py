@@ -491,7 +491,14 @@ def ensure_fresh(force=False, namespace=None, mod_dir=None, pid=None,
     removed = []
     if reload_:
         removed = purge_mod_modules(mod_dir)
-    orphans = len(orphan_generations(mod_dir))
+    # #132: the orphan CENSUS is a sweep of the live interpreter -- a
+    # `gc.collect` plus a pass over every tracked object (67 M in the
+    # owner's session), ~9 s, and the cost GROWS with session age. It is a
+    # diagnostic, not a guard (the #72 guard is test_module_generation), so
+    # it is opt-in: `--leak` (or SILK_LEAK_CENSUS=1) asks for it, and the
+    # printed count says "not counted" otherwise rather than a misleading 0.
+    census = bool(os.environ.get("SILK_LEAK_CENSUS"))
+    orphans = len(orphan_generations(mod_dir)) if census else None
     save_fingerprint(current, pid, mod_dir, orphans=orphans)
     report = {
         "reloaded": reload_,
@@ -526,8 +533,11 @@ def describe(report):
         lines.append("[reload] dropped %d stale namespace binding(s): %s"
                      % (len(report["namespace_cleared"]),
                         ", ".join(report["namespace_cleared"][:20])))
-    lines.append("[leak] %d orphaned Mod module generation(s) pinned outside "
-                 "sys.modules" % report["orphans"])
+    if report.get("orphans") is None:
+        lines.append("[leak] orphan census skipped (--leak to count)")
+    else:
+        lines.append("[leak] %d orphaned Mod module generation(s) pinned "
+                     "outside sys.modules" % report["orphans"])
     return lines
 
 
