@@ -226,11 +226,26 @@ def test_the_census_finds_an_orphan_and_names_its_holder(doc):
     it exactly as it treats a real orphaned generation.  Nothing is
     touched in sys.modules, so the test cannot leave a generation behind
     for the next run to count.
+
+    The pair is handed IN (`collect_orphans(objects=...)`) rather than
+    found by a sweep of the live heap: on the owner's session that sweep
+    plus one `gc.get_referrers` per orphan cost 123 s, which was 48 % of
+    the whole fast tier for a calibration whose answer is fixed.  The
+    default input is asserted to still be the live heap, so the census
+    the instrument runs is the one whose analysis is calibrated here.
     """
+    import inspect
     import types
     M = _instrument()
     errors = []
     checks = []
+    default_objects = inspect.signature(M.collect_orphans).parameters[
+        "objects"].default
+    checks.append("census input defaults to the live heap: %r"
+                  % (default_objects,))
+    if default_objects is not None:
+        errors.append("collect_orphans no longer defaults to gc.get_objects() "
+                      "(objects=%r)" % (default_objects,))
     fake = types.ModuleType("ArachNURBS")
     fake.__file__ = os.path.join(M.MOD_DIR, "ArachNURBS.py")
     fake.marker = "synthetic orphan for the #123 census test"
@@ -239,7 +254,7 @@ def test_the_census_finds_an_orphan_and_names_its_holder(doc):
     # the importing module's dict, and the dict outlives the purge.
     holder = types.ModuleType("synthetic_holder_123")
     holder.kept = fake
-    census = M.collect_orphans()
+    census = M.collect_orphans(objects=[fake, holder])
     entries = [e for e in census["orphans"] if e["id"] == id(fake)]
     checks.append("census: %d orphan(s) among %d Mod module name(s); "
                   "the synthetic one is in the list: %s"

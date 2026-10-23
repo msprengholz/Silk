@@ -79,8 +79,12 @@ def test_a_patch_without_a_leader_reads_exactly_what_it_always_read(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_a_leader_cut_subdivides_the_axis_and_between_is_the_corner_cell(doc):
-    """The new cut: one more cell, and the corner cell is BETWEEN the two."""
+def test_a_leader_cut_subdivides_the_axis_and_leaves_the_band_one_cell(doc):
+    """The new cut: one more cell per axis, the corner cell BETWEEN the two,
+    and the band still ONE cell (#82) with the leader in place.
+
+    Both readings are of the same cut on the same patch, so they are one
+    test: the fixture build is what either of them cost."""
     errors, checks = [], []
     strips = _cube(doc)
     p = strips[0].PatchA
@@ -109,18 +113,7 @@ def test_a_leader_cut_subdivides_the_axis_and_between_is_the_corner_cell(doc):
         if excluded != {0, 1}:
             errors.append("%s: the band exclusion is %r, not the whole corner "
                           "region {0, 1}" % (letter, sorted(excluded)))
-    return {"pass": not errors, "errors": errors, "checks": checks}
-
-
-def test_the_band_stays_one_cell_under_a_leader_cut(doc):
-    """The #82 invariant: ONE cell per band, leader or no leader."""
-    errors, checks = [], []
-    strips = _cube(doc)
-    p = strips[0].PatchA
-    SM.ensure_leader_cuts(p)
-    for letter in ("U", "V"):
-        setattr(p, "%sLeader1" % letter, 0.25)
-    doc.recompute()
+    # ... and the band is still ONE cell per seam, leader or no leader
     for s in strips:
         for q in (s.PatchA, s.PatchB):
             e, ss = side_and_end(s, q)
@@ -326,8 +319,7 @@ def test_two_junctions_on_one_axis_still_leave_the_band_one_cell(doc):
 
 ALL_TESTS = [
     test_a_patch_without_a_leader_reads_exactly_what_it_always_read,
-    test_a_leader_cut_subdivides_the_axis_and_between_is_the_corner_cell,
-    test_the_band_stays_one_cell_under_a_leader_cut,
+    test_a_leader_cut_subdivides_the_axis_and_leaves_the_band_one_cell,
     test_a_leader_inside_the_band_is_inert_and_named,
     test_the_ring_loop_closes_at_one_cut_and_opens_at_two,
     test_two_junctions_on_one_axis_still_leave_the_band_one_cell,

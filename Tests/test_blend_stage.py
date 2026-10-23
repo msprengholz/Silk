@@ -636,75 +636,51 @@ def _blend_corrupted(doc, fixture, pole_idx, delta):
     return blend, patch_a, patch_b
 
 
-def test_oracle_flags_seam_offset(doc):
-    """B1 must fail: a row's left endpoint (C0 seam pole) shifted 0.5."""
+def test_oracle_flags_each_kind_of_broken_blend(doc):
+    """The three corruption checks, on ONE build of the ground-truth blend.
+
+    B1 must fail on a C0 seam pole shifted 0.5, B2 on a tangent pole shifted
+    0.5, B4 on an interior pole shifted 0.5 against the stored reference.  Same fixture and same question -- does the oracle
+    flag it -- so it is one build with the three corruptions applied and
+    restored in turn; each reading is checked on its own blend state.
+    """
     from SilkChecks import check_blend
 
+    errors, checks = [], []
     fixture = FreeCAD.openDocument(FIXTURE)
     FreeCAD.setActiveDocument(doc.Name)  # openDocument activates the fixture
     try:
         blend, pa, pb = _blend_corrupted(doc, fixture, 0, Vector(0.5, 0, 0))
-        results = check_blend(blend, pa, pb)
-        failed = [n for n, ok, _ in results if not ok]
-        if any(n.startswith("B1") for n in failed):
-            return {"pass": True, "errors": [],
-                    "checks": [f"{n}: {'ok' if ok else 'FAIL'}"
-                               for n, ok, _ in results]}
-        return {"pass": False,
-                "errors": [f"seam offset: expected B1 failure, got {failed}"],
-                "checks": [f"{n}: {'ok' if ok else 'FAIL'}"
-                           for n, ok, _ in results]}
-    finally:
-        FreeCAD.closeDocument(fixture.Name)
-        FreeCAD.setActiveDocument(doc.Name)
-
-
-def test_oracle_flags_tangent_break(doc):
-    """B2 must fail: a row's first tangent pole shifted 0.5 (B1 stays green)."""
-    from SilkChecks import check_blend
-
-    fixture = FreeCAD.openDocument(FIXTURE)
-    FreeCAD.setActiveDocument(doc.Name)  # openDocument activates the fixture
-    try:
-        blend, pa, pb = _blend_corrupted(doc, fixture, 1, Vector(0, 0.5, 0))
-        results = check_blend(blend, pa, pb)
-        failed = [n for n, ok, _ in results if not ok]
-        if any(n.startswith("B2") for n in failed):
-            return {"pass": True, "errors": [],
-                    "checks": [f"{n}: {'ok' if ok else 'FAIL'}"
-                               for n, ok, _ in results]}
-        return {"pass": False,
-                "errors": [f"tangent break: expected B2 failure, got {failed}"],
-                "checks": [f"{n}: {'ok' if ok else 'FAIL'}"
-                           for n, ok, _ in results]}
-    finally:
-        FreeCAD.closeDocument(fixture.Name)
-        FreeCAD.setActiveDocument(doc.Name)
-
-
-def test_oracle_flags_interior_pole(doc):
-    """B4 must fail: an interior pole shifted 0.5, reference = clean poles."""
-    from SilkChecks import check_blend
-
-    fixture = FreeCAD.openDocument(FIXTURE)
-    FreeCAD.setActiveDocument(doc.Name)  # openDocument activates the fixture
-    try:
-        blend, pa, pb = _blend_corrupted(doc, fixture, 14, Vector(0, 0, 0.5))
-        # reference = stored fixture blend poles (plain vectors, cross-doc ok)
+        clean = [FreeCAD.Vector(v) for v in blend.Poles]
         stored = fixture.BlendStrip.Poles
-        results = check_blend(blend, pa, pb, reference_poles=stored)
-        failed = [n for n, ok, _ in results if not ok]
-        if "B4_pole_match" in failed:
-            return {"pass": True, "errors": [],
-                    "checks": [f"{n}: {'ok' if ok else 'FAIL'}"
-                               for n, ok, _ in results]}
-        return {"pass": False,
-                "errors": [f"interior pole: expected B4 failure, got {failed}"],
-                "checks": [f"{n}: {'ok' if ok else 'FAIL'}"
-                           for n, ok, _ in results]}
+
+        def read(label, want_prefix, reference=None):
+            results = check_blend(blend, pa, pb, reference_poles=reference)
+            failed = [n for n, ok, _ in results if not ok]
+            checks.append("%s -> failed %s"
+                          % (label, failed or "nothing"))
+            if not any(n.startswith(want_prefix) for n in failed):
+                errors.append("%s: expected a %s failure, got %s"
+                              % (label, want_prefix, failed))
+            blend.Poles = [FreeCAD.Vector(v) for v in clean]
+            return results
+
+        # (1) seam offset -> B1
+        read("seam pole shifted 0.5", "B1")
+        # (2) tangent break -> B2
+        poles = list(clean)
+        poles[1] = poles[1] + Vector(0, 0.5, 0)
+        blend.Poles = poles
+        read("tangent pole shifted 0.5", "B2")
+        # (3) interior pole -> B4 against the stored reference
+        poles = list(clean)
+        poles[14] = poles[14] + Vector(0, 0, 0.5)
+        blend.Poles = poles
+        read("interior pole shifted 0.5", "B4_pole_match", reference=stored)
     finally:
         FreeCAD.closeDocument(fixture.Name)
         FreeCAD.setActiveDocument(doc.Name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 ALL_TESTS = [
@@ -714,7 +690,5 @@ ALL_TESTS = [
     test_unblend_clears_the_users_own_band_split,
     test_unblend_keeps_the_split_a_surviving_blend_needs,
     test_unblend_with_no_user_split_leaves_a_plain_patch,
-    test_oracle_flags_seam_offset,
-    test_oracle_flags_tangent_break,
-    test_oracle_flags_interior_pole,
+    test_oracle_flags_each_kind_of_broken_blend,
 ]

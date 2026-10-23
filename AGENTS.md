@@ -588,14 +588,46 @@ class CaptureConsole:
   `freecadcmd` does **not** work for this suite: the runner imports `FreeCADGui`, and the console build has no such module ("cannot import name 'Gui' from 'FreeCAD'").
   If the RPC at 127.0.0.1:9875 does not answer, the offscreen route (2) is the background fallback; a run that opens a window on the owner's screen is never acceptable.
 - Stage tests: `test_edge_stage.py` (E1–E4 oracle), `test_patch_stage.py` (P1–P4), `test_blend_stage.py` (B1–B4), `test_chain.py` (full 9→7→2→1 rebuild, the acceptance gate — always runs)
+- **The fast tier is the inner loop, and it is TIMED**: `python3 Tests/run_all.py --timings`
+  prints the per-module table, and that table is how a module earns or loses
+  its tier. Measured on the owner's session (2026-10-23, `--timings`, the
+  installed FreeCAD): **202 tests, 49 s of test time, ~58 s of wall** for the
+  whole default run. The `[timings]` line prints test time only; the ~9 s
+  wall on top of it is the run's own fixed cost, dominated by the `[leak]`
+  orphan count — `gc.collect()` (2.8 s) plus one pass over the 67 M tracked
+  objects of a long-lived GUI session (3.9 s, measured). A FRESHER FreeCAD
+  pays less for it; that cost grows with the session, not with the suite.
+  Before the slimming the same table read 243 tests / 256 s of test time /
+  267 s of wall.
+- **What moved out of the default tier, and why** (each carries `MANUAL = True`
+  and still runs on demand: `python3 Tests/run_all.py --manual`, or by name as
+  a filter). `Tests/test_manual_tier.py` pins the set in both directions and
+  still asserts every manual module imports and keeps tests: `test_rolling_corner`
+  (path (B), SUPERSEDED by ADR 0006), `test_corner_ring_parity` (parity sweep
+  over the maintainer's 40 stored corners), `test_example_documents` (opens and
+  re-derives the shipped examples), `test_inspection_toggles` and
+  `test_patch_gui_command` (GUI drives), and `test_runner_generations` — the two
+  tests whose answer needs a full sweep of the live heap (`ensure_fresh`'s
+  no-reimport guarantee and the orphan-growth bar), which cost 12.5 s of the
+  old tier for two numbers. The #72 single-generation guard, its planted-stale
+  control and the purge rules stay fast (0.9 s in total).
+- **Two reductions that are not deferrals**: `Tests/mcp_harness._uses_document`
+  skips creating a FreeCAD document for a test whose bytecode never reads it
+  (~8 s; each test that reads one still gets its OWN fresh document, nothing is
+  shared), and `Tests/silk_reload.live_module_objects` is the ONE heap sweep the
+  runner's orphan count, the #123 census and the growth guard share (it was
+  three, and the type test is `filter(ModuleType.__instancecheck__, ...)`:
+  2.4 s vs 5.7 s for the same 868 module objects). `rss_baseline_measure.collect_orphans(objects=...)`
+  lets the census's fast-tier calibration hand in a synthetic pair instead of
+  sweeping a real heap (123 s of the old tier).
 - Ops layer: `SilkWorkflowOps.py` (`create_edge`, `create_patch`, `create_blend`) — the only construction path; oracle: `SilkChecks.py` (`check_edge`, `check_patch`, `check_blend`)
 - The harness monkey-patches `popup.tipsDialog` to a console stub so unattended runs never block on modal popups
 - **Self-consistency guard (#67)**: every patch the ops layer or the panel hands back is asserted oracle-green on its OWN `list(p.Edges)` — in `test_patch_stage.test_patch_stored_cycle_is_self_consistent_for_all_24_orderings` (all 24 orderings, square + curved ground truth) and `test_task_panel.test_every_patch_the_panel_hands_back_is_oracle_green` (9 click orders + the pointed fill through the real panel). Feeding the oracle a hand-computed cycle instead of `p.Edges` is the trap: it hides a stored list that disagrees with its own geometry, which is exactly how the #67 defect shipped green.
 - RPC runs reload the workbench + test modules through `Tests/silk_reload.py` (#72). It purges by **file location** -- every `.py` under the Mod directory, all 57 of them, whatever they are called -- because the old `Silk*`/`Tests*`/`ArachNURBS*` name-prefix purge left ~25 helper modules (`ControlGrid44`, `ControlPoly4`, `CubicSurface_64`, ...) on an older generation of `ArachNURBS`, so a green suite validated one generation of the maths against surfaces built by another. It reloads **only when a Mod source actually changed** (mtime + size + sha256 per `.py`, fingerprint kept in `<tmp>/silk_reload_fingerprint_<pid>.json` because the FreeCAD process outlives the run), and it clears stale bindings in the persistent RPC `execute_code` namespace, which otherwise pins whole generations. Flags: `--force-reload`, `--keep-namespace`, `--rss-warn MB`. Every run prints `[reload]`, `[leak]` and `[rss]` lines.
-- **Single-generation guard (#72)**: `Tests/test_module_generation.py` asserts that after a reload every Mod-directory module's `AN` is the one `sys.modules["ArachNURBS"]` object, naming offenders; that test's absence is what let a split-brain suite report 168/168. The same file keeps the old prefix-only purge executable, so the bug cannot come back silently.
+- **Single-generation guard (#72)**: `Tests/test_module_generation.py` asserts that after a reload every Mod-directory module's `AN` is the one `sys.modules["ArachNURBS"]` object, naming offenders; that test's absence is what let a split-brain suite report 168/168. The same file keeps the old prefix-only purge executable, so the bug cannot come back silently, and the planted-stale control keeps the guard honest. The two ORPHAN tests that answer by sweeping the live heap moved to the MANUAL `Tests/test_runner_generations.py` (12.5 s of the fast tier for two numbers), so the guard module is 0.9 s.
 - **Frames outlive runs**: FreeCAD prints exceptions raised inside C++ slots (e.g. `SilkBlend._DeleteWatcher.slotDeletedObject` on document close) through the excepthook, and the traceback keeps every frame. A retained `run_tests` frame pinned the whole generation it ran against, so `run_tests` drops its references (`saved`, `func`, `doc`, `outcome`, `test_funcs`) when it finishes, and the runner clears `sys.last_traceback`.
 - **`Gui.addCommand` at import time was the memory leak (#72).** FreeCAD keeps one Python instance per registered command, and that instance pins the command class's `__globals__` — which is the module's dict, which holds `AN`. **30 legacy helper modules registered themselves at import**, so each reload minted a fresh `ArachNURBS` that could never be freed (~600 MB per run, measured). Those registrations are removed: the commands are retired (#50, `LEGACY_NAMES` "none may reappear"), and old documents restore from the **class**, which is untouched. Deliberately **kept**: `ControlPoly4` / `CubicCurve_4` (invoked by legacy `SilkWorkflow.runCommand`), the five visible commands, and `SilkWorkflow`'s own two registrations (a restore path — not worth an unverified change). The runner still reports `[leak] N orphaned ...` for anything left.
-- **The #123 baseline instrument** (`Tests/rss_baseline_measure.py`, MANUAL): runs the fast tier N times in ONE FreeCAD and records, per run, the runner's own `rss_before`/`rss_after`, the **inter-run gap** (`rss_before(N+1) - rss_after(N)` — the quantity the runner's own delta CANNOT see, because its window opens and closes inside one run), the orphan count, the reload flag, and a second reader's RSS sample of the same process. It ends with a census of the orphan module objects and **who holds them**. Run it against a live FreeCAD: `python3 Tests/rss_baseline_measure.py --runs 5`; the raw output goes to `/tmp/silk_rss_baseline/<stamp>/` and IS the measurement. The orphan count is a **RELOAD counter, not a per-run counter**: `orphan_generations()` counts module objects a purge dropped from `sys.modules` while something still held them, and a purge happens only when the Mod sources changed — so the count grows with reloads, not with runs. `Tests/test_rss_baseline_measure.py` calibrates the analyser (known slopes, known floors) and the census.
+- **The #123 baseline instrument** (`Tests/rss_baseline_measure.py`, MANUAL): runs the fast tier N times in ONE FreeCAD and records, per run, the runner's own `rss_before`/`rss_after`, the **inter-run gap** (`rss_before(N+1) - rss_after(N)` — the quantity the runner's own delta CANNOT see, because its window opens and closes inside one run), the orphan count, the reload flag, and a second reader's RSS sample of the same process. It ends with a census of the orphan module objects and **who holds them**. Run it against a live FreeCAD: `python3 Tests/rss_baseline_measure.py --runs 5`; the raw output goes to `/tmp/silk_rss_baseline/<stamp>/` and IS the measurement. The orphan count is a **RELOAD counter, not a per-run counter**: `orphan_generations()` counts module objects a purge dropped from `sys.modules` while something still held them, and a purge happens only when the Mod sources changed — so the count grows with reloads, not with runs. `Tests/test_rss_baseline_measure.py` calibrates the analyser (known slopes, known floors) and the census. The census hands `collect_orphans(objects=...)` a synthetic orphan pair: a real census costs 123 s because it asks `gc.get_referrers` once per orphan, and each of those is a full heap scan — the instrument's `objects=None` default still means the live heap, and the fast tier asserts that it does.
 
 ## Reference Files
 - `Resources/Test_files/Silk_2Boundaries.FCStd` — 9 sketches only (baseline)

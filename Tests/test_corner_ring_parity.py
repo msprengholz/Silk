@@ -27,6 +27,16 @@ reproduces his corner (it does not -- the ring LOOP is still ours, see
 assemble (it is refused, and the refusal is pinned by name).
 """
 
+# --- manual tier ------------------------------------------------------
+# A parity sweep over the maintainer's 40 stored quad corners, read from
+# the tracked .FCStd archives: an end-to-end rebuild plus a measurement
+# sweep, not a unit invariant.
+# So this module is NOT in the default (fast) tier. Run it with
+# `python3 Tests/run_all.py --manual` (or by name as a filter);
+# Tests/test_manual_tier.py asserts it stays importable and keeps tests.
+MANUAL = True
+
+
 import FreeCAD
 
 import Tests.reference_corner_diff as R

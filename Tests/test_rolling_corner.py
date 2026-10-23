@@ -36,6 +36,16 @@ THE FIXTURE is `Tests/cube_corner_model.py` (three exact planar square
 patches meeting like a cube corner), never Demo 01.
 """
 
+# --- manual tier ------------------------------------------------------
+# #119's path (B) split/triangle drive, marked SUPERSEDED by ADR 0006
+# (the corner is two patches, and the tri is a patch of its own). Each
+# test builds the corner end to end, so it is an end-to-end rebuild.
+# So this module is NOT in the default (fast) tier. Run it with
+# `python3 Tests/run_all.py --manual` (or by name as a filter);
+# Tests/test_manual_tier.py asserts it stays importable and keeps tests.
+MANUAL = True
+
+
 import FreeCAD
 import Part
 

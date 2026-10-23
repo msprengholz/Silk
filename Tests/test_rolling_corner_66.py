@@ -87,13 +87,22 @@ def _cut_residual(corner, strips, n=41):
 def test_the_rolling_corner_builds_the_66_the_member_and_the_fill(doc):
     """Path (A) builds all three surfaces the maintainer's file carries:
     the 66, the small triangular member, and -- AS THE OPTION -- its FreeCAD
-    `Surface::Filling` replacement.
+    `Surface::Filling` replacement; and the junction that cut leaves is
+    CLOSED.
 
     The default is the member's own `CubicSurface_64` (the construction the
     maintainer's files store), so the fill is built here by asking for it BY
     NAME. `Tests/test_corner_choices.py` pins the default and the pair of
-    reachable faces."""
+    reachable faces.
+
+    One build answers three questions that used to be three tests on the
+    same fixture (the surfaces, the C0 at the cut, and where the cut sits
+    relative to the junction): the fixture build is what either of them
+    cost, and none of the readings changed."""
     errors, checks = [], []
+    from SilkBlend import side_and_end
+    from SilkMachinery import band_extent, leader_pair, split_pair
+
     _fixture(doc)
     strips = _strips(doc)
     patch = doc.getObject("PatchA")
@@ -105,6 +114,7 @@ def test_the_rolling_corner_builds_the_66_the_member_and_the_fill(doc):
         return {"pass": False,
                 "errors": ["the rolling corner did not build"],
                 "checks": checks}
+    doc.recompute()
     corner, member = res["corner"], res["member"]
     checks.append("corner: %d poles, %d face(s)"
                   % (len(corner.Poles), len(corner.Shape.Faces)))
@@ -140,129 +150,42 @@ def test_the_rolling_corner_builds_the_66_the_member_and_the_fill(doc):
                               for w in res["written"]))
     if not res["written"]:
         errors.append("the rolling leader did not move any cut")
-    return {"pass": not errors, "errors": errors, "checks": checks}
 
-
-def test_the_leader_moves_the_corner_s_shape(doc):
-    """(A SUPPORTING READING, not the acceptance) The leader must change the
-    corner's shape, however the construction is judged.
-
-    The previous build measured the same spread (1.036938) with and
-    without its leader.  Here the leader is the band's own corner-side
-    cut, so the corner's spread MUST move.  A curvature spread does not
-    make a rolled corner (ADR 0006); it only says the cut is doing
-    something to the surface.
-
-    THE TWO CORNERS ARE TWO OBJECTS.  The rolling build REUSES the
-    corner object of the ring it rolls -- the corner follows the
-    leader -- so the shipped corner is built in its OWN document and
-    the comparison is between two different corners, never a corner
-    against itself."""
-    errors, checks = [], []
-    _fixture(doc)
-    strips = _strips(doc)
-    # the shipped corner, in its own document
-    sdoc = FreeCAD.newDocument("ShippedCornerDoc")
-    try:
-        ccm.build_cube_corner_model(sdoc)
-        sdoc.recompute()
-        sdoc.recompute()
-        sstrips = [sdoc.getObject(n) for n in ("B_AB", "B_BC", "B_CA")]
-        shipped = create_corner_blend(*sstrips, name="Shipped",
-                                      construction="shipped")
-        sdoc.recompute()
-        s_kmax, s_kmin, s_ratio = _spread(shipped)
-        s_poles = [FreeCAD.Vector(v) for v in shipped.Poles]
-        checks.append("the shipped corner: k_max %.6g, k_min %.6g, ratio %.6g"
-                      % (s_kmax, s_kmin, s_ratio))
-        patch = doc.getObject("PatchA")
-        rolled = [s for s in strips
-                  if s.PatchA is patch or s.PatchB is patch]
-        # the ops layer builds into the ACTIVE document
-        FreeCAD.setActiveDocument(doc.Name)
-        res = create_rolling_corner_66(strips, patch, leader=0.25,
-                                       seams=rolled, name="Roll")
-        doc.recompute()
-        if res is None:
-            return {"pass": False,
-                    "errors": ["the rolling corner did not build"],
-                    "checks": checks}
-        r_kmax, r_kmin, r_ratio = _spread(res["corner"])
-        checks.append("the rolling corner: k_max %.6g, k_min %.6g, ratio %.6g"
-                      % (r_kmax, r_kmin, r_ratio))
-        if abs(r_ratio - s_ratio) < 1e-6:
-            errors.append("the leader did not move the corner's shape "
-                          "(ratio %.6g both ways)" % s_ratio)
-        # and the corner fill's poles are not the shipped ones
-        same = all((a - b).Length < 1e-12 for a, b in
-                   zip(s_poles, list(res["corner"].Poles)))
-        checks.append("the poles are the shipped ones: %s"
-                      % ("yes" if same else "no"))
-        if same:
-            errors.append("the rolling corner is the shipped corner, pole "
-                          "for pole")
-        return {"pass": not errors, "errors": errors, "checks": checks}
-    finally:
-        FreeCAD.closeDocument(sdoc.Name)
-
-
-def test_the_junction_at_the_cut_is_closed(doc):
-    """The corner fill's boundary IS each blend's cut edge (path (B)
-    left 0.2915 mm there)."""
-    errors, checks = [], []
-    _fixture(doc)
-    strips = _strips(doc)
-    patch = doc.getObject("PatchA")
-    rolled = [s for s in strips if s.PatchA is patch or s.PatchB is patch]
-    res = create_rolling_corner_66(strips, patch, leader=0.25, seams=rolled,
-                                   name="Roll")
-    doc.recompute()
-    if res is None:
-        return {"pass": False,
-                "errors": ["the rolling corner did not build"],
-                "checks": checks}
-    worst, why = _cut_residual(res["corner"], strips)
+    # THE JUNCTION AT THE CUT IS CLOSED: the corner fill's boundary IS each
+    # blend's cut edge (path (B) left 0.2915 mm there).
+    worst, why = _cut_residual(corner, strips)
     if worst is None:
-        return {"pass": False,
-                "errors": ["the ring's boundary rows cannot be named: %s"
-                           % why],
-                "checks": checks}
-    checks.append("the C0 at the cut: %.3e mm" % worst)
-    if worst > TOL:
-        errors.append("the corner fill does not meet the blends' cut edges "
-                      "(%.3e mm)" % worst)
-    return {"pass": not errors, "errors": errors, "checks": checks}
+        errors.append("the ring's boundary rows cannot be named: %s" % why)
+    else:
+        checks.append("the C0 at the cut: %.3e mm" % worst)
+        if worst > TOL:
+            errors.append("the corner fill does not meet the blends' cut "
+                          "edges (%.3e mm)" % worst)
 
-
-def test_a_corner_without_the_rolling_construction_is_the_shipped_one(doc):
-    """The FALLBACK path is untouched: no rolling construction, no change.
-
-    Since #119 the corner stage's DEFAULT is the rolling construction,
-    so the shipped 66-with-the-spiderweb-member is selected BY NAME
-    (`construction="shipped"`).  This test pins that path: it is
-    reproducible, and it does not touch the patches' band edges."""
-    errors, checks = [], []
-    _fixture(doc)
-    strips = _strips(doc)
-    first = create_corner_blend(*strips, name="Shipped1",
-                               construction="shipped")
-    doc.recompute()
-    poles = [FreeCAD.Vector(v) for v in first.Poles]
-    second = create_corner_blend(*strips, name="Shipped2",
-                                construction="shipped")
-    doc.recompute()
-    same = all((a - b).Length < 1e-12 for a, b in
-               zip(poles, list(second.Poles)))
-    checks.append("the shipped corner twice: %s"
-                  % ("identical" if same else "DIFFERENT"))
-    if not same:
-        errors.append("the shipped corner is not reproducible")
-    # and the patches' band edges are untouched by the shipped corner
-    for name in ("PatchA", "PatchB", "PatchC"):
-        p = doc.getObject(name)
-        if abs(p.USplit1 - 0.1) > 1e-12 or abs(p.VSplit1 - 0.1) > 1e-12:
-            errors.append("%s's band edges moved without the rolling "
-                          "construction" % name)
+    # THE CUT IS THE LEADER'S DISTANCE FROM THE JUNCTION, read off the
+    # patch's own intervals (not off the property name), and the band edge
+    # it leaves behind is the setback (#128).
+    for s in rolled:
+        e2, ss2 = side_and_end(s, patch)
+        ext = band_extent(patch, e2, ss2)
+        if ext[0] is None:
+            errors.append("%s: the band's extent cannot be read" % patch.Name)
+            continue
+        (lo, hi), _band, corner_end = ext
+        away = lo if corner_end == 0 else 1.0 - hi
+        checks.append("%s on %s: the junction at the %d end, the band's cut "
+                      "starts %.4g from it (band edges %r %r, leader cuts "
+                      "%r %r)"
+                      % (s.Name, patch.Name, corner_end, away,
+                         split_pair(patch, "U"), split_pair(patch, "V"),
+                         leader_pair(patch, "U"), leader_pair(patch, "V")))
+        if abs(away - 0.25) > 1e-9:
+            errors.append("%s: the band's cut starts %.4g from the junction, "
+                          "not the leader 0.25" % (s.Name, away))
+        if 0.1 not in split_pair(patch, "U") and 0.1 not in split_pair(
+                patch, "V"):
+            errors.append("%s: the setback is gone from the member patch's "
+                          "band edges" % patch.Name)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -280,18 +203,31 @@ def test_the_default_corner_is_the_rolling_one(doc):
       * and differ from the fallback, pole for pole.
 
     The fallback (`construction="shipped"`) must leave the patches'
-    band edges alone: it is the construction of before #119, and its
-    byte-identity is pinned by the legacy-chain parity test
+    band edges alone, must be reproducible, and must be the corner of
+    before #119: its byte-identity is pinned by the legacy-chain parity test
     (`Tests/test_corner_blend.py::test_corner_blend_pole_parity_with_
     legacy_chain`) and by the member calibration
-    (`Tests/test_triangular_member_calibration.py`)."""
+    (`Tests/test_triangular_member_calibration.py`).
+
+    THE LEADER MOVES THE CORNER'S SHAPE -- a supporting reading, not the
+    acceptance (a curvature spread does not make a rolled corner, ADR
+    0006); it only says the cut is doing something to the surface.  It is
+    read on the same two corners, because the rolling build REUSES the
+    corner object of the ring it rolls: the shipped corner is built in its
+    OWN document, so the comparison is between two different corners.
+    (Measured: shipped 1.03694, rolling 1.8272.)
+
+    One fixture and one second document for all of it: the design switch,
+    the fallback's reproducibility, the band edges and the two shapes are
+    the same question asked of two corners."""
     errors, checks = [], []
     _fixture(doc)
     strips = _strips(doc)
     patch = doc.getObject("PatchA")
     rolled = [s for s in strips if s.PatchA is patch or s.PatchB is patch]
 
-    # the FALLBACK, in its own document: the shipped corner, untouched
+    # the FALLBACK, in its own document: the shipped corner, untouched,
+    # built twice
     sdoc = FreeCAD.newDocument("FallbackDoc")
     try:
         ccm.build_cube_corner_model(sdoc)
@@ -302,6 +238,18 @@ def test_the_default_corner_is_the_rolling_one(doc):
                                       construction="shipped")
         sdoc.recompute()
         s_poles = [FreeCAD.Vector(v) for v in shipped.Poles]
+        s_kmax, s_kmin, s_ratio = _spread(shipped)
+        again = create_corner_blend(*sstrips, name="Fallback2",
+                                    construction="shipped")
+        sdoc.recompute()
+        same_twice = all((a - b).Length < 1e-12 for a, b in
+                         zip(s_poles, list(again.Poles)))
+        checks.append("the shipped corner twice: %s"
+                      % ("identical" if same_twice else "DIFFERENT"))
+        if not same_twice:
+            errors.append("the shipped corner is not reproducible")
+        checks.append("the shipped corner: k_max %.6g, k_min %.6g, ratio %.6g"
+                      % (s_kmax, s_kmin, s_ratio))
         for name in ("PatchA", "PatchB", "PatchC"):
             p = sdoc.getObject(name)
             if abs(p.USplit1 - 0.1) > 1e-12 or abs(p.VSplit1 - 0.1) > 1e-12:
@@ -365,6 +313,13 @@ def test_the_default_corner_is_the_rolling_one(doc):
     if same:
         errors.append("the default corner is the shipped corner, pole for "
                       "pole")
+    # ... and the leader moves the corner's SHAPE
+    r_kmax, r_kmin, r_ratio = _spread(corner)
+    checks.append("the rolling corner: k_max %.6g, k_min %.6g, ratio %.6g"
+                  % (r_kmax, r_kmin, r_ratio))
+    if abs(r_ratio - s_ratio) < 1e-6:
+        errors.append("the leader did not move the corner's shape "
+                      "(ratio %.6g both ways)" % s_ratio)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -372,56 +327,21 @@ def test_the_leader_is_measured_from_the_junction_corner(doc):
     """The leader is a DISTANCE FROM THE JUNCTION, so a junction at the
     1 end of an axis mirrors the cut value (`1 - leader`).
 
-    Two halves, because one fixture cannot carry both:
+    The GEOMETRY half -- the cut the stage writes lies the leader's distance
+    from the junction on the member patch, the band edge it leaves behind is
+    the setback -- is measured in
+    `test_the_rolling_corner_builds_the_66_the_member_and_the_fill`, on the
+    build it already makes.
 
-      * the GEOMETRY, on the cube corner: the cut the stage writes lies the
-        leader's distance from the junction on the member patch, and the
-        band edge it leaves behind is the setback -- read off the patch's own
-        intervals, not off the property name;
-      * the MIRROR, on the 2x2 model (`Tests/corner_model.py`), whose
-        patches carry the junction at the 1 end of an axis: the arithmetic
-        is the same expression the stage writes with (`_leader_cut_home`),
-        called directly, because a 4-valent ring cannot build a rolling
-        corner at all (#128: it has no third, uncut seam and no
-        triangular remainder).
-    """
+    What is left here is the MIRROR, on the 2x2 model
+    (`Tests/corner_model.py`), whose patches carry the junction at the 1 end
+    of an axis: the arithmetic is the same expression the stage writes with
+    (`_leader_cut_home`), called directly, because a 4-valent ring cannot
+    build a rolling corner at all (#128: it has no third, uncut seam and no
+    triangular remainder)."""
     errors, checks = [], []
+    from SilkMachinery import band_extent
     from SilkBlend import side_and_end
-    from SilkMachinery import band_extent, leader_pair, split_pair
-
-    # (1) the geometry, on the cube corner
-    _fixture(doc)
-    strips = _strips(doc)
-    patch = doc.getObject("PatchA")
-    rolled = [s for s in strips if s.PatchA is patch or s.PatchB is patch]
-    res = create_rolling_corner_66(strips, patch, leader=0.25, seams=rolled,
-                                   name="Roll")
-    doc.recompute()
-    if res is None:
-        return {"pass": False,
-                "errors": ["the rolling corner did not build"],
-                "checks": checks}
-    for s in rolled:
-        e2, ss2 = side_and_end(s, patch)
-        ext = band_extent(patch, e2, ss2)
-        if ext[0] is None:
-            errors.append("%s: the band's extent cannot be read" % patch.Name)
-            continue
-        (lo, hi), (band_lo, band_hi), corner_end = ext
-        away = lo if corner_end == 0 else 1.0 - hi
-        checks.append("%s on %s: the junction at the %d end, the band's cut "
-                      "starts %.4g from it (band edges %r %r, leader cuts "
-                      "%r %r)"
-                      % (s.Name, patch.Name, corner_end, away,
-                         split_pair(patch, "U"), split_pair(patch, "V"),
-                         leader_pair(patch, "U"), leader_pair(patch, "V")))
-        if abs(away - 0.25) > 1e-9:
-            errors.append("%s: the band's cut starts %.4g from the junction, "
-                          "not the leader 0.25" % (s.Name, away))
-        if 0.1 not in split_pair(patch, "U") and 0.1 not in split_pair(
-                patch, "V"):
-            errors.append("%s: the setback is gone from the member patch's "
-                          "band edges" % patch.Name)
 
     # (2) the mirror, on the 2x2 model's junction at the 1 end
     from SilkWorkflowOps import (_leader_cut_home, seam_default_leader,
@@ -496,3 +416,11 @@ def test_a_leader_outside_the_seam_is_refused_by_name(doc):
     if len(doc.Objects) != before:
         errors.append("a refused rolling corner left objects in the tree")
     return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+ALL_TESTS = [
+    test_the_rolling_corner_builds_the_66_the_member_and_the_fill,
+    test_the_default_corner_is_the_rolling_one,
+    test_the_leader_is_measured_from_the_junction_corner,
+    test_a_leader_outside_the_seam_is_refused_by_name,
+]

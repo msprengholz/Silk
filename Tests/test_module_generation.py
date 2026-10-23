@@ -11,10 +11,14 @@ the purge carrying their old bindings while SilkPatch / SilkBlend /
 SilkMachinery were re-imported against a fresh ArachNURBS. A 168/168
 green suite was validating one generation of the maths against the
 surfaces built by another.
+
+The ORPHAN COUNT lives one tier up: `Tests/test_runner_generations.py`
+(MANUAL) holds the two tests whose answer needs a sweep of every object
+in the live interpreter -- 12.5 s of a 256 s fast tier here, and the
+number they assert is unchanged.
 """
 
 import contextlib
-import gc
 import io
 import os
 import sys
@@ -38,14 +42,20 @@ def _find_split_brain(modules=None):
 
     Returns (offenders, checked) where offenders is a list of
     (module name, its AN id, live ArachNURBS id).
+
+    The name set is read ONCE and passed in: `is_mod_module` builds it
+    (a walk of the Mod directory) when it is not given, so asking it per
+    module walked the directory ~600 times -- 1.8 s for a check whose
+    answer is a loop over sys.modules.
     """
     modules = sys.modules if modules is None else modules
+    names = silk_reload.mod_module_names()
     live_an = modules.get("ArachNURBS")
     offenders = []
     checked = []
     for name in sorted(modules):
         mod = modules[name]
-        if not silk_reload.is_mod_module(mod):
+        if not silk_reload.is_mod_module(mod, names):
             continue
         an = getattr(mod, "AN", None)
         if an is None:
@@ -456,101 +466,6 @@ def test_fingerprint_detects_edits_and_force_reload(doc):
     return _ok(checks, errors)
 
 
-def test_unchanged_sources_perform_no_reimport(doc):
-    """The runner's own guarantee, checked in the running process.
-
-    ensure_fresh() is called with the fingerprint already recorded, so
-    it must not touch sys.modules: same ArachNURBS object afterwards,
-    and nothing purged. (If it ever purged mid-suite, every later test
-    would run against a generation the collected functions do not
-    belong to -- so this is worth asserting, not just hoping.)
-    """
-    errors = []
-    checks = []
-    current = silk_reload.fingerprint()
-    silk_reload.save_fingerprint(current)
-    before = dict(sys.modules)
-    an_before = id(sys.modules.get("ArachNURBS"))
-    report = silk_reload.ensure_fresh(verbose=False)
-    checks.append("ensure_fresh: reloaded=%s reason=%s"
-                  % (report["reloaded"], report["reason"]))
-    if report["reloaded"]:
-        errors.append("ensure_fresh reloaded the suite mid-run: %s"
-                      % report["reason"])
-    if id(sys.modules.get("ArachNURBS")) != an_before:
-        errors.append("ArachNURBS object changed during a no-op reload check")
-    changed = [n for n in before if sys.modules.get(n) is not before[n]]
-    if changed:
-        errors.append("sys.modules entries changed during a no-op check: %r"
-                      % (changed,))
-    checks.append("no sys.modules entry changed")
-    return _ok(checks, errors)
-
-
-# ----------------------------------------------------------------------
-# orphans
-# ----------------------------------------------------------------------
-
-def test_no_new_orphan_module_generations(doc):
-    """A run must not pin module generations of its own.
-
-    An orphan here is a live module object under the Mod directory that
-    sys.modules no longer names: a generation something still holds after
-    a purge. They are reachable, not garbage, so gc cannot collect them --
-    which is why this counts objects.
-
-    The bar is GROWTH WITHIN THIS RUN, measured against the count
-    Tests/silk_reload.py recorded when the run started. An absolute zero
-    is not reachable from test code: FreeCAD keeps a Python instance per
-    command it registers with Gui.addCommand, and ~30 of them belong to
-    legacy Control*/Cubic* modules that nothing re-imports after a purge,
-    so those generations survive until FreeCAD restarts. What must never
-    happen is this run adding one of its own -- which is what a retained
-    run_tests frame did (its _patch_dialogs 'saved' list of
-    (module, popup.tipsDialog) pairs pinned every module it touched).
-
-    The interpreter's saved traceback is test-owned state and is cleared
-    here first: FreeCAD prints exceptions raised inside C++ slots
-    (SilkBlend._DeleteWatcher.slotDeletedObject during a document close)
-    through the excepthook, and a traceback keeps every frame of the run
-    that raised it -- pinning that run's whole generation.
-    """
-    errors = []
-    checks = []
-    silk_reload.clear_exception_state()
-    orphans = silk_reload.orphan_generations()
-    by_name = {}
-    for name, _ in orphans:
-        by_name[name] = by_name.get(name, 0) + 1
-    baseline = silk_reload.load_state().get("orphans")
-    checks.append("%d orphan generation(s) now, %s recorded when this run "
-                  "started" % (len(orphans), baseline))
-    if baseline is None:
-        checks.append("no baseline recorded -- nothing to compare")
-    elif len(orphans) > baseline:
-        errors.append(
-            "this run pinned %d new orphan generation(s) (baseline %d): %s"
-            % (len(orphans) - baseline, baseline,
-               ", ".join("%s x%d" % (n, by_name[n]) for n in sorted(by_name))))
-    else:
-        checks.append("no growth during this run")
-    if orphans:
-        checks.append("retained from earlier runs: %s"
-                      % ", ".join("%s x%d" % (n, by_name[n]) for n in sorted(by_name)))
-    # The current generation must be registered, not orphaned: a module
-    # object in sys.modules that is not the one gc sees is a split
-    # identity, which is what a half-applied reload looks like.
-    for name in ("ArachNURBS", "Silk_tooltips", "SilkPatch", "SilkMachinery"):
-        live = [o for o in gc.get_objects()
-                if isinstance(o, types.ModuleType) and o.__name__ == name]
-        if not live:
-            checks.append("%s: not imported in this run" % name)
-        elif sys.modules.get(name) not in live:
-            errors.append("%s: registered module object is not among the live "
-                          "ones (split identity)" % name)
-    return _ok(checks, errors)
-
-
 ALL_TESTS = [
     test_every_mod_module_shares_one_arachnurbs_generation,
     test_the_guard_fails_on_a_planted_stale_binding,
@@ -559,6 +474,4 @@ ALL_TESTS = [
     test_a_dead_document_binding_is_dropped_not_fatal,
     test_the_sweep_survives_a_runtime_error_from_inspection,
     test_fingerprint_detects_edits_and_force_reload,
-    test_unchanged_sources_perform_no_reimport,
-    test_no_new_orphan_module_generations,
 ]

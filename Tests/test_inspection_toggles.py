@@ -24,6 +24,15 @@ so exactly one place decides what an Edge hides.
 No continuity label is asserted anywhere in this module.
 """
 
+# --- manual tier ------------------------------------------------------
+# A GUI drive: it flips the panel's inspection toggles and reads the
+# visibility of real view objects.
+# So this module is NOT in the default (fast) tier. Run it with
+# `python3 Tests/run_all.py --manual` (or by name as a filter);
+# Tests/test_manual_tier.py asserts it stays importable and keeps tests.
+MANUAL = True
+
+
 import FreeCAD
 from FreeCAD import Gui
 

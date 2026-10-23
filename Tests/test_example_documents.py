@@ -63,6 +63,16 @@ more than the others:
     README says so -- and the count keeps that claim honest.
 """
 
+# --- manual tier ------------------------------------------------------
+# It opens and re-derives the shipped example fixtures from their
+# generators (five files plus a rebuild apiece). The fast tier keeps the
+# owner-model fixture guard (test_owner_model_fixture).
+# So this module is NOT in the default (fast) tier. Run it with
+# `python3 Tests/run_all.py --manual` (or by name as a filter);
+# Tests/test_manual_tier.py asserts it stays importable and keeps tests.
+MANUAL = True
+
+
 import FreeCAD
 import os
 import re

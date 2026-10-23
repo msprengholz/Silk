@@ -7,6 +7,16 @@ do the same for the replacement Silk_CreatePatch command (selection-
 driven, one type per process step), plus the getSubgrid API that
 lived in the comprehensive file (ported onto the unified Patch).
 """
+
+# --- manual tier ------------------------------------------------------
+# A GUI command drive, the sibling of the already-deferred
+# test_blend_gui_command / test_corner_gui_command.
+# So this module is NOT in the default (fast) tier. Run it with
+# `python3 Tests/run_all.py --manual` (or by name as a filter);
+# Tests/test_manual_tier.py asserts it stays importable and keeps tests.
+MANUAL = True
+
+
 import FreeCAD
 import Part
 from FreeCAD import Gui, Vector

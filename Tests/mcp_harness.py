@@ -82,11 +82,66 @@ def _restore_dialogs(saved):
         mod.tipsDialog = orig
 
 
+def _uses_document(func):
+    """True when the test function actually READS its document argument.
+
+    A fresh FreeCAD document costs ~0.07 s to create and ~0.03 s to close
+    (measured on the owner's session), and 82 of the 202 fast-tier tests
+    never touch the one they are handed -- the runner's plumbing, the
+    reload rules, the pure instruments, the icon and register checks.  That
+    is ~8 s of the tier spent creating and closing documents nobody reads.
+
+    The check is STATIC -- the function's own bytecode, nested code objects
+    included, because a comprehension over `doc.Objects` compiles into its
+    own code object with a LOAD_DEREF -- so it cannot depend on run order
+    or on what ran before (the fixture-lifetime hazard; this only ever
+    makes a test's document SHORTER-lived, never shared).  Anything the
+    check cannot parse returns True: a document is never skipped on a
+    guess.  A test that starts reading its document is handed None and
+    fails loudly, never silently.
+    """
+    import dis
+    try:
+        first = func.__code__.co_varnames[0]
+    except (AttributeError, IndexError):
+        return True
+    seen = set()
+
+    def walk(code):
+        if id(code) in seen:
+            return False
+        seen.add(id(code))
+        for ins in dis.get_instructions(code):
+            # LOAD_-prefixed, and TUPLE-aware: CPython 3.14 fuses two loads
+            # into one instruction whose argval is a pair of names
+            # (LOAD_FAST_BORROW_LOAD_FAST_BORROW), and 3.13 has
+            # LOAD_FAST_LOAD_FAST.  A false positive only costs the
+            # document the function would have been given anyway.
+            argval = ins.argval
+            names = argval if isinstance(argval, tuple) else (argval,)
+            if ins.opname.startswith("LOAD_") and first in names:
+                return True
+        return any(walk(const) for const in code.co_consts
+                   if hasattr(const, "co_varnames"))
+
+    try:
+        return walk(func.__code__)
+    except Exception:
+        return True
+
+
 def run_tests(*test_funcs, verbose=True, close_docs=True):
     """Run test functions, return JSON summary.
 
     Each test_func must accept a document and return a dict:
         {"pass": bool, "errors": [str, ...], "checks": [...]}
+
+    A test that never READS that argument is handed None and no document is
+    created for it (`_uses_document`, a static reading of its bytecode) --
+    ~0.1 s of create+close per test, ~8 s of the fast tier over the tests
+    whose subject is not document geometry.  Every test still gets its OWN
+    fresh document when it reads one; nothing is shared, so run order cannot
+    matter.
 
     close_docs=False leaves each test's document open (stage-2 visual
     inspection) and prints the list of open documents at the end.
@@ -125,7 +180,8 @@ def run_tests(*test_funcs, verbose=True, close_docs=True):
                   flush=True)
             try:
                 doc_name = "_mcp_test_" + func.__name__
-                doc = FreeCAD.newDocument(doc_name)
+                doc = (FreeCAD.newDocument(doc_name)
+                       if _uses_document(func) else None)
                 outcome = func(doc)
                 if not isinstance(outcome, dict):
                     outcome = {"pass": False, "errors": ["Test returned non-dict: " + str(type(outcome))], "checks": []}

@@ -46,17 +46,23 @@ EXPECTED_MANUAL = {
     "test_corner_gui_command",
     "test_corner_choices",
     "test_corner_orientation",
+    "test_corner_ring_parity",
     "test_cube_corner_3valent",
     "test_demo01_fixture_clickthrough",
     "test_demo01_rebuild",
     "test_display_grid",
+    "test_example_documents",
     "test_g2_feasibility",
+    "test_inspection_toggles",
     "test_junction_corner_hidden",
     "test_mutation_backfill",
     "test_mutation_unified",
     "test_oracle_band_cells",
     "test_parametric_rebuild",
+    "test_patch_gui_command",
     "test_restore_contract",
+    "test_rolling_corner",
+    "test_runner_generations",
     "test_runner_watchdog",
     "test_seam_resolver",
     "test_seam_side",
@@ -90,8 +96,9 @@ LOAD_BEARING_FAST = (
     "test_chain_corner_ground_truth",
     # the #67 patch stored-cycle self-consistency guard
     "test_patch_stored_cycle_is_self_consistent_for_all_24_orderings",
-    # the #72 single-generation guard
+    # the #72 single-generation guard, and its planted-stale control
     "test_every_mod_module_shares_one_arachnurbs_generation",
+    "test_the_guard_fails_on_a_planted_stale_binding",
     # the continuity-calibration soundness harness + its label guard
     "test_solve_uv_calibration",
     "test_oracle_known_g1_angle",
@@ -101,6 +108,17 @@ LOAD_BEARING_FAST = (
     "test_create_edge_3l",
     "test_create_patch_ground_truth",
     "test_create_blend_ground_truth",
+    # the corner as built: the ten roles, the pieces, the length rule
+    "test_the_cube_corner_produces_ten_roles",
+    "test_each_piece_is_the_patch_cell_the_rule_places",
+    "test_every_piece_edge_that_abuts_a_role_is_c0_to_it",
+    "test_the_leader_is_measured_from_the_junction_corner",
+    "test_the_default_corner_is_the_rolling_one",
+    # the tier gate itself
+    "test_manual_tier_is_exactly_the_expected_set",
+    "test_default_tier_keeps_the_load_bearing_tests",
+    # the census calibration (#123): the analysis, on a known input
+    "test_the_census_finds_an_orphan_and_names_its_holder",
 )
 
 

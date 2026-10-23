@@ -548,6 +548,36 @@ def rss_mb(pid=None):
     return None
 
 
+# The type test of the heap scan. `filter(ModuleType.__instancecheck__, objs)`
+# makes a C call per object where an `isinstance` inside a comprehension costs
+# a Python opcode per object. Measured on the owner's long-lived GUI session
+# (67 134 523 tracked objects): 2.4 s vs 5.7 s for the same 868 module objects
+# -- and this scan is the whole cost of the orphan count the runner prints.
+_MODULE_ISCHECK = types.ModuleType.__instancecheck__
+
+
+def live_module_objects(mod_dir=None, collect=True):
+    """{name: [module objects]} for every Mod module name alive right now.
+
+    ONE place for the heap sweep, so every reader shares it: the runner's
+    orphan count (`orphan_generations`, printed as the "[leak]" line), the
+    #123 census, and the fast-tier growth guard. Three copies of it were
+    three sweeps of the whole 67-million-object heap in one test run.
+
+    collect=True runs a full collection first, so what comes back means
+    "still pinned" rather than "not collected yet".
+    """
+    names = mod_module_names(mod_dir)
+    if collect:
+        gc.collect()
+    live = {}
+    for obj in filter(_MODULE_ISCHECK, gc.get_objects()):
+        name = getattr(obj, "__name__", None)
+        if name in names:
+            live.setdefault(name, []).append(obj)
+    return live
+
+
 def orphan_generations(mod_dir=None, modules=None, collect=True):
     """Live module objects that are NOT in sys.modules -- i.e. pinned.
 
@@ -561,15 +591,7 @@ def orphan_generations(mod_dir=None, modules=None, collect=True):
     traceback cycle from the run that just finished would otherwise be
     counted as a leak and make the number swing by a few per run.
     """
-    names = mod_module_names(mod_dir)
-    if collect:
-        gc.collect()
-    live = {}
-    for obj in gc.get_objects():
-        if isinstance(obj, types.ModuleType):
-            name = getattr(obj, "__name__", None)
-            if name in names:
-                live.setdefault(name, []).append(obj)
+    live = live_module_objects(mod_dir, collect=collect)
     modules = sys.modules if modules is None else modules
     out = []
     for name, objs in live.items():

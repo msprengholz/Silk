@@ -334,22 +334,26 @@ def verdict(records, analysis, floors):
 # the in-process census: what is pinned outside sys.modules, and by whom
 # ---------------------------------------------------------------------------
 
-def _module_dict_owners():
+def _module_dict_owners(objects=None):
     """{id(module.__dict__): module name} for every live module object.
 
     A module dict is the usual holder of another module OBJECT (a
     module-level `import X as Y` puts X into the importing module's
-    dict), so naming the dict's owner names the pinner.
+    dict), so naming the dict's owner names the pinner.  *objects* is the
+    list to scan (default None = the whole live heap); the census's
+    calibration hands in a synthetic pair instead of sweeping 67 million
+    objects.
     """
     import gc
     import types
+    is_module = types.ModuleType.__instancecheck__
     owners = {}
-    for obj in gc.get_objects():
-        if isinstance(obj, types.ModuleType):
-            try:
-                owners[id(obj.__dict__)] = obj.__name__
-            except Exception:
-                continue
+    for obj in filter(is_module, gc.get_objects() if objects is None
+                      else objects):
+        try:
+            owners[id(obj.__dict__)] = obj.__name__
+        except Exception:
+            continue
     return owners
 
 
@@ -384,7 +388,7 @@ def describe_referrer(ref, dict_owners=None):
     return type(ref).__name__
 
 
-def collect_orphans(mod_dir=None, deep=False):
+def collect_orphans(mod_dir=None, deep=False, objects=None):
     """The orphan module objects, and who holds them.
 
     Mirrors `Tests/silk_reload.orphan_generations` (the runner's own
@@ -395,27 +399,39 @@ def collect_orphans(mod_dir=None, deep=False):
     *deep* adds a rough "how much is pinned behind this" size estimate.
     It walks the object graph, which costs time, so the measurement
     leaves it off by default.
+
+    *objects* replaces the live heap as the census's input (None, the
+    default, is `gc.get_objects()` and keeps the gc.collect()).  The
+    instrument's calibration in `Tests/test_rss_baseline_measure.py`
+    hands in a synthetic orphan pair instead: on a real session's heap
+    the census costs 123 s, because it asks `gc.get_referrers` once per
+    orphan and each of those is a full heap scan.  The instrument itself
+    still runs the live sweep; a fast-tier test must not.
     """
     import gc
     import sys
     import types
     helper = _helper()
     names = helper.mod_module_names(mod_dir)
-    gc.collect()
+    if objects is None:
+        gc.collect()
+        objects = gc.get_objects()
+    else:
+        objects = list(objects)
+    is_module = types.ModuleType.__instancecheck__
     live = {}
-    for obj in gc.get_objects():
-        if isinstance(obj, types.ModuleType):
-            name = getattr(obj, "__name__", None)
-            if name in names:
-                live.setdefault(name, []).append(obj)
+    for obj in filter(is_module, objects):
+        name = getattr(obj, "__name__", None)
+        if name in names:
+            live.setdefault(name, []).append(obj)
     # The containers this function builds hold the very objects we are
     # about to ask about, so they would show up as "owners".  They are
     # excluded by identity -- and so are this file's own frames, which
     # hold the objects as locals.
-    mine = {id(live)}
+    mine = {id(live), id(objects)}
     for objs in live.values():
         mine.add(id(objs))
-    dict_owners = _module_dict_owners()
+    dict_owners = _module_dict_owners(objects)
     out = []
     for name, objs in sorted(live.items()):
         registered = sys.modules.get(name)

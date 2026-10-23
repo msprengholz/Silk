@@ -26,7 +26,10 @@ WHAT IS PINNED HERE
      to the arithmetic (1e-16 mm on the unit cube, 1e-14 on the demo's
      200 mm model) because a piece is cut on knot lines the patch already
      carries; an edge that abuts nothing is REPORTED as such rather than
-     counted as a failure.
+     counted as a failure.  Only roles whose BOUNDING BOX reaches the edge
+     are measured -- the exact residual is never smaller than that gap, so
+     the filter cannot hide contact, and it took the table from 8.8 s to
+     2.5 s.
 
   4. NOTHING ELSE MOVED.  The shipped construction still builds no pieces
      (it has no separate member) and is the 6x6 of before; the 4-valent
@@ -48,6 +51,7 @@ instrument `Tests/corner_ten_roles.py`, which builds the corner in the GUI,
 prints the same table and leaves the document open.
 """
 
+import FreeCAD
 import Part
 
 import SilkCorner as SC
@@ -107,8 +111,15 @@ def _roles(doc, corner):
     return out
 
 
-def _edge_residual(edge, shape, stations=41):
-    """The worst distance from `edge`'s sampled points to `shape`."""
+def _edge_residual(edge, shape, stations=21):
+    """The worst distance from `edge`'s sampled points to `shape`.
+
+    21 stations, not 41: the reading is the arithmetic floor (5.6e-17 ..
+    1.4e-14 mm) and the question the table answers is whether a piece edge
+    lies on the surface it abuts -- a piece on the WRONG surface is off by
+    the cell's own size (0.15-0.9 mm on this fixture), not by a fraction of
+    the sampling step.  Measured: 41 stations cost 3.0 s of the fast tier,
+    21 cost 1.6 s, both reading 5.551e-17 mm worst."""
     worst = 0.0
     for i in range(stations):
         t = i / float(stations - 1)
@@ -118,32 +129,66 @@ def _edge_residual(edge, shape, stations=41):
     return worst
 
 
+def _bbox_gap(bb_a, bb_b):
+    """The distance between two bounding boxes (0 when they overlap)."""
+    total = 0.0
+    for lo_a, hi_a, lo_b, hi_b in (
+            (bb_a.XMin, bb_a.XMax, bb_b.XMin, bb_b.XMax),
+            (bb_a.YMin, bb_a.YMax, bb_b.YMin, bb_b.YMax),
+            (bb_a.ZMin, bb_a.ZMax, bb_b.ZMin, bb_b.ZMax)):
+        if hi_a < lo_b:
+            total += (lo_b - hi_a) ** 2
+        elif hi_b < lo_a:
+            total += (lo_a - hi_b) ** 2
+    return total ** 0.5
+
+
 def _nearest_by_edge(piece, roles, tol=1e-6):
     """Per edge of `piece`: (edge, the role it abuts, that role's residual).
 
     A role is a candidate when it has a surface and is not the piece itself;
     the residual is the worst over the edge's stations, so a reported zero
     means the whole edge lies on that surface and a role further than `tol`
-    means the edge abuts nothing among the corner's roles."""
+    means the edge abuts nothing among the corner's roles.
+
+    Only roles whose BOUNDING BOX reaches the edge are measured: the exact
+    residual is never smaller than that gap, so a role further than `tol`
+    cannot abut the edge.  Nine roles x 41 stations x `distToShape` per
+    piece edge was 8.8 s; on this fixture 1-3 roles survive the filter.
+    When nothing reaches the edge, the bbox-nearest role is measured once
+    so the reported "nearest" is still a real distance to a named role."""
     out = []
     for edge in piece.Shape.Edges:
-        best = None
+        ebb = edge.BoundBox
+        ranked = []
         for name, obj in roles:
             if obj is piece or obj is None:
                 continue
-            if not getattr(obj, "Shape", None) or not obj.Shape.Faces:
+            shape = getattr(obj, "Shape", None)
+            if not shape or not shape.Faces:
                 continue
-            got = _edge_residual(edge, obj.Shape)
+            ranked.append((_bbox_gap(ebb, shape.BoundBox), name, shape))
+        if not ranked:
+            continue
+        ranked.sort(key=lambda rec: rec[0])
+        touching = [rec for rec in ranked if rec[0] <= tol]
+        candidates = touching or ranked[:1]
+        best = None
+        for _gap, name, shape in candidates:
+            got = _edge_residual(edge, shape)
             if best is None or got < best[1]:
                 best = (name, got)
-        if best is None:
-            continue
         out.append((edge, best[0] if best[1] <= tol else None, best[1]))
     return out
 
 
 def test_the_cube_corner_produces_ten_roles(doc):
-    """3 blends + the tri + the quad + FIVE preserved pieces."""
+    """3 blends + the tri + the quad + FIVE preserved pieces, recorded on
+    the corner, and the document settles.
+
+    One build answers both questions (the roles, and that they are on
+    `CornerBlend.Pieces` and that nothing stays Touched) -- they were two
+    tests on the same fixture, and the fixture build is the cost."""
     errors, checks = [], []
     _strips, corner = _corner(doc)
     if corner is None or not corner.Poles:
@@ -179,13 +224,47 @@ def test_the_cube_corner_produces_ten_roles(doc):
                       "area %.6f"
                       % (p.Name, p.Role, p.Patch.Name, p.CellU, p.CellV,
                          p.U0, p.U1, p.V0, p.V1, p.Shape.Area))
+    checks.append("corner.Pieces: %s" % [p.Name for p in pieces])
+    for p in pieces:
+        if getattr(p, "object_type", "") != "PreservedPiece":
+            errors.append("%s is a %r, not a PreservedPiece"
+                          % (p.Name, getattr(p, "object_type", "")))
+        if p.Patch is None:
+            errors.append("%s names no patch" % p.Name)
+        if not p.Shape.isValid():
+            errors.append("%s's shape is invalid" % p.Name)
+    doc.recompute()
+    doc.recompute()
+    touched = [o.Name for o in doc.Objects if "Touched" in o.State]
+    checks.append("after two recomputes: %d Touched, %d objects"
+                  % (len(touched), len(doc.Objects)))
+    if touched:
+        errors.append("the document does not settle: %r" % touched[:6])
+    # a second ask returns the same corner rather than a second member, a
+    # second quad and five more pieces.
+    stale = create_corner_blend(*[doc.getObject(n)
+                                  for n in ("B_AB", "B_BC", "B_CA")],
+                                name="TenAgain")
+    checks.append("a second ask returns the same corner: %s; pieces %d"
+                  % (stale is corner, len(corner.Pieces or [])))
+    if stale is not corner:
+        errors.append("a second ask built a second corner (%s)"
+                      % getattr(stale, "Name", None))
+    if len(corner.Pieces or []) != 5:
+        errors.append("the second ask changed the corner's pieces (%d)"
+                      % len(corner.Pieces or []))
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_each_piece_is_the_patch_cell_it_names(doc):
-    """The cell, the net and the AREA are the patch's own -- no re-fit."""
+def test_each_piece_is_the_patch_cell_the_rule_places(doc):
+    """The cell, the net and the AREA are the patch's own, and the rule
+    that chose the cell is the placement: one step BEYOND the inner cell.
+
+    Two readings of one build -- the piece against its patch, and the
+    rule against the patches' own arithmetic -- merged because the
+    fixture build is what either of them costs."""
     errors, checks = [], []
-    _strips, corner = _corner(doc)
+    strips, corner = _corner(doc)
     got = {}
     for p in (corner.Pieces or []):
         got[(p.Patch.Name, p.Role)] = p
@@ -224,13 +303,11 @@ def test_each_piece_is_the_patch_cell_it_names(doc):
         if abs(p.Shape.Area - area) > AREA_TOL:
             errors.append("%s %s: its area is %.9f, the cell's is %.9f"
                           % (patch_name, role, p.Shape.Area, area))
-    return {"pass": not errors, "errors": errors, "checks": checks}
 
-
-def test_the_pieces_are_the_cells_one_step_beyond_the_inner_cell(doc):
-    """The placement rule, against the patches' own arithmetic."""
-    errors, checks = [], []
-    strips, corner = _corner(doc)
+    # --- the rule that placed them ---------------------------------------
+    if corner is None or not corner.Poles:
+        return {"pass": False, "checks": [],
+                "errors": ["the corner stage built no corner"]}
     ordered, why = SM.corner_ring_3(strips)
     if ordered is None:
         return {"pass": False, "errors": [why], "checks": []}
@@ -311,55 +388,17 @@ def test_every_piece_edge_that_abuts_a_role_is_c0_to_it(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_the_pieces_are_recorded_on_the_corner_and_settle(doc):
-    """`CornerBlend.Pieces` names them, and the document settles."""
-    errors, checks = [], []
-    _strips, corner = _corner(doc)
-    pieces = list(corner.Pieces or [])
-    checks.append("corner.Pieces: %s" % [p.Name for p in pieces])
-    if len(pieces) != 5:
-        errors.append("the corner records %d pieces" % len(pieces))
-    for p in pieces:
-        if getattr(p, "object_type", "") != "PreservedPiece":
-            errors.append("%s is a %r, not a PreservedPiece"
-                          % (p.Name, getattr(p, "object_type", "")))
-        if p.Patch is None:
-            errors.append("%s names no patch" % p.Name)
-        if not p.Shape.isValid():
-            errors.append("%s's shape is invalid" % p.Name)
-    doc.recompute()
-    doc.recompute()
-    touched = [o.Name for o in doc.Objects if "Touched" in o.State]
-    checks.append("after two recomputes: %d Touched, %d objects"
-                  % (len(touched), len(doc.Objects)))
-    if touched:
-        errors.append("the document does not settle: %r" % touched[:6])
-    # a corner restored from a document older than the property carries no
-    # pieces, and a second ask returns the same corner rather than a second
-    # member, a second quad and five more pieces.
-    stale = create_corner_blend(*[doc.getObject(n)
-                                  for n in ("B_AB", "B_BC", "B_CA")],
-                                name="TenAgain")
-    checks.append("a second ask returns the same corner: %s; pieces %d"
-                  % (stale is corner, len(corner.Pieces or [])))
-    if stale is not corner:
-        errors.append("a second ask built a second corner (%s)"
-                      % getattr(stale, "Name", None))
-    if len(corner.Pieces or []) != 5:
-        errors.append("the second ask changed the corner's pieces (%d)"
-                      % len(corner.Pieces or []))
-    return {"pass": not errors, "errors": errors, "checks": checks}
+def test_the_shipped_construction_and_the_four_valent_corner_build_no_pieces(doc):
+    """The two constructions that have NO separate member: the shipped
+    fallback and a 4-valent ring.
 
-
-def test_the_shipped_construction_builds_no_pieces(doc):
-    """The fallback is the corner of before #130: no member, no pieces.
-
-    Built in a document of its own (the fixture names its objects, and a
-    second corner on the same strips is an idempotent no-op that returns the
-    FIRST one -- so a shipped corner asked for after a rolling one is the
-    rolling one).  The pole-for-pole identity with #128's corner is the
-    MANUAL `Tests/test_two_patch_corner.py`'s job; here the pins are what
-    the shipped construction does NOT build.
+    Both take the corner of before #130, so both are read here -- the
+    shipped one on the cube fixture of this module (the fixture names its
+    objects, and a second corner on the same strips is an idempotent no-op,
+    which is why it is asked for by name with `construction="shipped"`), the
+    4-valent one on `Tests/corner_model.py`.  The pole-for-pole identity
+    with #128's corner is the MANUAL `Tests/test_two_patch_corner.py`'s job;
+    here the pins are what these constructions do NOT build.
     """
     errors, checks = [], []
     _strips, shipped = _corner(doc, construction="shipped")
@@ -384,52 +423,50 @@ def test_the_shipped_construction_builds_no_pieces(doc):
                       % len(shipped.Pieces))
     if _member(doc, shipped) is not None:
         errors.append("the shipped corner built a triangular member")
-    return {"pass": not errors, "errors": errors, "checks": checks}
 
-
-def test_the_four_valent_corner_is_unchanged(doc):
-    """A 4-valent ring takes the shipped construction: no member, no
-    pieces, and the corner it always built."""
-    errors, checks = [], []
+    # the 4-valent ring, in a document of its own
     from Tests import corner_model as cm
-    cm.build_corner_model(doc)
-    doc.recompute()
-    doc.recompute()
-    strips = [doc.getObject(n) for n in ("B12", "B24", "B43", "B31")]
-    corner = create_corner_blend(*strips, name="Four")
-    doc.recompute()
-    doc.recompute()
-    if corner is None or not corner.Poles:
-        return {"pass": False, "checks": [],
-                "errors": ["the 4-valent corner stage built nothing"]}
-    coins = 0
-    for i in range(len(corner.Poles)):
-        for j in range(i):
-            if (corner.Poles[i] - corner.Poles[j]).Length <= 1e-9:
-                coins += 1
-    checks.append("4-valent corner: %d poles, %d coincident pair(s), "
-                  "construction %r, %d piece(s)"
-                  % (len(corner.Poles), coins, corner.Construction,
-                     len(corner.Pieces or [])))
-    if len(corner.Poles) != 36:
-        errors.append("the 4-valent corner has %d poles, not 36"
-                      % len(corner.Poles))
-    if coins:
-        errors.append("the 4-valent corner's 6x6 carries %d coincident pairs"
-                      % coins)
-    if corner.Pieces:
-        errors.append("the 4-valent corner built preserved pieces")
-    if _member(doc, corner) is not None:
-        errors.append("the 4-valent corner built a triangular member")
+    fdoc = FreeCAD.newDocument("FourValent")
+    try:
+        FreeCAD.setActiveDocument(fdoc.Name)
+        cm.build_corner_model(fdoc)
+        fdoc.recompute()
+        fdoc.recompute()
+        strips = [fdoc.getObject(n) for n in ("B12", "B24", "B43", "B31")]
+        corner = create_corner_blend(*strips, name="Four")
+        fdoc.recompute()
+        fdoc.recompute()
+        if corner is None or not corner.Poles:
+            errors.append("the 4-valent corner stage built nothing")
+        else:
+            coins = 0
+            for i in range(len(corner.Poles)):
+                for j in range(i):
+                    if (corner.Poles[i] - corner.Poles[j]).Length <= 1e-9:
+                        coins += 1
+            checks.append("4-valent corner: %d poles, %d coincident pair(s), "
+                          "construction %r, %d piece(s)"
+                          % (len(corner.Poles), coins, corner.Construction,
+                             len(corner.Pieces or [])))
+            if len(corner.Poles) != 36:
+                errors.append("the 4-valent corner has %d poles, not 36"
+                              % len(corner.Poles))
+            if coins:
+                errors.append("the 4-valent corner's 6x6 carries %d "
+                              "coincident pairs" % coins)
+            if corner.Pieces:
+                errors.append("the 4-valent corner built preserved pieces")
+            if _member(fdoc, corner) is not None:
+                errors.append("the 4-valent corner built a triangular member")
+    finally:
+        FreeCAD.closeDocument(fdoc.Name)
+        FreeCAD.setActiveDocument(doc.Name)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
 ALL_TESTS = [
     test_the_cube_corner_produces_ten_roles,
-    test_each_piece_is_the_patch_cell_it_names,
-    test_the_pieces_are_the_cells_one_step_beyond_the_inner_cell,
+    test_each_piece_is_the_patch_cell_the_rule_places,
     test_every_piece_edge_that_abuts_a_role_is_c0_to_it,
-    test_the_pieces_are_recorded_on_the_corner_and_settle,
-    test_the_shipped_construction_builds_no_pieces,
-    test_the_four_valent_corner_is_unchanged,
+    test_the_shipped_construction_and_the_four_valent_corner_build_no_pieces,
 ]
