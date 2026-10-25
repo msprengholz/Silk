@@ -41,7 +41,12 @@ from SilkMachinery import patch_side as _patch_side, band_cells, \
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
-iconPath = path_Silk_icons + "/BlendStrip.svg"
+# The `Silk_CreateBlend` command's Pixmap and the Blend tree icon: the owner's
+# own workflow icon (his `new/edgeblend.svg`, moved here 2026-10-25). The
+# legacy `BlendStrip.svg` it wore before is gone -- nothing else referenced it
+# (the `BlendStrip` restore shim is a class in THIS module, so it wears this
+# icon too). Absolute and `Silk_dummy.__file__` derived (#54).
+iconPath = path_Silk_icons + "/SilkBlend.svg"
 
 
 # Every behavioral object_type scan in the workbench accepts BOTH blend

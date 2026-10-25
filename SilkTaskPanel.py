@@ -124,8 +124,11 @@ path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
 # The `Silk_Guide` command's Pixmap (#94). Its OWN icon: it used to be the
 # workbench's `Silk.svg`, so the button that opens the wizard was visually
-# identical to the workbench entry. Absolute, derived from `Silk_dummy.__file__`
-# like every other Silk icon path (#54's relative-path defect).
+# identical to the workbench entry. The art is the wand of the owner's new
+# workflow family (2026-10-25) and sits beside the four workflow icons
+# (`SilkEdge.svg` / `SilkPatch.svg` / `SilkBlend.svg` / `SilkCorner.svg`).
+# Absolute, derived from `Silk_dummy.__file__` like every other Silk icon path
+# (#54's relative-path defect).
 iconPath = path_Silk_icons + "/SilkGuide.svg"
 
 

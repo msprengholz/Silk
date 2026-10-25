@@ -70,6 +70,10 @@ from SilkMachinery import build_subgrids, build_display, \
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
+# The `Silk_CreatePatch` command's Pixmap and the Patch tree icon: the owner's
+# own workflow icon (his `new/SinglePatch.svg`, moved here 2026-10-25) under
+# the name the workbench uses. Absolute and `Silk_dummy.__file__` derived
+# (#54).
 iconPath = path_Silk_icons + "/SilkPatch.svg"
 
 PATCH_TOOLTIP = ('Create a unified Patch from 3 or 4 selected '

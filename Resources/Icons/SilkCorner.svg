@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 200 200"
+   width="100%"
+   height="100%"
+   version="1.1"
+   id="svg25"
+   sodipodi:docname="gemini-svg.svg"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview25"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="2.6445794"
+     inkscape:cx="21.931654"
+     inkscape:cy="113.81772"
+     inkscape:window-width="1920"
+     inkscape:window-height="1011"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg25" />
+  <defs
+     id="defs1">
+    <style
+       id="style1">
+      .outer-path {
+        fill: none;
+        stroke: #b37400;
+        stroke-width: 3.5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .edge-blend-fill {
+        fill: #c7d2fe;
+        stroke: none;
+      }
+      .corner-blend-fill {
+        fill: #f48fb1;
+        stroke: none;
+      }
+      .structure-line {
+        fill: none;
+        stroke: #0c5157;
+        stroke-width: 3;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .node-circle {
+        fill: #ffffff;
+        stroke: #0c5157;
+        stroke-width: 3;
+      }
+    </style>
+  </defs>
+  <!-- Background / Transparent container -->
+  <rect
+     width="200"
+     height="200"
+     fill="none"
+     id="rect1" />
+  <!-- 1. Fills for Edge Blends (Vertical & Horizontal Strips) -->
+  <rect
+     x="82.988434"
+     y="17.237831"
+     width="34.011566"
+     height="165.26218"
+     class="edge-blend-fill"
+     id="rect2" />
+  <rect
+     x="17.232141"
+     y="83.193153"
+     width="165.51981"
+     height="34.180302"
+     class="edge-blend-fill"
+     id="rect3" />
+  <!-- 2. Fill for Central Corner Blend -->
+  <rect
+     x="83"
+     y="83"
+     width="34"
+     height="34"
+     class="corner-blend-fill"
+     id="rect4" />
+  <!-- 3. Outer Boundary Paths (Yellow/Brown) -->
+  <!-- Top Edge -->
+  <path
+     d="M 22 22 Q 100 12 178 22"
+     class="outer-path"
+     id="path4" />
+  <!-- Bottom Edge -->
+  <path
+     d="M 22 178 Q 100 188 178 178"
+     class="outer-path"
+     id="path5" />
+  <!-- Left Edge -->
+  <path
+     d="M 22 22 Q 12 100 22 178"
+     class="outer-path"
+     id="path6" />
+  <!-- Right Edge -->
+  <path
+     d="M 178 22 Q 188 100 178 178"
+     class="outer-path"
+     id="path7" />
+  <!-- 4. Inner Structure Lines for Edge & Corner Blends (Dark Teal) -->
+  <!-- Vertical Strip Inner Boundaries -->
+  <line
+     x1="83"
+     y1="22"
+     x2="83"
+     y2="178"
+     class="structure-line"
+     id="line7" />
+  <line
+     x1="117"
+     y1="22"
+     x2="117"
+     y2="178"
+     class="structure-line"
+     id="line8" />
+  <!-- Horizontal Strip Inner Boundaries -->
+  <line
+     x1="22"
+     y1="83"
+     x2="178"
+     y2="83"
+     class="structure-line"
+     id="line9" />
+  <line
+     x1="22"
+     y1="117"
+     x2="178"
+     y2="117"
+     class="structure-line"
+     id="line10" />
+  <!-- 5. Node Circle Markers -->
+  <!-- Outer 4 Corners -->
+  <circle
+     cx="22"
+     cy="22"
+     r="5"
+     class="node-circle"
+     id="circle10" />
+  <circle
+     cx="178"
+     cy="22"
+     r="5"
+     class="node-circle"
+     id="circle11" />
+  <circle
+     cx="22"
+     cy="178"
+     r="5"
+     class="node-circle"
+     id="circle12" />
+  <circle
+     cx="178"
+     cy="178"
+     r="5"
+     class="node-circle"
+     id="circle13" />
+  <!-- Top Edge Blend Boundary Points -->
+  <circle
+     cx="82.988434"
+     cy="17.237831"
+     r="4.5"
+     class="node-circle"
+     id="circle14" />
+  <circle
+     cx="117.20596"
+     cy="17.243298"
+     r="4.5"
+     class="node-circle"
+     id="circle15" />
+  <!-- Bottom Edge Blend Boundary Points -->
+  <circle
+     cx="82.988434"
+     cy="182.5"
+     r="4.5"
+     class="node-circle"
+     id="circle16" />
+  <circle
+     cx="117"
+     cy="182.5"
+     r="4.5"
+     class="node-circle"
+     id="circle17" />
+  <!-- Left Edge Blend Boundary Points -->
+  <circle
+     cx="17.5"
+     cy="83"
+     r="4.5"
+     class="node-circle"
+     id="circle18" />
+  <circle
+     cx="17.5"
+     cy="117"
+     r="4.5"
+     class="node-circle"
+     id="circle19" />
+  <!-- Right Edge Blend Boundary Points -->
+  <circle
+     cx="182.75716"
+     cy="82.810074"
+     r="4.5"
+     class="node-circle"
+     id="circle20" />
+  <circle
+     cx="182.75148"
+     cy="117.38965"
+     r="4.5"
+     class="node-circle"
+     id="circle21" />
+  <!-- Inner Corner Blend Junction Points (4x4 grid around center) -->
+  <circle
+     cx="83"
+     cy="83"
+     r="4.5"
+     class="node-circle"
+     id="circle22" />
+  <circle
+     cx="117"
+     cy="83"
+     r="4.5"
+     class="node-circle"
+     id="circle23" />
+  <circle
+     cx="83"
+     cy="117"
+     r="4.5"
+     class="node-circle"
+     id="circle24" />
+  <circle
+     cx="117"
+     cy="117"
+     r="4.5"
+     class="node-circle"
+     id="circle25" />
+</svg>

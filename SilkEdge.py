@@ -20,7 +20,12 @@ moreInfo = (Silk_tooltips.ControlPoly4_baseTip + Silk_tooltips.ControlPoly4_more
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
-iconPath = path_Silk_icons + "/BoundarySpline.svg"
+# The `Silk_CreateEdge` command's Pixmap and the Edge tree icon: the owner's
+# own workflow icon (his `new/edge.svg`, moved here 2026-10-25), not the
+# legacy boundary-spline icon it wore before. That file STAYS on disk: the
+# `BoundarySpline` restore shim and `SilkWorkflow` still wear it on the tree
+# of an old document. Absolute and `Silk_dummy.__file__` derived (#54).
+iconPath = path_Silk_icons + "/SilkEdge.svg"
 
 
 # ---- sketch classification (#90) -----------------------------------------

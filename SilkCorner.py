@@ -47,11 +47,16 @@ from SilkMachinery import (build_intervals, axis_intervals, split_pair,
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
 path_Silk_icons = os.path.join(path_Silk, "Resources", "Icons")
-iconPath = path_Silk_icons + "/ControlGrid66_4Sub.svg"
+# The `Silk_CreateCornerBlend` command's Pixmap and the CornerBlend tree icon:
+# the owner's own workflow icon (his `new/cornerblend.svg`, moved here
+# 2026-10-25), not the ControlGrid-family one it wore before. That file STAYS
+# on disk: the `ControlGrid66_4Sub` restore shim still wears it on the tree of
+# an old document. Absolute and `Silk_dummy.__file__` derived (#54).
+iconPath = path_Silk_icons + "/SilkCorner.svg"
 # The `Silk_CornerFill` command's own Pixmap (#96, owner decision D3: the
 # command joined the visible set, so it now stands BESIDE the corner blend in
-# the toolbar). Its own file, not the corner blend's `ControlGrid66_4Sub.svg`:
-# two adjacent buttons must not wear the same picture (#54/#94, the defect
+# the toolbar). Its own file, not the corner blend's `SilkCorner.svg`: two
+# adjacent buttons must not wear the same picture (#54/#94, the defect
 # `test_icon_dedication` exists to prevent). Absolute and `Silk_dummy.__file__`
 # derived, like every other Silk icon path (#54).
 corner_fill_icon_path = path_Silk_icons + "/SilkCornerFill.svg"

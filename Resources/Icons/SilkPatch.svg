@@ -1,12 +1,110 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <!-- Dedicated unified Patch icon (#54): a filled surface patch with a
-       coarse grid, distinct from the ControlGrid-family icons (control
-       points + spline). Light tile so it reads on both light and dark
-       themes. Orange corner is the accent. -->
-  <rect width="64" height="64" fill="#eceef1" rx="8" ry="8"/>
-  <rect width="64" height="64" fill="none" stroke="#c9d0d8" stroke-width="1" rx="8" ry="8"/>
-  <path d="M13 19 L51 14 L54 49 L16 53 Z" fill="#d7e9fa" stroke="#2f5270" stroke-width="3" stroke-linejoin="round"/>
-  <path d="M13 19 C23 29 41 28 51 14 M16 53 C26 42 43 41 54 49" fill="none" stroke="#2f5270" stroke-width="1.5"/>
-  <path d="M22 21.5 C30 32 36 33 42 24.5 M19 40 C31 36 47 36 52 31.5" fill="none" stroke="#2f5270" stroke-width="1.5"/>
-  <circle cx="13" cy="19" r="4" fill="#f6b26b" stroke="#b95a00" stroke-width="1.5"/>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   id="svg-02"
+   class="w-40 h-40"
+   viewBox="0 0 200 200"
+   version="1.1"
+   sodipodi:docname="SinglePatch.svg"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs8" />
+  <sodipodi:namedview
+     id="namedview8"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="1.87"
+     inkscape:cx="51.871658"
+     inkscape:cy="144.38503"
+     inkscape:window-width="1920"
+     inkscape:window-height="1011"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg-02" />
+  <!-- Isoparametric Dashed Lines -->
+  <path
+     d="M 70 32 Q 62 100 70 168"
+     fill="none"
+     stroke="#0c5157"
+     stroke-width="2.5"
+     stroke-dasharray="4 4"
+     id="path1"
+     style="stroke-dasharray:7.5,7.5;stroke-dashoffset:4" />
+  <path
+     d="M 130 32 Q 138 100 130 168"
+     fill="none"
+     stroke="#0c5157"
+     stroke-width="2.5"
+     stroke-dasharray="4 4"
+     id="path2"
+     style="stroke-dasharray:7.5,7.5;stroke-dashoffset:3.5" />
+  <path
+     d="m 27.852199,77.005252 c 48,6.666667 95.454991,6.695839 143.454991,0.02917"
+     fill="none"
+     stroke="#0c5157"
+     stroke-width="2.5"
+     stroke-dasharray="4 4"
+     id="path3"
+     style="stroke-dasharray:7.5, 7.5;stroke-dashoffset:0"
+     sodipodi:nodetypes="cc" />
+  <path
+     d="m 25.369181,127.31454 c 41.857398,-9.87522 104.307889,-8.56215 144.828379,0.51096"
+     fill="none"
+     stroke="#0c5157"
+     stroke-width="2.5"
+     stroke-dasharray="4 4"
+     id="path4"
+     style="stroke-dasharray:7.5, 7.5;stroke-dashoffset:7.5"
+     sodipodi:nodetypes="cc" />
+  <!-- Outer Patch Boundaries (Gold) -->
+  <path
+     d="M 28 32 Q 100 22 172 32 Q 180 100 172 168 Q 100 178 28 168 Q 20 100 28 32 Z"
+     fill="none"
+     stroke="#a36200"
+     stroke-width="4.5"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     id="path5" />
+  <!-- Corner Nodes -->
+  <circle
+     cx="28"
+     cy="32"
+     r="6"
+     fill="#ffffff"
+     stroke="#0c5157"
+     stroke-width="3.5"
+     id="circle5" />
+  <circle
+     cx="172"
+     cy="32"
+     r="6"
+     fill="#ffffff"
+     stroke="#0c5157"
+     stroke-width="3.5"
+     id="circle6" />
+  <circle
+     cx="28"
+     cy="168"
+     r="6"
+     fill="#ffffff"
+     stroke="#0c5157"
+     stroke-width="3.5"
+     id="circle7" />
+  <circle
+     cx="172"
+     cy="168"
+     r="6"
+     fill="#ffffff"
+     stroke="#0c5157"
+     stroke-width="3.5"
+     id="circle8" />
 </svg>

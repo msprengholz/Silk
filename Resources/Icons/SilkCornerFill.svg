@@ -1,13 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
   <!-- Dedicated `Silk_CornerFill` icon (#96, owner decision D3: the command
        joins the visible set). Its OWN file, NOT the corner blend's
-       `ControlGrid66_4Sub.svg`: the two commands now stand next to each other
+       `SilkCorner.svg`: the two commands now stand next to each other
        in the toolbar, and two adjacent buttons must not wear the same picture
        (#54/#94; that twin is the defect test_icon_dedication exists to
        prevent).
-       Palette follows the #54 light family (SilkPatch.svg / BlendStrip.svg /
-       SilkGuide.svg): light tile, blue geometry, orange accent, deepened
-       strokes, so it reads on light AND dark themes.
+       Palette follows the #54 light family (`Silk.svg` / `SilkGuide.svg`):
+       light tile, blue geometry, orange accent, deepened strokes, so it reads
+       on light AND dark themes. The four WORKFLOW icons are the owner's newer
+       family instead (`SilkEdge.svg` / `SilkPatch.svg` / `SilkBlend.svg` /
+       `SilkCorner.svg`: no tile, dark strokes on transparent).
        Picture: the four strips that meet at a corner (pale blue quadrants;
        the cross gap between them is the hole) with ONE Surface::Filling patch
        laid over the hole in the accent colour: the foreign object the
