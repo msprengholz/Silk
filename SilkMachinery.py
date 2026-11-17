@@ -301,6 +301,74 @@ NO_BAND_2 = 1.0
 NO_LEADER_1 = 0.0
 NO_LEADER_2 = 1.0
 
+# The cut LIST (#130). The four named scalar properties stay the FIRST cut
+# at each axis end -- an old document restores byte-identically, with no
+# migration -- and extra cuts owned by individual corners live in this
+# additive property. It is created only when a corner actually writes one,
+# so a patch nobody has cut twice keeps exactly the properties it had.
+CUT_LIST_PROP = "_CutList"
+CUT_OWNED_PROP = "_OwnedCuts"
+
+
+def ensure_cut_list(obj):
+    """Give `obj` the extra-cut list if it has none (#130).
+
+    Write-side only: readers use `getattr` and treat a missing property as
+    an empty list, so a document saved before the list existed restores
+    without gaining a property or changing a number.
+    """
+    if not hasattr(obj, CUT_LIST_PROP):
+        obj.addProperty("App::PropertyStringList", CUT_LIST_PROP,
+                        "Internal", "extra cuts: axis|end|owner|value")
+        obj.setEditorMode(CUT_LIST_PROP, 1)
+
+
+def cut_entries(p):
+    """`[(letter, end, owner, value), ...]` from a patch's cut list.
+
+    A missing property (every patch built before #130) is an empty list.
+    Malformed entries are skipped rather than breaking the reader.
+    """
+    out = []
+    for raw in (getattr(p, CUT_LIST_PROP, None) or []):
+        parts = str(raw).split("|")
+        if len(parts) != 4 or parts[0] not in ("U", "V") \
+                or parts[1] not in ("0", "1"):
+            continue
+        try:
+            value = float(parts[3])
+        except ValueError:
+            continue
+        out.append((parts[0], int(parts[1]), parts[2], value))
+    return out
+
+
+def cut_list_extras(p, letter):
+    """`[(end, value), ...]` of one axis's extra cuts, in stored order."""
+    return [(end, value) for ax, end, _owner, value in cut_entries(p)
+            if ax == letter]
+
+
+def add_cut_entry(p, letter, end, owner, value):
+    """Put one owned extra cut into `p`'s list, replacing that owner's
+    previous entry for the same axis end (a re-cut is not a second cut)."""
+    ensure_cut_list(p)
+    kept = [e for e in cut_entries(p)
+            if (e[0], e[1], e[2]) != (letter, end, owner)]
+    kept.append((letter, end, owner, float(value)))
+    setattr(p, CUT_LIST_PROP,
+            ["%s|%d|%s|%.17g" % e for e in kept])
+
+
+def remove_cut_entries(p, owner):
+    """Remove every extra cut owned by `owner`; return the entries gone."""
+    old = cut_entries(p)
+    gone = [e for e in old if e[2] == owner]
+    if gone:
+        setattr(p, CUT_LIST_PROP,
+                ["%s|%d|%s|%.17g" % e for e in old if e[2] != owner])
+    return gone
+
 
 def band_edge(value):
     """`value` as a band edge, or None when this end carries none.
@@ -326,23 +394,29 @@ def axis_splits(s1, s2):
     return sorted(set(edges))
 
 
-def build_intervals(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2):
+def build_intervals(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2, extra=()):
     """The intervals one axis is cut into: its two band edges plus, when
-    they are set, its two leader cuts (#119). A patch with no leader reads
-    exactly what a two-edge axis always read."""
-    cuts = axis_cuts(s1, s2, l1, l2)
+    they are set, its two leader cuts (#119) and any owned extra cuts
+    (#130). A patch with no leader reads exactly what a two-edge axis
+    always read; `extra` is `[(end, value), ...]` and defaults to none."""
+    cuts = axis_cuts(s1, s2, l1, l2, extra)
     if not cuts:
         return [(0.0, 1.0)]
     return list(zip([0.0] + cuts, cuts + [1.0]))
 
 
-def axis_intervals(p, letter):
+def axis_intervals(p, letter, extra=False):
     """The intervals ONE PATCH's axis is cut into, band edges and leader
     cuts together -- the reading every caller that has the patch in hand
-    wants, so none of them can forget the leader."""
+    wants, so none of them can forget the leader.
+
+    `extra=True` adds the patch's owned cut-list entries (#130). The
+    default is False so every existing caller -- and every saved document,
+    whose list is empty -- reads the very intervals it always read."""
     s1, s2 = split_pair(p, letter)
     l1, l2 = leader_pair(p, letter)
-    return build_intervals(s1, s2, l1, l2)
+    return build_intervals(s1, s2, l1, l2,
+                           cut_list_extras(p, letter) if extra else ())
 
 
 def axis_has_cuts(p, letter):
@@ -566,9 +640,9 @@ def leader_pair(p, letter):
             float(getattr(p, letter + "Leader2", NO_LEADER_2)))
 
 
-def axis_cuts(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2):
-    """Every cut position one axis carries, ascending: its two band edges
-    and its two leader cuts, sentinel slots dropped.
+def axis_cuts(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2, extra=()):
+    """Every cut position one axis carries, ascending: its two band edges,
+    its two leader cuts and any owned extra cuts, sentinel slots dropped.
 
     The band edges alone are `axis_splits`; this is the set the INTERVALS
     come from, so a leader subdivides the axis exactly the way a band edge
@@ -588,6 +662,13 @@ def axis_cuts(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2):
         edges.append(led1)
     if led2 is not None and (b2 is None or led2 < b2):
         edges.append(led2)
+    for end, raw in extra:
+        value = band_edge(raw)
+        band = b1 if end == 0 else b2
+        if value is not None and (band is None or
+                                  (value > band if end == 0
+                                   else value < band)):
+            edges.append(value)
     return sorted(set(v for v in edges if v is not None))
 
 
