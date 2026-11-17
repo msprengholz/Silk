@@ -2494,7 +2494,20 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
             "rolling construction was not built.\n" % why)
         return None
     written = []
+    owned = []
+    # #130: the scalar slot is the FIRST corner's cut. A second corner
+    # wanting the same axis end adds its OWN entry to the patch's cut list
+    # instead of overwriting the first's number.
+    owner = corner_name or (name + "Corner")
+    from SilkMachinery import cut_entries, add_cut_entry
     for p, prop, cur, value in planned:
+        letter, end = prop[0], int(prop[-1]) - 1
+        taken = any(e[0] == letter and e[1] == end and e[2] != owner
+                    for e in cut_entries(p))
+        add_cut_entry(p, letter, end, owner, value)
+        owned.append((p, letter, end, value))
+        if taken:
+            continue
         setattr(p, prop, value)
         written.append((p.Name, prop, cur, value))
 
@@ -2524,7 +2537,9 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     def _undo_cut():
         """Put the cut back: the rolling corner did not build, so the
         user's model must not keep the leader."""
-        from SilkMachinery import follow_deferred
+        from SilkMachinery import follow_deferred, remove_cut_entries
+        for op, _letter, _end, _value in owned:
+            remove_cut_entries(op, owner)
         with follow_deferred():
             for p, prop, cur, _value in planned:
                 try:
@@ -2579,6 +2594,9 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
         p = doc.getObject(pname)
         if p is not None and is_leader_cut_prop(prop):
             record_cut(corner, p, prop, cur, value)
+    from SilkCorner import record_owned_cut
+    for p, letter, end, value in owned:
+        record_owned_cut(corner, p, letter, end, value)
 
 
     # 3. the SMALL TRIANGULAR SURFACE beside it (the maintainer's own

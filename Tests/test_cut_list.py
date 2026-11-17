@@ -86,7 +86,51 @@ def test_two_owners_hold_two_different_leaders_on_one_axis_end(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_two_rolled_corners_own_and_release_only_their_own_cuts(doc):
+    """Two demo corners that BOTH roll each own their cut entries (#130)."""
+    import FreeCAD
+    import demo01_fixture_model as DEMO
+    import SilkWorkflowOps as OPS
+    errors, checks = [], []
+    FreeCAD.setActiveDocument(doc.Name)
+    DEMO.build(doc, corners=False)
+    doc.recompute()
+    doc.recompute()
+    for name, ring in (("CB_J1_FrontTopRight", ("B_FT", "B_FR", "B_TR")),
+                       ("CB_J2_FrontRightBottom", ("B_FB", "B_FR", "B_BR"))):
+        c = OPS.create_corner_blend([doc.getObject(x) for x in ring], name=name)
+        checks.append("%s built %r" % (name, getattr(c, "Construction", None)))
+        if getattr(c, "Construction", None) != "rolling":
+            errors.append("%s did not roll" % name)
+        doc.recompute()
+        doc.recompute()
+    top = [e for e in SM.cut_entries(doc.getObject("P_Top"))
+           if e[0] == "U" and e[1] == 1]
+    bottom = [e for e in SM.cut_entries(doc.getObject("P_Bottom"))
+              if e[0] == "U" and e[1] == 0]
+    checks.append("P_Top U end 1: %r; P_Bottom U end 0: %r" % (top, bottom))
+    if len(top) != 1 or top[0][2] != "CB_J1_FrontTopRight":
+        errors.append("J1's cut is not owned on P_Top")
+    if len(bottom) != 1 or bottom[0][2] != "CB_J2_FrontRightBottom":
+        errors.append("J2's cut is not owned on P_Bottom")
+    doc.removeObject("CB_J1_FrontTopRight")
+    doc.recompute()
+    doc.recompute()
+    top_after = [e for e in SM.cut_entries(doc.getObject("P_Top"))
+                 if e[0] == "U" and e[1] == 1]
+    bottom_after = [e for e in SM.cut_entries(doc.getObject("P_Bottom"))
+                    if e[0] == "U" and e[1] == 0]
+    checks.append("after deleting J1: P_Top %r, P_Bottom %r"
+                  % (top_after, bottom_after))
+    if top_after:
+        errors.append("deleting J1 left its owned cut behind")
+    if bottom_after != bottom:
+        errors.append("deleting J1 changed J2's cut")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_a_patch_without_a_cut_list_reads_exactly_what_it_always_read,
     test_two_owners_hold_two_different_leaders_on_one_axis_end,
+    test_two_rolled_corners_own_and_release_only_their_own_cuts,
 ]

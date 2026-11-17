@@ -42,7 +42,7 @@ from SilkMachinery import (build_intervals, axis_intervals, split_pair,
     leader_pair, band_edge, axis_cuts, corner_cell_index, corner_ring,
     corner_grid, orient_junction_row, corner_ring_3,
     control_grid64_3_1, reverse_grid_rows, set_grid_display,
-    ring_corner_gap)
+    ring_corner_gap, CUT_OWNED_PROP, add_cut_entry, remove_cut_entries)
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -891,6 +891,44 @@ def cut_reference(corner):
 # on a patch two corners touch is exactly the case that has to be told apart
 # (`Tests/test_two_rolled_corners.py` measures both).
 
+def ensure_owned_cuts(obj):
+    """The corner's OWN cut entries, added once (#130).
+
+    A scalar write stays in the corner's `_CutRecord` (#131); an extra
+    entry in a patch's cut list is owned by the corner whose name is stored
+    here, so deleting one corner releases only its own entries.
+    """
+    if not hasattr(obj, CUT_OWNED_PROP):
+        obj.addProperty("App::PropertyStringList", CUT_OWNED_PROP,
+                        "Internal", "owned cut-list entries: patch|axis|end|value")
+        obj.setEditorMode(CUT_OWNED_PROP, 1)
+
+
+def record_owned_cut(corner, patch, letter, end, value):
+    """Record that `corner` put an owned extra cut on `patch` (#130)."""
+    ensure_owned_cuts(corner)
+    key = "%s|%s|%d|" % (getattr(patch, "Name", "?"), letter, end)
+    rec = [str(e) for e in (getattr(corner, CUT_OWNED_PROP, None) or [])]
+    kept = [e for e in rec if not e.startswith(key)]
+    kept.append("%s%.17g" % (key, float(value)))
+    setattr(corner, CUT_OWNED_PROP, kept)
+
+
+def recorded_owned_cuts(corner):
+    """`[(patch_name, letter, end, value), ...]` owned by this corner."""
+    out = []
+    for raw in (getattr(corner, CUT_OWNED_PROP, None) or []):
+        parts = str(raw).split("|")
+        if len(parts) != 4 or parts[1] not in ("U", "V") \
+                or parts[2] not in ("0", "1"):
+            continue
+        try:
+            out.append((parts[0], parts[1], int(parts[2]), float(parts[3])))
+        except ValueError:
+            continue
+    return out
+
+
 def ensure_cut_record(obj):
     """The corner's `_CutRecord` write log, added once (#131).
 
@@ -1000,6 +1038,21 @@ def release_corner(corner):
                 doc.removeObject(name)
         except Exception as exc:
             report["kept"].append("%s could not be removed: %r" % (name, exc))
+    owner = corner.Name
+    for patch_name, letter, end, value in recorded_owned_cuts(corner):
+        patch = doc.getObject(patch_name)
+        if patch is None:
+            report["kept"].append("%s.%s%d is owned by a corner whose patch "
+                                  "is gone" % (patch_name, letter, end + 1))
+            continue
+        gone = remove_cut_entries(patch, owner)
+        if gone:
+            report["cuts"].append((patch_name, "%sLeader%d" % (letter, end + 1),
+                                    float("nan"), value))
+    try:
+        setattr(corner, CUT_OWNED_PROP, [])
+    except Exception:
+        pass
     for patch, name, prop, before, written in recorded_cuts(corner):
         if patch is None:
             report["kept"].append("%s.%s stays: the patch is gone"
@@ -1191,6 +1244,7 @@ class CornerBlend:
         ensure_construction(obj)
         ensure_pieces(obj)
         ensure_cut_record(obj)
+        ensure_owned_cuts(obj)
         ensure_follow_modes(obj)
         ensure_cut_reference(obj)
         obj.addProperty("App::PropertyVectorList", "Poles", "Outputs",
@@ -1252,6 +1306,7 @@ class CornerBlend:
         # its user typed.
         ensure_follow_modes(obj, restored=True)
         ensure_cut_reference(obj)
+        ensure_owned_cuts(obj)
         self._install_delete_watcher(obj)
 
     def onChanged(self, fp, prop):
