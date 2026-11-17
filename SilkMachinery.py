@@ -405,16 +405,33 @@ def build_intervals(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2, extra=()):
     return list(zip([0.0] + cuts, cuts + [1.0]))
 
 
-def axis_intervals(p, letter, extra=False):
+def leader_pair_for(p, letter, owner=None):
+    """The leader pair one CORNER reads on `p` (`leader_pair` by default).
+
+    The scalar slot is the FIRST owner's cut; a later corner's cut lives
+    only in the owned list (#130). A ring pair must resolve its shared
+    corner at the cut the corner OWNS, not at whichever cut landed in the
+    slot first. An owner with no entry -- and every old document with no
+    list -- reads exactly the scalar pair."""
+    pair = list(leader_pair(p, letter))
+    if owner:
+        for ax, end, who, value in cut_entries(p):
+            if ax == letter and who == owner:
+                pair[end] = float(value)
+    return tuple(pair)
+
+
+def axis_intervals(p, letter, extra=False, owner=None):
     """The intervals ONE PATCH's axis is cut into, band edges and leader
     cuts together -- the reading every caller that has the patch in hand
     wants, so none of them can forget the leader.
 
-    `extra=True` adds the patch's owned cut-list entries (#130). The
-    default is False so every existing caller -- and every saved document,
-    whose list is empty -- reads the very intervals it always read."""
+    `extra=True` adds the patch's owned cut-list entries (#130). `owner`
+    substitutes that corner's own cut for the scalar slot. Both default
+    off, so every existing caller -- and every saved document whose list
+    is empty -- reads the very intervals it always read."""
     s1, s2 = split_pair(p, letter)
-    l1, l2 = leader_pair(p, letter)
+    l1, l2 = leader_pair_for(p, letter, owner)
     return build_intervals(s1, s2, l1, l2,
                            cut_list_extras(p, letter) if extra else ())
 
@@ -1040,7 +1057,7 @@ def corner_cells(s1, s2, n_intervals, l1=NO_LEADER_1, l2=NO_LEADER_2):
     return out
 
 
-def band_cells(p, ea, ss):
+def band_cells(p, ea, ss, owner=None):
     """Subgrid cell indices covered by a strip's band on patch p.
 
     The band runs along the seam in the band interval (0 or last, per
@@ -1057,8 +1074,8 @@ def band_cells(p, ea, ss):
     """
     us = split_pair(p, "U")
     vs = split_pair(p, "V")
-    ul = leader_pair(p, "U")
-    vl = leader_pair(p, "V")
+    ul = leader_pair_for(p, "U", owner)
+    vl = leader_pair_for(p, "V", owner)
     nu = len(build_intervals(*us, *ul))
     nv = len(build_intervals(*vs, *vl))
     if ea[0] == "U":  # seam along U: band fixes V interval, spans U cells
@@ -1071,7 +1088,7 @@ def band_cells(p, ea, ss):
     return [a * nv + b for b in sorted(keep_v)]
 
 
-def ring_corner_gap(p):
+def ring_corner_gap(p, owner=None):
     """None when the RING LOOP closes on patch `p`, else the two numbers
     that keep it open (#127).
 
@@ -1109,7 +1126,7 @@ def ring_corner_gap(p):
     """
     for letter in ("U", "V"):
         s1, s2 = split_pair(p, letter)
-        l1, l2 = leader_pair(p, letter)
+        l1, l2 = leader_pair_for(p, letter, owner)
         cuts = axis_cuts(s1, s2, l1, l2)
         for split, leader in ((band_edge(s1), band_edge(l1)),
                               (band_edge(s2), band_edge(l2))):
@@ -1303,7 +1320,7 @@ def seam_axis_roles(ea):
     return ("U", "V") if ea[0] == "U" else ("V", "U")
 
 
-def band_extent(p, ea, ss, end=None):
+def band_extent(p, ea, ss, end=None, owner=None):
     """((along_lo, along_hi), (band_lo, band_hi), corner_end) or (None, why).
 
     The band's interval ACROSS the seam, the band's interval ALONG the
@@ -1334,9 +1351,9 @@ def band_extent(p, ea, ss, end=None):
     would be a guess."""
     along_letter, band_letter = seam_axis_roles(ea)
     along_pair = split_pair(p, along_letter)
-    along_l = leader_pair(p, along_letter)
+    along_l = leader_pair_for(p, along_letter, owner)
     band_pair = split_pair(p, band_letter)
-    band_l = leader_pair(p, band_letter)
+    band_l = leader_pair_for(p, band_letter, owner)
     along_ivs = build_intervals(*along_pair, *along_l)
     band_ivs = build_intervals(*band_pair, *band_l)
     corners = corner_cells(*along_pair, len(along_ivs), *along_l)

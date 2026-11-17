@@ -39,7 +39,8 @@ import ArachNURBS as AN
 from SilkBlend import band_cells, side_and_end, seam_direction, BLEND_TYPES, \
     ensure_grid_toggle, migrate_shaded_display
 from SilkMachinery import (build_intervals, axis_intervals, split_pair,
-    leader_pair, band_edge, axis_cuts, corner_cell_index, corner_ring,
+    leader_pair, leader_pair_for, cut_entries, band_edge, axis_cuts,
+    corner_cell_index, corner_ring,
     corner_grid, orient_junction_row, corner_ring_3,
     control_grid64_3_1, reverse_grid_rows, set_grid_display,
     ring_corner_gap, CUT_OWNED_PROP, add_cut_entry, remove_cut_entries)
@@ -104,7 +105,7 @@ _MEMBER_ROW_ORDER = (False, True)
 _APEX_CORNER_OF = {(3, 3): 0, (3, 0): 1, (0, 0): 2, (0, 3): 3}
 
 
-def member_apex_corner(p, cell):
+def member_apex_corner(p, cell, owner=None):
     """`control_grid64_3_1`'s corner index that puts the triangular member's
     collapsed row on the cell's LEADER/LEADER corner, or None when the cell
     carries no real leader cut on one of its axes.
@@ -136,14 +137,14 @@ def member_apex_corner(p, cell):
     if cell is None:
         return None
     _pth, iu_c, iv_c, _nu, _nv = cell
-    us = axis_intervals(p, "U")
-    vs = axis_intervals(p, "V")
+    us = axis_intervals(p, "U", owner=owner)
+    vs = axis_intervals(p, "V", owner=owner)
     if not (0 <= iu_c < len(us) and 0 <= iv_c < len(vs)):
         return None
     idx = []
     for letter, ivs, i in (("U", us, iu_c), ("V", vs, iv_c)):
         s1, s2 = split_pair(p, letter)
-        l1, l2 = leader_pair(p, letter)
+        l1, l2 = leader_pair_for(p, letter, owner)
         cuts = axis_cuts(s1, s2, l1, l2)
         leads = [v for v in (band_edge(l1), band_edge(l2))
                  if v is not None and v in cuts]
@@ -157,17 +158,17 @@ def member_apex_corner(p, cell):
     return _APEX_CORNER_OF[(idx[0], idx[1])]
 
 
-def _apex_corner_order(pth, cell):
+def _apex_corner_order(pth, cell, owner=None):
     """The four cell corners in the order `_tri_ring_member` tries them: the
     member's own apex corner first (`member_apex_corner` -- his rule), then the
     rest in index order.  On a cell with no leader the order is 0..3, exactly
     as before."""
-    apex = member_apex_corner(pth, cell)
+    apex = member_apex_corner(pth, cell, owner)
     rest = [c for c in range(4) if c != apex]
     return ([apex] + rest) if apex is not None else rest
 
 
-def _member_row_order(pth):
+def _member_row_order(pth, owner=None):
     """The order the member's row orientations are tried in for `pth`.
 
     TWO ORDERS, AND WHICH ONE IS RIGHT IS A PROPERTY OF THE PATCH.
@@ -206,7 +207,8 @@ def _member_row_order(pth):
     The order is tried, not assumed: a patch whose real-row reading does not
     assemble still falls through to the other one.
     """
-    return (_MEMBER_ROW_ORDER_LEADER if ring_corner_gap(pth) is not None
+    return (_MEMBER_ROW_ORDER_LEADER
+            if ring_corner_gap(pth, owner) is not None
             else _MEMBER_ROW_ORDER)
 
 
@@ -365,7 +367,7 @@ def resolve_member_pin(pin, patches):
 
 
 def _tri_ring_member(base_grids, ordered, patches, corner_cells,
-                     pinned=None):
+                     pinned=None, owner=None):
     """The first 4-grid ring `corner_grid` accepts for a 3-valent corner:
     `base_grids` (the three strips) plus the triangular 4th member built
     from a patch's ring corner CELL -- never the full 4x4 base net, whose
@@ -388,7 +390,7 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
         poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
         if poles_c is None:
             return None, None
-        for rev in _member_row_order(pth):
+        for rev in _member_row_order(pth, owner):
             mp, mw = control_grid64_3_1(poles_c, weights_c, corner)
             if mp is None:
                 continue
@@ -404,8 +406,9 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
         poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
         if poles_c is None:
             continue
-        for corner in _apex_corner_order(pth, corner_cells.get(pth.Name)):
-            for rev in _member_row_order(pth):
+        for corner in _apex_corner_order(pth, corner_cells.get(pth.Name),
+                                         owner):
+            for rev in _member_row_order(pth, owner):
                 mp, mw = control_grid64_3_1(poles_c, weights_c, corner)
                 if mp is None:
                     continue
@@ -419,9 +422,14 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
     return None, None
 
 
-def corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
+def corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None, owner=None):
     """The four strips' 24-pole grids in ring order, each with its
     junction-end row at V = 3, plus the corner cell of each patch.
+
+    `owner` is the corner being derived: on a patch with several corners'
+    owned cuts it makes the ring read ITS cut (#130). None is the
+    byte-identical scalar reading.
+
 
     Returns (grids, corner_cells, None) or (None, None, reason). Every
     refusal names the strip (or patch) that caused it.
@@ -436,11 +444,11 @@ def corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
 
     The member's own placement is read by `corner_member_pin`, which runs
     the SAME search -- there is one definition of where the member is."""
-    grids, cells, _pin, why = _corner_inputs(strips, tol, pin)
+    grids, cells, _pin, why = _corner_inputs(strips, tol, pin, owner)
     return grids, cells, why
 
 
-def corner_member_pin(strips, tol=CORNER_DEFAULT_TOL, pin=None):
+def corner_member_pin(strips, tol=CORNER_DEFAULT_TOL, pin=None, owner=None):
     """(patch, corner) or (None, reason) -- where the TRIANGULAR 4th
     member of a 3-valent ring is built.
 
@@ -449,7 +457,7 @@ def corner_member_pin(strips, tol=CORNER_DEFAULT_TOL, pin=None):
     construction (#119) needs it: the rolling leader is cut on the seams
     of the patch that CARRIES the member, so the cut and the member are
     always about the same patch."""
-    _grids, _cells, member_pin, why = _corner_inputs(strips, tol, pin)
+    _grids, _cells, member_pin, why = _corner_inputs(strips, tol, pin, owner)
     if why is not None:
         return None, why
     if member_pin is None:
@@ -458,7 +466,7 @@ def corner_member_pin(strips, tol=CORNER_DEFAULT_TOL, pin=None):
     return member_pin, None
 
 
-def _ring_gap_reason(patches):
+def _ring_gap_reason(patches, owner=None, pins=()):
     """`""` when every ring patch's corner closes, else the clause naming
     the two numbers that keep it open (#127).
 
@@ -474,19 +482,24 @@ def _ring_gap_reason(patches):
     why into that refusal.
     """
     for pth in patches:
-        gap = ring_corner_gap(pth)
+        gap = ring_corner_gap(pth, owner)
         if gap is not None:
             letter, across, along = gap
+            owned = [".%s%d owned by %s = %.9g" % (e[0], e[1] + 1, e[2], e[3])
+                     for e in cut_entries(pth)]
             return ("; the ring's corner is OPEN on %s: its %s axis carries a "
-                    "band edge of %g and a leader cut of %g, and a ring "
-                    "pair's shared corner needs those two to be one number "
-                    "(#127) -- only the patch that carries the triangular "
-                    "member may carry both"
-                    % (pth.Name, letter, across, along))
+                    "band edge of %g and a leader cut of %g (owned cuts: %s), "
+                    "and a ring pair's shared corner needs those two to be one "
+                    "number (#127) -- only the patch that carries the "
+                    "triangular member may carry both; candidate pins: %s"
+                    % (pth.Name, letter, across, along,
+                       ", ".join(owned) or "none",
+                       ", ".join("%s[%d]" % (p.Name, c)
+                                  for p, c in pins) or "none"))
     return ""
 
 
-def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
+def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None, owner=None):
     """`corner_inputs` plus the member's own placement.
 
     Returns (grids, corner_cells, member_pin, None) or
@@ -522,15 +535,16 @@ def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
         # Comparing the raw indices is what reports a legitimately
         # reversed seam as a twisted input.
         identity = seam_direction(s, tol)
-        bca = band_cells(pa, e_a, ss_a)
-        bcb = band_cells(pb, e_b, ss_b)
+        bca = band_cells(pa, e_a, ss_a, owner)
+        bcb = band_cells(pb, e_b, ss_b, owner)
         if len(bca) != 1 or len(bcb) != 1:
             return None, None, None, ("blend %s: its band must cover exactly "
                                       "1 cell per side (got %d/%d)"
                                       % (s.Name, len(bca), len(bcb)))
         li_map = {}
         for pth, e, bc in ((pa, e_a, bca), (pb, e_b, bcb)):
-            iu_c, iv_c, nu, nv = CornerBlend._corner_cell(pth, ordered, tol)
+            iu_c, iv_c, nu, nv = CornerBlend._corner_cell(pth, ordered, tol,
+                                                          owner)
             if iu_c is None or iv_c is None:
                 return None, None, None, ("patch %s: corner cell at the "
                                           "4-patch junction not found"
@@ -585,19 +599,23 @@ def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
                                  (list(reversed(stored)), reversed_order),
                                  (list(reversed(flipped)), reversed_order)):
             ring, member_pin = _tri_ring_member(base_grids, ord_, patches,
-                                                corner_cells, pinned)
+                                                corner_cells, pinned, owner)
             if ring is not None:
                 break
         if ring is None:
+            pins = [pinned] if pinned is not None else [
+                (pth, c) for pth in patches for c in range(4)]
             if pinned is not None:
                 return None, None, None, ("could not build the triangular 4th "
                                           "member at the pinned corner %s[%d]"
                                           "%s"
                                           % (pinned[0].Name, pinned[1],
-                                             _ring_gap_reason(patches)))
+                                             _ring_gap_reason(patches, owner,
+                                                              pins)))
             return None, None, None, ("could not build triangular 4th "
                                       "member%s"
-                                      % _ring_gap_reason(patches))
+                                      % _ring_gap_reason(patches, owner,
+                                                         pins))
         grids = ring
     else:
         if pin is not None:
@@ -610,7 +628,8 @@ def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None):
     return grids, corner_cells, member_pin, None
 
 
-def corner_from_strips(strips, tol=CORNER_DEFAULT_TOL, pin=None):
+def corner_from_strips(strips, tol=CORNER_DEFAULT_TOL, pin=None,
+                       owner=None):
     """The full corner: four strips -> (poles36, weights36, corner_cells).
 
     `pin` is `corner_inputs`' optional triangular-member placement (#117);
@@ -618,7 +637,7 @@ def corner_from_strips(strips, tol=CORNER_DEFAULT_TOL, pin=None):
 
     Returns (p36, w36, corner_cells, None) or (None, None, None, reason).
     """
-    grids, corner_cells, why = corner_inputs(strips, tol, pin)
+    grids, corner_cells, why = corner_inputs(strips, tol, pin, owner)
     if grids is None:
         return None, None, None, why
     p36, w36, why = corner_grid(grids, CORNER_TOL)
@@ -1182,7 +1201,7 @@ def fill_of_member(doc, member):
     return None
 
 
-def corner_cell_of(p, strips, tol=CORNER_DEFAULT_TOL):
+def corner_cell_of(p, strips, tol=CORNER_DEFAULT_TOL, owner=None):
     """`(iu, iv, nu, nv, u_end, v_end)` of the ring-corner cell of patch
     `p`: the cell's index on each axis, the axes' interval counts, and the
     parametric END (0 or 1) the junction sits at on each axis.
@@ -1200,7 +1219,8 @@ def corner_cell_of(p, strips, tol=CORNER_DEFAULT_TOL):
     "away from the junction" (`SilkMachinery.preserved_piece_cells`), and on
     a three-interval axis the same index is both ends' leader-cut cell.
     """
-    nu, nv = len(axis_intervals(p, "U")), len(axis_intervals(p, "V"))
+    nu, nv = (len(axis_intervals(p, "U", owner=owner)),
+              len(axis_intervals(p, "V", owner=owner)))
     iu_c = iv_c = u_end = v_end = None
     for s in strips:
         other = s.PatchB if s.PatchA is p else s.PatchA
@@ -1215,7 +1235,7 @@ def corner_cell_of(p, strips, tol=CORNER_DEFAULT_TOL):
             continue
         letter = "V" if e[0] == "U" else "U"
         s1, s2 = split_pair(p, letter)
-        l1, l2 = leader_pair(p, letter)
+        l1, l2 = leader_pair_for(p, letter, owner)
         idx, _n, _end = corner_cell_index(s1, s2, l1, l2, int(e[1]))
         if e[0] == "U":
             iv_c, v_end = idx, int(e[1])
@@ -1382,7 +1402,7 @@ class CornerBlend:
         return bool(report.get("writes"))
 
     @staticmethod
-    def _corner_cell(p, strips, tol):
+    def _corner_cell(p, strips, tol, owner=None):
         """(iu_c, iv_c, nu, nv) of the corner cell at the 4-patch junction
         of patch p -- the first four fields of `corner_cell_of`, which is
         the one derivation (the two extra fields are the junction's
@@ -1399,7 +1419,7 @@ class CornerBlend:
         between the setback and the leader -- because that is the region the
         corner fill leaves over once the band is cut back. Without a leader
         it is the end interval, exactly as before."""
-        return corner_cell_of(p, strips, tol)[:4]
+        return corner_cell_of(p, strips, tol, owner)[:4]
 
     def _refuse(self, fp, why):
         """Refuse loudly and leave the object EMPTY rather than stale: a
@@ -1418,7 +1438,7 @@ class CornerBlend:
         pin = (None if member_patch is None
                else (member_patch, int(getattr(fp, "MemberCorner", 0))))
         p36, w36, corner_cells, why = corner_from_strips(
-            list(fp.Strips), fp.tolerance, pin)
+            list(fp.Strips), fp.tolerance, pin, owner=fp.Name)
         if p36 is None:
             self._refuse(fp, why)
             return

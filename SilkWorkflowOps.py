@@ -480,32 +480,13 @@ def create_corner_blend(*strips, name="CornerBlend", pin=None,
                 return corner
             # The rolling construction REFUSED BY NAME (it has printed
             # the reason, including the owned cuts and the candidate
-            # pins). A conflict with cuts another corner owns is NOT a
-            # reason to ship: the shipped fill would sit over a ring
-            # those cuts have opened. Refuse instead, so no dead corner
-            # is parked (#130). Other refusals still take the shipped
-            # fallback: the leader is a CUT in the band, and a patch that
-            # carries TWO junctions on the seam-parallel axis may not be
-            # able to carry that cut. The rolling construction leaves the
-            # model untouched when it refuses, so that fallback is the
-            # shipped corner, byte for byte, and its construction is
-            # recorded on the object (`Construction`) so a caller can say
-            # which one was built.
-            from SilkMachinery import cut_entries
-            _ordered, _why = _ring_of(strips)
-            _patches, _pwhy = corner_ring_patches(_ordered or strips)
-            shared = ["%s.%s%d owned by %s = %.9g"
-                      % (p.Name, e[0], e[1] + 1, e[2], e[3])
-                      for p in (_patches or []) for e in cut_entries(p)
-                      if e[2] != name]
-            if shared:
-                FreeCAD.Console.PrintError(
-                    "Silk: the rolling corner cannot be built on these %d "
-                    "blends and cuts owned by other corners are in the way "
-                    "(%s); a shipped corner would not close that ring. "
-                    "Nothing was created.\n"
-                    % (len(strips), "; ".join(shared)))
-                return None
+            # pins). A conflict with cuts another corner owns is only a
+            # problem if no member placement closes the ring: the ring
+            # derivation now reads THIS corner's owned cut (#130), so a
+            # shared patch can carry several corners' cuts. Other
+            # refusals still take the shipped fallback, byte for byte,
+            # and its construction is recorded on the object
+            # (`Construction`) so a caller can say which one was built.
             FreeCAD.Console.PrintMessage(
                 "Silk: the rolling corner cannot be built on these %d "
                 "blends, so this corner keeps the shipped construction.\n"
@@ -519,7 +500,8 @@ def create_corner_blend(*strips, name="CornerBlend", pin=None,
                 "Silk: the rolling corner is a 3-valent construction (it "
                 "needs one uncut seam and a triangular remainder); this ring "
                 "has 4 strips, so it keeps the shipped corner.\n")
-    grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL, pin)
+    grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL, pin,
+                                       owner=name)
     if grids is None:
         FreeCAD.Console.PrintError(
             "Silk: cannot create a corner blend from these %d blends -- %s. "
@@ -696,7 +678,8 @@ def _create_rolling_corner_blend(strips, name="CornerBlend", pin=None,
             return None
         candidates = [member_pin]
     else:
-        preferred, why = corner_member_pin(strips, CORNER_DEFAULT_TOL)
+        preferred, why = corner_member_pin(strips, CORNER_DEFAULT_TOL,
+                                           owner=name)
         if preferred is None:
             FreeCAD.Console.PrintError(
                 "Silk: cannot create a rolling corner blend from these %d "
@@ -709,7 +692,7 @@ def _create_rolling_corner_blend(strips, name="CornerBlend", pin=None,
                 if cand in candidates:
                     continue
                 found, _why = corner_member_pin(strips, CORNER_DEFAULT_TOL,
-                                                pin=cand)
+                                                pin=cand, owner=name)
                 if found is not None:
                     candidates.append(found)
     # 2. the rolling corner itself: the cut, the 66 over the cut cells,
@@ -2603,7 +2586,8 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
                 doc.recompute()
 
     # 2. the corner fill: the 66 chain, fed with the ring's cut cells.
-    grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL, pin)
+    grids, _cells, why = corner_inputs(strips, CORNER_DEFAULT_TOL, pin,
+                                       owner=corner_name)
     if grids is None:
         _undo_cut()
         FreeCAD.Console.PrintError(
