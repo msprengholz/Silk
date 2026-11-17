@@ -479,18 +479,33 @@ def create_corner_blend(*strips, name="CornerBlend", pin=None,
                 _record_construction(corner, CORNER_CONSTRUCTION_ROLLING)
                 return corner
             # The rolling construction REFUSED BY NAME (it has printed
-            # the reason).  The shipped construction is the FALLBACK, and
-            # the corner stage must still build a corner where the
-            # rolling one cannot: the rolling leader is a CUT in the
-            # band, and a patch that carries TWO junctions on the
-            # seam-parallel axis cannot carry that cut (the band edge is
-            # shared by two junctions).  The rolling construction leaves
-            # the model untouched when it refuses, so the fallback below
-            # is the shipped corner, byte for byte.  WHICH construction
-            # was built is recorded on the corner (`Construction`), so a
-            # caller -- the panel above all -- can say so instead of
-            # reporting a plain "corner created" for a corner that is not
-            # the one asked for.
+            # the reason, including the owned cuts and the candidate
+            # pins). A conflict with cuts another corner owns is NOT a
+            # reason to ship: the shipped fill would sit over a ring
+            # those cuts have opened. Refuse instead, so no dead corner
+            # is parked (#130). Other refusals still take the shipped
+            # fallback: the leader is a CUT in the band, and a patch that
+            # carries TWO junctions on the seam-parallel axis may not be
+            # able to carry that cut. The rolling construction leaves the
+            # model untouched when it refuses, so that fallback is the
+            # shipped corner, byte for byte, and its construction is
+            # recorded on the object (`Construction`) so a caller can say
+            # which one was built.
+            from SilkMachinery import cut_entries
+            _ordered, _why = _ring_of(strips)
+            _patches, _pwhy = corner_ring_patches(_ordered or strips)
+            shared = ["%s.%s%d owned by %s = %.9g"
+                      % (p.Name, e[0], e[1] + 1, e[2], e[3])
+                      for p in (_patches or []) for e in cut_entries(p)
+                      if e[2] != name]
+            if shared:
+                FreeCAD.Console.PrintError(
+                    "Silk: the rolling corner cannot be built on these %d "
+                    "blends and cuts owned by other corners are in the way "
+                    "(%s); a shipped corner would not close that ring. "
+                    "Nothing was created.\n"
+                    % (len(strips), "; ".join(shared)))
+                return None
             FreeCAD.Console.PrintMessage(
                 "Silk: the rolling corner cannot be built on these %d "
                 "blends, so this corner keeps the shipped construction.\n"
@@ -646,9 +661,13 @@ def _create_rolling_corner_blend(strips, name="CornerBlend", pin=None,
          the corner, kept as `PreservedPiece` objects on the corner's
          `Pieces` list.
 
-    The member's placement is read with `SilkCorner.corner_member_pin`,
-    the SAME automatic search the corner's own derivation runs, so the
-    cut is always on the seams of the patch that carries the member.
+    The member's placement starts from `SilkCorner.corner_member_pin`,
+    the SAME automatic search the corner's own derivation runs. Unlike
+    that search, the stage tries the OTHER admissible placements too:
+    a pin that assembles before the cut can stop assembling once a cut
+    another corner already owns is present (#130). The first placement
+    that builds is the one whose cut is written; the corner's own search
+    sees the same cuts and picks that placement back on rebuild.
     """
     from SilkCorner import corner_member_pin, CORNER_DEFAULT_TOL
     from SilkMachinery import corner_ring_3
@@ -662,31 +681,64 @@ def _create_rolling_corner_blend(strips, name="CornerBlend", pin=None,
             "Nothing was created.\n" % (len(strips), why))
         return None
     # 1. where the triangular member sits -- the patch whose seams carry
-    #    the rolling cut.
-    member_pin = None
+    #    the rolling cut. An explicit pin is the owner's choice: only that
+    #    placement is tried. Without one, the search's answer goes first
+    #    (so a corner with no shared cuts is byte-identical) and the other
+    #    placements that assemble are the fallbacks (#130).
+    patches, _pwhy = corner_ring_patches(ordered)
+    candidates = []
     if pin is not None:
         from SilkCorner import resolve_member_pin
-        patches, _pwhy = corner_ring_patches(ordered)
         member_pin, why = resolve_member_pin(pin, patches or [])
         if member_pin is None:
             FreeCAD.Console.PrintError(
                 "Silk: %s. Nothing was created.\n" % why)
             return None
+        candidates = [member_pin]
     else:
-        member_pin, why = corner_member_pin(strips, CORNER_DEFAULT_TOL)
-        if member_pin is None:
+        preferred, why = corner_member_pin(strips, CORNER_DEFAULT_TOL)
+        if preferred is None:
             FreeCAD.Console.PrintError(
                 "Silk: cannot create a rolling corner blend from these %d "
                 "blends -- %s. Nothing was created.\n" % (len(strips), why))
             return None
+        candidates = [preferred]
+        for pth in patches or []:
+            for corner in range(4):
+                cand = (pth, corner)
+                if cand in candidates:
+                    continue
+                found, _why = corner_member_pin(strips, CORNER_DEFAULT_TOL,
+                                                pin=cand)
+                if found is not None:
+                    candidates.append(found)
     # 2. the rolling corner itself: the cut, the 66 over the cut cells,
-    #    the member and its fill.
-    res = create_rolling_corner_66(strips, patch=member_pin[0],
-                                    leader=leader, seams=None, order=1,
-                                    name=name, corner_name=name,
-                                    member_face=member_face,
-                                    member_leaders=leaders,
-                                    pin=member_pin)
+    #    the member and its fill. A placement that fails leaves the model
+    #    as it found it (`create_rolling_corner_66._undo_cut`), so the next
+    #    candidate sees the same cuts.
+    member_pin, res = None, None
+    for cand in candidates:
+        res = create_rolling_corner_66(strips, patch=cand[0],
+                                       leader=leader, seams=None, order=1,
+                                       name=name, corner_name=name,
+                                       member_face=member_face,
+                                       member_leaders=leaders,
+                                       pin=cand)
+        if res is not None:
+            member_pin = cand
+            break
+    if res is None:
+        from SilkMachinery import cut_entries
+        owned = ["%s.%s%d owned by %s = %.9g"
+                 % (p.Name, e[0], e[1] + 1, e[2], e[3])
+                 for p in (patches or []) for e in cut_entries(p)]
+        pins = ["%s[%d]" % (p.Name, c) for p, c in candidates]
+        FreeCAD.Console.PrintError(
+            "Silk: cannot roll this corner: no admissible member placement "
+            "builds (%s). Cuts already owned on these patches: %s. Nothing "
+            "was created.\n"
+            % (", ".join(pins) or "none", "; ".join(owned) or "none"))
+        return None
     if res is None:
         return None
     # THE USER'S PIN RIDES THE CORNER (#117). `member_pin` above is always

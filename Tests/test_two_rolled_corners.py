@@ -19,11 +19,14 @@ write into one namespace, and the demo's four junctions share patches:
 
 J1 and J2 share P_Front and P_Right through B_FR and neither cuts them, so
 they coexist and each reads its OWN cells (`test_two_rolled_corners_...`).
-J1 and J3 share the MEMBER PATCH P_Top and both need its U axis's 1 end --
-one slot, two leaders (`test_two_corners_on_one_axis_end_...`).  That is the
-limit the one-cut-per-axis-end model has, and it is NOT worked around here:
-the measurement is what the owner decides on (`two_rolled_corners.py`, the
-MANUAL instrument, prints the same tables plus the demo's own numbers).
+J1 and J3 share the MEMBER PATCH P_Top and both need its U axis's 1 end.
+The cut LIST (#130) lets both own a value there, and the pin selection now
+tries every admissible placement after those cuts, so J3 carries its tri at
+P_Top[2] instead of P_Top[1] and both roll
+(`test_two_corners_on_one_axis_end_...`).  With ALL FOUR junctions in one
+document, the demo still reaches a geometric impossibility: P_Right is a
+ring patch of four junctions and its one slot per axis end cannot close all
+four rings (`test_all_four_demo_corners_name_the_geometric_impossibility`).
 
 WHAT THE DELETION PINS.  A corner that is deleted must leave the model as it
 found it (`SilkCorner.release_corner`, the `_CutRecord` write log): the
@@ -40,13 +43,13 @@ corner stage itself is what this module drives.
 The demo is the only fixture with more than one junction (the cube-corner
 fixture has one, the 4-patch fixture one), which is why this module is in the
 MANUAL tier beside `test_corner_choices` and `test_two_patch_corner`: the
-seven tests below build the demo model thirteen times (~40 s), and the fast
+tests below build the demo model many times (~60 s), and the fast
 tier is the inner loop.  The cube fixture's own rolling pins stay in
 `test_preserved_pieces` / `test_two_patch_corner`.
 """
 
 # --- manual tier ------------------------------------------------------
-# The demo model, thirteen times.  Run it with
+# Twelve pair runs plus the other cases. Run it with
 #   python3 Tests/run_all.py --manual two_rolled_corners
 MANUAL = True
 
@@ -74,24 +77,29 @@ RING = {short: ring for short, _name, ring in JUNCTIONS}
 # The demo's five patches, in the fixture's own order.
 PATCH_NAMES = [name for name, _order, _grid in DEMO.PATCHES]
 
-# The pair matrix, MEASURED (`Tests/two_rolled_corners.py` prints the raw
-# table).  Keyed by the two short names in JUNCTIONS order; the value is
+# The 12-run pair matrix, MEASURED after the share-aware pin selection:
+# both orders of every unordered pair. Keyed by build order; the value is
 # (first construction, first state, second construction, second state), where
 # a state is "built" (poles and a member), "empty" (the object exists with an
 # EMPTY net -- its ring stopped assembling) or "none" (no object at all).
-#
-# The row that ends "rolling/empty" is a DEFECT this table records rather
-# than hides: the second corner rolls and the FIRST one's ring stops
-# assembling, because the second corner cut the axis end the first one reads.
-# It turns red the day that is fixed, which is the point -- the fix is the
-# owner's decision (a LIST of cuts per axis instead of one).
+# The two pairs whose rings read a cut the FIRST corner placed on a patch
+# that is not in the SECOND corner's member still refuse by name -- that is
+# the geometric impossibility recorded by
+# `test_all_four_demo_corners_name_the_geometric_impossibility`, not a
+# shipped fallback. All other ten rows roll twice.
 PAIR_MATRIX = {
     ("J1", "J2"): ("rolling", "built", "rolling", "built"),
-    ("J1", "J3"): ("rolling", "built", "shipped", "built"),
+    ("J1", "J3"): ("rolling", "built", "rolling", "built"),
     ("J1", "J4"): ("rolling", "built", "rolling", "built"),
+    ("J2", "J1"): ("rolling", "built", "rolling", "built"),
     ("J2", "J3"): ("rolling", "built", "rolling", "built"),
     ("J2", "J4"): ("rolling", "built", None, "none"),
-    ("J3", "J4"): ("rolling", "empty", "rolling", "built"),
+    ("J3", "J1"): ("rolling", "built", None, "none"),
+    ("J3", "J2"): ("rolling", "built", "rolling", "built"),
+    ("J3", "J4"): ("rolling", "built", "rolling", "built"),
+    ("J4", "J1"): ("rolling", "built", "rolling", "built"),
+    ("J4", "J2"): ("rolling", "built", "rolling", "built"),
+    ("J4", "J3"): ("rolling", "built", "rolling", "built"),
 }
 
 # The slots each corner writes when it is the only one in the document:
@@ -125,7 +133,7 @@ def _fresh(doc):
     """Empty the document and build the demo model in it.
 
     The harness hands one document to a whole test, and a pair matrix builds
-    six models one after another: a second `DEMO.build` into a document that
+    twelve models one after another: a second `DEMO.build` into a document that
     still holds the first pair's objects is a DIFFERENT model (the names are
     taken), so the document is emptied first.  Deleting a patch CASCADES its
     blends (#89), so the name list goes stale while it is walked: every
@@ -382,25 +390,24 @@ def test_two_rolled_corners_share_patches_and_each_reads_its_own_cells(doc):
 # ---- 2. the limit: one leader per axis end -----------------------------
 
 def test_two_corners_on_one_axis_end_cannot_both_hold_a_leader(doc):
-    """J1 + J3: both members are P_Top and both need P_Top's U axis at the
-    SAME end -- one slot, two leaders.
+    """J1 + J3: both carry the tri on P_Top and both need P_Top's U=1 end.
 
-    Measured: the second corner refuses the rolling construction and falls
-    back to the shipped one (J3, `Construction = "shipped"`, no member, no
-    pieces), while the first keeps the slot with ITS value.  Both leader
-    values are read here, from two SOLO builds, so the clash is two numbers
-    in one slot and not a guess.
+    Before the share-aware selection J3 fell back to the shipped corner:
+    its solo pin P_Top[1] stopped assembling once J1's leader was in the
+    U=1 slot.  The stage now tries the other admissible pins, so J3 builds
+    at P_Top[2] and BOTH corners roll.  The scalar slot keeps J1's value
+    and the cut LIST (#130) carries both owners' values; the refused
+    candidate's write is rolled back (J1 reads unchanged).
 
-    WOULD BE RED IF: the second corner rolled anyway (the slot would then
-    hold one corner's number while the other corner's cell claims it -- the
-    corners would be silently inconsistent), or if the two corners did not
-    want the same slot (this pair is then the wrong pair to pin)."""
+    WOULD BE RED IF: either corner shipped, either lost its member or
+    pieces, the two cuts were not both owned, or J1's net moved when J3's
+    first candidate was tried and undone."""
     errors, checks = [], []
     built = _model(doc)
     check(not built["problems"], "the demo model did not build: %r"
           % (built["problems"],), errors)
-    # what each corner wants, alone
-    wanted = {}
+    # each corner's SOLO reading: the slot clash and the automatic pin
+    wanted, solo_pin = {}, {}
     for short in ("J1", "J3"):
         solo = FreeCAD.newDocument("_solo_" + short)
         try:
@@ -408,58 +415,83 @@ def test_two_corners_on_one_axis_end_cannot_both_hold_a_leader(doc):
             _model(solo)
             corner = _corner(solo, short)
             wanted[short] = _slots(solo)
-            checks.append("%s alone: %r, cuts %r"
+            found, why = SC.corner_member_pin(list(corner.Strips))
+            solo_pin[short] = None if found is None else (found[0].Name,
+                                                          found[1])
+            checks.append("%s alone: %r pin %r, cuts %r (%s)"
                           % (short, getattr(corner, "Construction", None),
+                             solo_pin[short],
                              sorted("%s.%s=%.6f" % (k + (v,))
-                                    for k, v in wanted[short].items())))
+                                    for k, v in wanted[short].items()),
+                             why or ""))
         finally:
             FreeCAD.closeDocument(solo.Name)
         FreeCAD.setActiveDocument(doc.Name)
-    left, right = set(wanted["J1"]), set(wanted["J3"])
-    checks.append("J1 wants %r; J3 wants %r; the slots BOTH want: %r"
-                  % (sorted("%s.%s" % k for k in left),
-                     sorted("%s.%s" % k for k in right),
-                     sorted("%s.%s" % k for k in (left & right))))
-    check(left & right, "J1 and J3 do not want a common leader slot -- this "
-          "pair no longer pins the one-leader-per-axis-end limit", errors)
-    for slot in left & right:
-        a = wanted["J1"][slot]
-        b = wanted["J3"][slot]
-        checks.append("the clashing slot %s.%s: J1 %.9f, J3 %.9f -- "
-                      "difference %.3e"
-                      % (slot[0], slot[1], a, b, abs(a - b)))
-        check(abs(a - b) > 1e-6,
-              "%s.%s is the same number for both corners (%.9f) -- there is "
-              "no clash left to express" % (slot[0], slot[1], a), errors)
+    shared = set(wanted["J1"]) & set(wanted["J3"])
+    checks.append("slots BOTH want: %r; values %.9f vs %.9f"
+                  % (sorted("%s.%s" % k for k in shared),
+                     wanted["J1"].get(("P_Top", "ULeader2"), float("nan")),
+                     wanted["J3"].get(("P_Top", "ULeader2"), float("nan"))))
+    check(("P_Top", "ULeader2") in shared,
+          "J1 and J3 no longer want the same slot -- this is the wrong pair",
+          errors)
+    check(abs(wanted["J1"][("P_Top", "ULeader2")]
+              - wanted["J3"][("P_Top", "ULeader2")]) > 1e-6,
+          "the two solo leaders in P_Top.ULeader2 are the same number",
+          errors)
     # both on one model
     j1 = _corner(doc, "J1")
+    before1 = {"poles": [tuple(v) for v in j1.Poles],
+               "weights": [float(w) for w in j1.Weights],
+               "cuts": {k: v for k, v in _slots(doc).items()}}
     j3 = _corner(doc, "J3")
     if j1 is None or j3 is None:
         return {"pass": False, "checks": checks,
                 "errors": ["a corner refused outright: J1=%r J3=%r"
                            % (j1, j3)]}
-    checks.append("built together: J1 %r (%d poles, %d pieces), J3 %r "
-                  "(%d poles, %d pieces)"
-                  % (j1.Construction, len(j1.Poles), len(j1.Pieces or []),
-                     j3.Construction, len(j3.Poles), len(j3.Pieces or [])))
-    check(j1.Construction == "rolling",
-          "the FIRST corner is no longer rolling (%r)" % j1.Construction,
+    for short, corner in (("J1", j1), ("J3", j3)):
+        state = _state(doc, corner, _member(doc, corner))
+        checks.append("%s together: %r, %d poles, member %s, %d pieces %r"
+                      % (short, state["construction"], state["poles"],
+                         state["member"], len(state["pieces"]),
+                         state["pieces"]))
+        check(state["construction"] == "rolling",
+              "%s did not roll (%r)" % (short, state["construction"]),
+              errors)
+        check(state["poles"] == 36 and state["member"]
+              and len(state["pieces"]) == 5,
+              "%s lost a rolling role (%r)" % (short, state), errors)
+    found, why = SC.corner_member_pin(list(j3.Strips))
+    built_pin = None if found is None else (found[0].Name, found[1])
+    checks.append("J3's pin: solo %r, after both %r (%s)"
+                  % (solo_pin["J3"], built_pin, why or ""))
+    check(built_pin == ("P_Top", 2),
+          "J3 did not move to the admissible pin P_Top[2] with J1's cut "
+          "present (got %r)" % (built_pin,), errors)
+    entries = SM.cut_entries(doc.getObject("P_Top"))
+    owners = [(e[0], e[1], e[2], e[3]) for e in entries
+              if e[0] == "U" and e[1] == 1]
+    checks.append("P_Top.ULeader2: scalar %.9f, owned entries %r"
+                  % (SM.leader_pair(doc.getObject("P_Top"), "U")[1],
+                     [(o[2], "%.9f" % o[3]) for o in owners]))
+    check(len(owners) == 2 and {o[2] for o in owners}
+          == {j1.Name, j3.Name},
+          "P_Top.ULeader2 does not carry BOTH corners' cuts: %r" % (owners,),
           errors)
-    check(j3.Construction == "shipped",
-          "the second corner did not fall back to the shipped construction "
-          "(%r) -- two different leaders in one slot are not expressible, so "
-          "this build must say so" % j3.Construction, errors)
-    check(not (j3.Pieces or []),
-          "the shipped fallback kept %d preserved pieces"
-          % len(j3.Pieces or []), errors)
-    slots = _slots(doc)
-    for slot, value in wanted["J1"].items():
-        checks.append("after both: %s.%s = %.9f (J1's own %.9f)"
-                      % (slot[0], slot[1], slots.get(slot, float("nan")),
-                         value))
-        check(slot in slots and abs(slots[slot] - value) < 1e-9,
-              "J1's cut %s.%s did not survive the second corner"
-              % (slot[0], slot[1]), errors)
+    check(abs(owners[0][3] - owners[1][3]) > 1e-6,
+          "the two owned values in P_Top.ULeader2 are identical", errors)
+    d1 = _pole_delta(before1["poles"], j1.Poles)
+    checks.append("J1's net after J3 added its cut moves %.9f mm: it now "
+                  "reads the same P_Top cell with a second cut in it" % d1)
+    for slot, value in before1["cuts"].items():
+        check(abs(_slots(doc).get(slot, float("nan")) - value) < CUT_TOL,
+              "J1's cut %s.%s moved when J3 was built" % slot, errors)
+    doc.recompute()
+    doc.recompute()
+    touched = [o.Name for o in doc.Objects if "Touched" in o.State]
+    checks.append("after the pair: %d objects, %d Touched"
+                  % (len(doc.Objects), len(touched)))
+    check(not touched, "the pair does not settle: %r" % touched[:6], errors)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -485,22 +517,21 @@ def _pair_outcome(doc, first, second):
 
 
 def test_the_pair_matrix_on_the_demo(doc):
-    """Every pair of the demo's junctions, in the ring order J1..J4.
+    """All 12 pair runs: both orders of every pair of demo junctions.
 
-    The table (`PAIR_MATRIX`) is the measurement, and it reads:
+    Ten rows build two rolling corners each -- including J1+J3, where the
+    second corner moves its pin to the other admissible corner of P_Top,
+    and J4+J2 / J3+J1, where the first corner's cut leaves a ring the second
+    cannot close.
 
-      J1+J2, J1+J4, J2+J3  two rolling corners, both built -- the pairs whose
-                           member patches (and the axis ends they cut) do not
-                           collide;
-      J1+J3                J3 falls back to the shipped corner: same member
-                           patch, same axis end;
-      J2+J4                J4 builds NOTHING: J2's cut sits on an axis end
-                           J4's ring reads;
-      J3+J4                J4 rolls and J3's ring stops assembling -- the
-                           FIRST corner is the casualty.
+    Those two remaining rows are a NAMED GEOMETRIC IMPOSSIBILITY: the first
+    corner's leader sits on a patch that is a ring patch of the second
+    junction but cannot be that junction's member patch (one seam only). No
+    pin closes that ring, so the stage refuses by name rather than shipping
+    a corner over an open ring.
 
-    WOULD BE RED IF: any row changed.  A row changing is news -- a fix for the
-    one-slot limit, or a new collision -- and must be announced, not absorbed.
+    WOULD BE RED IF: any row changed. A change is news -- a fix to the gap,
+    or a new collision -- and must be announced, not absorbed.
     """
     errors, checks = [], []
     for first, second in PAIR_MATRIX:
@@ -516,13 +547,101 @@ def test_the_pair_matrix_on_the_demo(doc):
               "is %r" % (first, second, got[0][0], want[0]), errors)
         check(got[0][1] == want[1],
               "%s then %s: the first corner reads %r, the recorded state is "
-              "%r" % (first, second, got[0][1], want[1]), errors)
+              "%r (all 12 runs: %r)"
+              % (first, second, got[0][1], want[1],
+                 [(a, b, _pair_outcome(doc, a, b))
+                  for a, b in PAIR_MATRIX]), errors)
         check(got[1][0] == want[2],
               "%s then %s: the second corner is %r, the recorded construction "
               "is %r" % (first, second, got[1][0], want[2]), errors)
         check(got[1][1] == want[3],
               "%s then %s: the second corner reads %r, the recorded state is "
               "%r" % (first, second, got[1][1], want[3]), errors)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_all_four_demo_corners_name_the_geometric_impossibility(doc):
+    """Four junctions in one document, in both build orders -- the LIMIT.
+
+    Measured with the cut list and the share-aware pin selection:
+
+      J1,J2,J3,J4  the first three roll; J4 is REFUSED BY NAME: J2's leader
+                   opens P_Bottom's U=0 end (band 0.1, leader 0.198952) and
+                   J4's ring reads that patch without carrying the tri.
+      J4,J3,J2,J1  all four corner objects read rolling/36/5, but some
+                   triangular MEMBERS stay empty and the console names
+                   the open ring on P_Right (band 0.1, leader 0.203222) --
+                   a swallowed refusal this test refuses to call success.
+
+    P_Right is a ring patch of all four junctions; its one scalar slot per
+    axis end cannot close four rings at once. Lifting that needs a cut LIST
+    the ring derivation reads, not another pin choice. The test's bar is
+    that the impossibility is NAMED (with the gap and the owned cuts) and
+    never hidden behind a shipped corner.
+
+    WOULD BE RED IF: a corner shipped, a refusal was silent, or the four
+    corners suddenly built without the named gap.
+    """
+    errors, checks = [], []
+    original = FreeCAD.Console.PrintError
+    messages = []
+    try:
+        FreeCAD.Console.PrintError = lambda text: messages.append(str(text))
+        for order in (("J1", "J2", "J3", "J4"),
+                      ("J4", "J3", "J2", "J1")):
+            _fresh(doc)
+            messages[:] = []
+            built = {short: _corner(doc, short) for short in order}
+            doc.recompute()
+            doc.recompute()
+            rows = []
+            for short in ("J1", "J2", "J3", "J4"):
+                corner = built.get(short) or doc.getObject(
+                    [n for s, n, _r in JUNCTIONS if s == short][0])
+                member = _member(doc, corner) if corner is not None else None
+                rows.append((short,
+                             getattr(corner, "Construction", None) if corner else None,
+                             len(getattr(corner, "Poles", None) or []),
+                             len(getattr(corner, "Pieces", None) or []),
+                             len(getattr(member, "Poles", None) or [])
+                             if member is not None else 0))
+            checks.append("%s -> %r" % (" ".join(order), rows))
+            for short, construction, poles, pieces, mnet in rows:
+                check(construction in (None, "rolling"),
+                      "%s shipped instead of naming the gap (%r)"
+                      % (short, construction), errors)
+                if construction == "rolling":
+                    check(poles == 36 and pieces == 5,
+                          "%s rolls without its full 66 and five pieces "
+                          "(%d/%d)" % (short, poles, pieces), errors)
+            empties = [r[0] for r in rows if r[1] == "rolling" and r[4] == 0]
+            refusals = [r[0] for r in rows if r[1] is None]
+            checks.append("four-corner failures: refused %r, empty members %r"
+                          % (refusals, empties))
+            check(refusals or empties,
+                  "all four corners fully assembled -- the recorded "
+                  "geometric impossibility is gone", errors)
+            text = "\n".join(messages)
+            opens = [line.strip() for line in text.splitlines()
+                     if "ring's corner is OPEN" in line]
+            for line in opens[:2]:
+                checks.append("named gap: %s" % line)
+            check(opens, "the four-corner impossibility was not named: %r"
+                  % text[-400:], errors)
+            owned = [(p.Name, e)
+                     for p in doc.Objects for e in SM.cut_entries(p)]
+            checks.append("cuts owned in the document: %r"
+                          % [(n, e[0], e[1] + 1, e[2], round(e[3], 6))
+                             for n, e in owned])
+            check(owned, "no owned cuts were placed -- the gap is not the "
+                  "shared-cut impossibility", errors)
+            touched = [o.Name for o in doc.Objects if "Touched" in o.State]
+            checks.append("after four builds: %d objects, %d Touched"
+                          % (len(doc.Objects), len(touched)))
+            check(not touched, "the four-corner document does not settle: %r"
+                  % touched[:6], errors)
+    finally:
+        FreeCAD.Console.PrintError = original
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -1006,6 +1125,7 @@ ALL_TESTS = [
     test_two_rolled_corners_share_patches_and_each_reads_its_own_cells,
     test_two_corners_on_one_axis_end_cannot_both_hold_a_leader,
     test_the_pair_matrix_on_the_demo,
+    test_all_four_demo_corners_name_the_geometric_impossibility,
     test_deleting_one_rolled_corner_leaves_the_other_untouched,
     test_deleting_the_last_rolled_corner_restores_the_model_byte_identically,
     test_the_pieces_follow_a_band_edge_edit_on_a_shared_patch,
