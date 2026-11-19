@@ -40,9 +40,9 @@ from Tests import cube_corner_model as ccm
 from Tests.mcp_harness import check
 
 CUBE_CELLS = (
-    ("PatchA", SM.PRESERVED_BEYOND_U, 2, 1, 0.75 * 0.15),
-    ("PatchA", SM.PRESERVED_BEYOND_V, 1, 2, 0.15 * 0.75),
-    ("PatchA", SM.PRESERVED_BEYOND_BOTH, 2, 2, 0.75 * 0.75),
+    ("PatchA", SM.PRESERVED_BEYOND_U, 2, 1, 0.80 * 0.10),
+    ("PatchA", SM.PRESERVED_BEYOND_V, 1, 2, 0.10 * 0.80),
+    ("PatchA", SM.PRESERVED_BEYOND_BOTH, 2, 2, 0.80 * 0.80),
     ("PatchB", SM.PRESERVED_BEYOND_BOTH, 1, 1, 0.90 * 0.90),
     ("PatchC", SM.PRESERVED_BEYOND_BOTH, 1, 1, 0.90 * 0.90),
 )

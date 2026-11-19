@@ -37,10 +37,16 @@ patches meeting like a cube corner), never Demo 01.
 
 import FreeCAD
 import Part
+import SilkCorner as SC_MEMBER_PIN_SHIM
+import SilkMachinery as SM_SPLIT_SHIM
+
+SC_MEMBER_PIN = SC_MEMBER_PIN_SHIM.corner_member_pin
+SM_SPLIT = SM_SPLIT_SHIM.split_pair
 
 from SilkWorkflowOps import (create_corner_blend, create_rolling_corner_66,
                              corner_fill_boundary, MEMBER_FACE_FILL)
 from Tests import cube_corner_model as ccm
+from Tests.mcp_harness import check
 
 TOL = 1e-9          # mm: the cut edge and the corner fill share it
 
@@ -290,12 +296,11 @@ def test_the_default_corner_is_the_rolling_one(doc):
     checks.append("the cut: PatchA band edges %r %r, leader cuts %r %r"
                   % (split_pair(p, "U"), split_pair(p, "V"),
                      leader_pair(p, "U"), leader_pair(p, "V")))
-    # #129: the parameter is now SOLVED from a length, so it is compared to
-    # its value, not to its float.  On this fixture (1 mm axes) the cut side
-    # the equalising rule makes is 0.15 mm, which lands on 0.25 -- the same
-    # corner the parameter default always built, to the last bit.
+    # #129/G5: the parameter is SOLVED from a length, and the default length
+    # is the third, uncut seam's band width. On this fixture it is 0.10 mm,
+    # so the leader is the 0.10 setback plus that leg: 0.20.
     for letter in ("U", "V"):
-        near = [v for v in leader_pair(p, letter) if abs(v - 0.25) <= 1e-9]
+        near = [v for v in leader_pair(p, letter) if abs(v - 0.20) <= 1e-9]
         if not near:
             errors.append("the default corner did not cut the member patch's "
                           "%s leader (leader cuts %r)"
@@ -419,9 +424,60 @@ def test_a_leader_outside_the_seam_is_refused_by_name(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+
+def test_the_default_cut_is_the_third_blend_band_width(doc):
+    """G5: a fresh corner with no typed length takes the third seam's width.
+
+    The third seam is the one NOT touching the triangular member's patch.
+    Its band is measured on both of its patches, in mm, on the exact base
+    surfaces; the geometric mean is the ONE target and both cut sides are
+    placed at it (capped by reach). A setback is not written. The cube's
+    third seam is 0.1 mm wide on both sides, so both cut sides are 0.1 mm.
+    """
+    import SilkWorkflowOps as OPS
+    errors, checks = [], []
+    _fixture(doc)
+    strips = _strips(doc)
+    pin, _why = SC_MEMBER_PIN(strips)
+    patch = pin[0] if pin else doc.getObject("PatchA")
+    info, why = OPS.third_band_widths(strips, patch)
+    if info is None:
+        return {"pass": False, "errors": [why], "checks": checks}
+    before = {p.Name: (SM_SPLIT(p, "U"), SM_SPLIT(p, "V"))
+              for p in (doc.getObject(n) for n in ("PatchA", "PatchB",
+                                                  "PatchC"))}
+    corner = create_corner_blend(*strips, name="ThirdBand")
+    doc.recompute()
+    legs = []
+    for st in strips:
+        if patch in (st.PatchA, st.PatchB):
+            leg, _w = OPS.seam_cut_length(st, patch, ring=strips)
+            legs.append(leg)
+    after = {p.Name: (SM_SPLIT(p, "U"), SM_SPLIT(p, "V"))
+             for p in (doc.getObject(n) for n in ("PatchA", "PatchB",
+                                                  "PatchC"))}
+    checks.append("third seam %s: widths %.9f / %.9f mm, target %.9f mm"
+                  % (info["seam"].Name, info["widths"][0],
+                     info["widths"][1], info["target"]))
+    checks.append("cut sides %s mm; splits unchanged %s"
+                  % (", ".join("%.9f" % v for v in legs), before == after))
+    check(len(legs) == 2, "the member patch has %d rolled seams" % len(legs),
+          errors)
+    if len(legs) == 2:
+        check(abs(legs[0] - legs[1]) <= 1e-9,
+              "the cut sides differ by %.3e mm" % abs(legs[0] - legs[1]),
+              errors)
+        check(abs(legs[0] - info["target"]) <= 1e-9,
+              "the default cut %.9f mm is not the third band %.9f mm"
+              % (legs[0], info["target"]), errors)
+    check(before == after, "a setback moved: %r -> %r" % (before, after),
+          errors)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
 ALL_TESTS = [
     test_the_rolling_corner_builds_the_66_the_member_and_the_fill,
     test_the_default_corner_is_the_rolling_one,
+    test_the_default_cut_is_the_third_blend_band_width,
     test_the_leader_is_measured_from_the_junction_corner,
     test_a_leader_outside_the_seam_is_refused_by_name,
 ]

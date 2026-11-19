@@ -1435,34 +1435,86 @@ def equal_cut_length(cuts):
     return (lo * hi) ** 0.5
 
 
+
+def third_band_widths(strips, patch, tol=None):
+    """The third seam's band width on each of its patches, in mm.
+
+    For a 3-valent ring the seam that does NOT touch the triangular
+    member's patch is the uncut third side of the 66. Each of the two
+    patches joined by that seam owns a band width across it; both are
+    measured on the patch's OWN base surface at three stations inside the
+    band's along-seam interval (0.25 / 0.5 / 0.75, averaged), because a
+    curved patch has no single constant width. No band edge is written.
+
+    Returns `{"seam": strip, "widths": [mm, mm], "target": mm}` or
+    `(None, why)`. The target is the geometric mean of the two readings
+    (the same equal-area choice `equal_cut_length` uses), so it is one
+    symmetric millimetre number even when the two patch sides differ.
+    """
+    from SilkBlend import side_and_end
+    from SilkMachinery import band_extent, seam_axis_roles
+    third = [s for s in (strips or [])
+             if patch not in (getattr(s, "PatchA", None),
+                              getattr(s, "PatchB", None))]
+    if len(third) != 1:
+        return None, ("a 3-valent ring has exactly one seam away from the "
+                      "member patch %s (found %d)" % (patch.Name, len(third)))
+    strip = third[0]
+    widths = []
+    for p in (getattr(strip, "PatchA", None), getattr(strip, "PatchB", None)):
+        if p is None:
+            continue
+        e, ss = side_and_end(strip, p, tol)
+        if not e:
+            return None, ("seam %s cannot name its side on %s"
+                          % (strip.Name, p.Name))
+        end, why = seam_junction_end(strip, p, strips, tol)
+        if end is None:
+            return None, why
+        ext = band_extent(p, e, ss, end)
+        if ext[0] is None:
+            return None, ext[1]
+        (alo, ahi), (blo, bhi), _corner_end = ext
+        base = getattr(getattr(p, "Proxy", None), "_base_surface", None)
+        if base is None:
+            return None, "%s carries no surface to measure" % p.Name
+        along, _band = seam_axis_roles(e)
+        readings = []
+        for f in (0.25, 0.5, 0.75):
+            t = alo + (ahi - alo) * f
+            if along == "U":
+                a, b = base.value(t, blo), base.value(t, bhi)
+            else:
+                a, b = base.value(blo, t), base.value(bhi, t)
+            readings.append((a - b).Length)
+        widths.append(sum(readings) / float(len(readings)))
+    if len(widths) != 2:
+        return None, ("seam %s does not join two patches" % strip.Name)
+    return {"seam": strip, "widths": widths,
+            "target": equal_cut_length(widths)}, None
+
 def equal_cut_legs(reaches, patch, strips):
     """`(target, leg, None)` -- the cut side the EQUALISING rule places on
     the seams that carry no leader of their own.
 
-    `target` is the length the rule aims at (`equal_cut_length` of the cut
-    sides the stage's own parameter default, `ROLLING_LEADER`, lands at beside
-    each seam's setback); `leg` is that figure capped to the longest side the
-    SHORTEST band can carry, which is what actually gets placed.  One figure
-    for the whole corner, so the cuts beside the triangular member are the
-    same length and the triangle comes out roughly equal-sided.
+    `target` is the width of the THIRD, uncut blend of this 3-valent ring
+    (`third_band_widths`: the geometric mean of its two patch-side widths in
+    mm); `leg` is that figure capped to the longest side the SHORTEST band can
+    carry, which is what actually gets placed. One figure for the whole
+    corner, so the cuts beside the triangular member are the same length and
+    the triangle's depth matches the opposite blend's width.
 
     Shared by the two places that place a cut with no length asked for -- the
     corner stage's own build (`create_rolling_corner_66`) and the panel's
     Apply (`apply_corner_choices`) -- so a corner BUILT with no leader and a
     corner whose member has just been moved onto seams nothing has cut yet
-    come out the same way.  Returns `(None, None, why)` when a seam cannot be
-    measured."""
-    from SilkMachinery import leader_cut_prop, seam_length
-    seeds = []
-    for reach in reaches:
-        prop, value, why = _seam_cut_home(reach["seam"], patch,
-                                          ROLLING_LEADER, leader_cut_prop,
-                                          ring=strips)
-        if prop is None:
-            return None, None, why
-        seeds.append(seam_length(patch, reach["side"], reach["setback"],
-                                 value))
-    target = equal_cut_length(seeds)
+    come out the same way. No band edge is changed to make the match; a user
+    width stays the user's (#64). Returns `(None, None, why)` when a seam
+    cannot be measured."""
+    info, why = third_band_widths(strips, patch)
+    if info is None:
+        return None, None, why
+    target = float(info["target"])
     leg = min([target] + [r["max_mm"] for r in reaches])
     return target, leg, None
 

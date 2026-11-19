@@ -134,8 +134,8 @@ def measure():
 
     emit("")
     emit("=" * 78)
-    emit("THE CUBE, BIT FOR BIT: explicit `leader=0.25` vs the equalising "
-         "default")
+    emit("THE CUBE, BIT FOR BIT: explicit `leader=0.25` vs the G5 default "
+         "(the third blend's band width)")
     emit("=" * 78)
     for line in _cube_identity(make_doc, FreeCAD, CCM, SC, OPS):
         emit(line)
@@ -165,8 +165,8 @@ def measure():
 MODE_TITLE = {
     "before": "the PARAMETER placement (`ROLLING_LEADER` = 0.25 of each "
               "seam's parameter, placed by length)",
-    "after": "the EQUALISED placement (the default: both cut sides the same "
-             "mm)",
+    "after": "the G5 DEFAULT (both cut sides the third, uncut blend's "
+             "measured band width, equal in mm)",
 }
 
 
@@ -216,13 +216,9 @@ def _one(kind, mode, make_doc, FreeCAD, DEMO, CCM, SC, SM, OPS):
         _close(FreeCAD, doc)
         return out
 
-    member = None
-    for o in doc.Objects:
-        if getattr(o, "object_type", "") == "RollingMemberFace" \
-                and getattr(o, "Corner", None) is corner:
-            member = o
-    if member is None:
-        emit("  no triangular member on this corner")
+    tri = SC.corner_tri_face(corner)
+    if tri is None:
+        emit("  no corner-owned triangular face on this corner")
         _close(FreeCAD, doc)
         return out
 
@@ -256,12 +252,13 @@ def _one(kind, mode, make_doc, FreeCAD, DEMO, CCM, SC, SM, OPS):
     # -- areas ---------------------------------------------------------
     bb = corner.Shape.BoundBox
     extent = max(bb.XLength, bb.YLength, bb.ZLength) or 1.0
-    ratio = member.Shape.Area / corner.Shape.Area if corner.Shape.Area else 0.0
+    quad = max(corner.Shape.Faces, key=lambda f: f.Area)
+    ratio = tri.Area / quad.Area if quad.Area else 0.0
     emit("")
     emit("  AREAS: quad %.6f mm^2, tri %.6f mm^2, tri/quad %.4f "
-         "(his %.4f)" % (corner.Shape.Area, member.Shape.Area, ratio,
+         "(his %.4f)" % (quad.Area, tri.Area, ratio,
                          HIS_AREA_RATIO))
-    ds = _interior_distances(member.Shape, corner.Shape)
+    ds = _interior_distances(tri, quad)
     emit("  TRI INTERIOR -> QUAD: %.6f .. %.6f mm = %.2f %%..%.2f %% of the "
          "corner's %.4f mm extent (his %.0f..%.0f %%)"
          % (min(ds), max(ds), min(ds) / extent * 100.0,
@@ -278,8 +275,8 @@ def _one(kind, mode, make_doc, FreeCAD, DEMO, CCM, SC, SM, OPS):
             max(pitch_u[1], pitch_v[1]) / min(pitch_u[0], pitch_v[0]),
             max(pitch_u[1] / pitch_u[0], pitch_v[1] / pitch_v[0])))
     emit("  TRI SIDES: %s mm, chord %.6f mm"
-         % (", ".join("%.6f" % e.Length for e in member.Shape.Edges
-                      if e.Length > 1e-9), _chord(member.Shape)))
+         % (", ".join("%.6f" % e.Length for e in tri.Edges
+                      if e.Length > 1e-9), _chord(tri)))
 
     # -- the readings the change must not move -------------------------
     import SilkChecks
@@ -321,12 +318,11 @@ def _cube_identity(make_doc, FreeCAD, CCM, SC, OPS):
         corner = OPS.create_corner_blend(*strips, name="Id", **kw)
         doc.recompute()
         doc.recompute()
-        member = [o for o in doc.Objects
-                  if getattr(o, "object_type", "") == "RollingMemberFace"][0]
+        net = SC.corner_tri_net(corner)
         built[mode] = ([tuple(p) for p in corner.Poles],
                        [float(w) for w in corner.Weights],
-                       [tuple(p) for p in member.Poles],
-                       [float(w) for w in member.Weights])
+                       [tuple(p) for p in net[0]],
+                       [float(w) for w in net[1]])
         _close(FreeCAD, doc)
     a, b = built["before"], built["after"]
     for k, name in enumerate(("quad poles", "quad weights", "tri poles",
@@ -338,31 +334,46 @@ def _cube_identity(make_doc, FreeCAD, CCM, SC, OPS):
             delta = max(abs(x - y) for x, y in zip(a[k], b[k]))
         out.append("  %-12s %3d entries, worst |before - after| = %.3e"
                    % (name, len(a[k]), delta))
-    out.append("  (the unit cube makes 0.25 mm the parameter 0.25, and the two "
-               "cuts are already equal at 0.15 mm each -- so the default does "
-               "not move the cube)")
+    out.append("  the cube's third blend is 0.1 mm wide on each side; the G5 "
+               "default places both cut sides there (parameter 0.20), so "
+               "this is a MEASURED CHANGE, not the old 0.25 identity")
     return out
 
 
 def _rule_scan(make_doc, FreeCAD, DEMO, SC, SM, OPS):
-    """The demo's corner at every candidate EQUAL length, so the rule is a
-    measurement and not a preference.
+    """The demo corner at candidate EQUAL cut lengths in mm.
 
-    The seeds are the two cuts the stage's parameter default makes (9.302915
-    and 32.677217 mm); `min` shrinks the longer to the shorter, `max` grows
-    the shorter to the longer, `geomean` keeps the triangle's AREA, and `mean`
-    is the midpoint of the two."""
+    Each row is built with explicit `leaders={seam: mm}` -- a typed length is
+    the user's and the default path is not monkeypatched. The G5 default row
+    is `third`: the geometric mean of the third, uncut seam's two patch-side
+    band widths, measured on the exact surfaces.
+    """
     import SilkChecks
-    import corner_even_cuts as E
     out = []
-    seeds = None
     rows = []
-    for label, T in (("min (shrink to the shorter)", "min"),
-                     ("13.0 mm", 13.0),
-                     ("GEOMEAN (the rule)", "geomean"),
-                     ("arithmetic mean", "mean"),
-                     ("26.0 mm", 26.0),
-                     ("max (grow to the longer)", "max")):
+    info_doc = make_doc("_even_scan_info")
+    DEMO.build(info_doc, corners=False)
+    info_doc.recompute()
+    info_doc.recompute()
+    strips = [info_doc.getObject(n) for n in DEMO_RING]
+    pin, _why = SC.corner_member_pin(strips)
+    patch = pin[0]
+    info, why = OPS.third_band_widths(strips, patch)
+    if info is None:
+        out.append("  third band could not be measured: %s" % why)
+        _close(FreeCAD, info_doc)
+        return out
+    w0, w1 = info["widths"]
+    third_name = info["seam"].Name
+    candidates = (
+        ("narrower third side", min(w0, w1)),
+        ("G5 THIRD BAND (geomean)", info["target"]),
+        ("arithmetic mean", (w0 + w1) / 2.0),
+        ("wider third side", max(w0, w1)),
+        ("old 0.25 parameter", 17.435446),
+    )
+    _close(FreeCAD, info_doc)
+    for label, T in candidates:
         doc = make_doc("_even_scan")
         DEMO.build(doc, corners=False)
         doc.recompute()
@@ -370,51 +381,37 @@ def _rule_scan(make_doc, FreeCAD, DEMO, SC, SM, OPS):
         strips = [doc.getObject(n) for n in DEMO_RING]
         pin, _why = SC.corner_member_pin(strips)
         patch = pin[0]
-        if seeds is None:
-            seeds = []
-            for st in strips:
-                if patch in (getattr(st, "PatchA", None),
+        leaders = {}
+        for st in strips:
+            if patch not in (getattr(st, "PatchA", None),
                              getattr(st, "PatchB", None)):
-                    seeds.append(OPS.seam_default_leader(st, patch,
-                                                         ring=strips)[0])
-        old = OPS.equal_cut_length
-        if T == "min":
-            OPS.equal_cut_length = lambda cuts: min(cuts)
-        elif T == "max":
-            OPS.equal_cut_length = lambda cuts: max(cuts)
-        elif T == "mean":
-            OPS.equal_cut_length = lambda cuts: sum(cuts) / float(len(cuts))
-        elif T == "geomean":
-            OPS.equal_cut_length = old
-        else:
-            OPS.equal_cut_length = lambda cuts, _t=float(T): _t
-        try:
-            corner = OPS.create_corner_blend(*strips, name="Scan")
-        finally:
-            OPS.equal_cut_length = old
+                continue
+            reach, _w = OPS.seam_cut_reach(st, patch, ring=strips)
+            leaders[st.Name] = reach["corner_mm"] + T
+        corner = OPS.create_corner_blend(*strips, name="Scan",
+                                        leaders=leaders)
         doc.recompute()
         doc.recompute()
-        member = [o for o in doc.Objects
-                  if getattr(o, "object_type", "") == "RollingMemberFace"][0]
+        tri = SC.corner_tri_face(corner)
+        quad = max(corner.Shape.Faces, key=lambda f: f.Area)
         bb = corner.Shape.BoundBox
         extent = max(bb.XLength, bb.YLength, bb.ZLength)
-        ds = _interior_distances(member.Shape, corner.Shape)
+        ds = _interior_distances(tri, quad)
         pu, pv = _pole_pitches(list(corner.Poles))
         flips = [len(SilkChecks._normal_field_flips(
-            corner.Shape.Faces[0].Surface, n=n)[0]) for n in (39, 81, 150)]
+            quad.Surface, n=n)[0]) for n in (39, 81, 150)]
         legs = [OPS.seam_cut_length(st, patch, ring=strips)[0]
                 for st in strips
                 if patch in (getattr(st, "PatchA", None),
                              getattr(st, "PatchB", None))]
-        rows.append((label, min(legs), member.Shape.Area, corner.Shape.Area,
-                     member.Shape.Area / corner.Shape.Area,
+        rows.append((label, min(legs), tri.Area, quad.Area,
+                     tri.Area / quad.Area,
                      min(ds) / extent * 100.0, max(ds) / extent * 100.0,
                      max(pu[1], pv[1]) / min(pu[0], pv[0]), flips,
                      _coins(list(corner.Poles))))
         _close(FreeCAD, doc)
-    out.append("  the corner distances the parameter default makes: %s mm "
-               "(their cut sides are the table's min and max rows)"
-               % ", ".join("%.6f" % v for v in seeds))
+    out.append("  third seam %s patch-side widths %.6f / %.6f mm; G5 target "
+               "%.6f mm" % (third_name, w0, w1, info["target"]))
     out.append("  %-28s %9s %10s %10s %7s %14s %8s %s"
                % ("rule", "cut mm", "tri mm^2", "quad mm^2", "ratio",
                   "tri% of extent", "stretch", "flips/coins"))
@@ -429,11 +426,13 @@ def _rule_scan(make_doc, FreeCAD, DEMO, SC, SM, OPS):
                   HIS_TRI_QUAD_PERCENT[1]))
     return out
 
-
 def _interior_distances(tri_shape, quad_shape, grid=8):
-    """Every interior sample of the tri's face, to the quad shape."""
+    """Every interior sample of the tri's face, to the quad face."""
     import Part
-    face = tri_shape.Faces[0]
+    try:
+        face = tri_shape.Faces[0] if tri_shape.Faces else tri_shape
+    except Exception:
+        face = tri_shape
     b = face.Surface.bounds()
     umin, umax, vmin, vmax = b[0], b[1], b[2], b[3]
     out = []
@@ -495,7 +494,8 @@ def artifact():
     model (12 Edges, 5 Patches, 8 Blends) with `CB_J1_FrontTopRight` rolled
     at the default (equalised) placement, and every role the corner builds
     named: the three ring blends, the quad (`CornerBlend`), the tri
-    (`RollingMemberFace`), and the five preserved pieces.  No render, no
+    (the 24-pole net and face stored on the corner), and the five reserved
+    patch cells.  No render, no
     colour, nothing to look at but the tree and the shapes."""
     import FreeCAD
     import demo01_fixture_model as DEMO
@@ -530,11 +530,13 @@ def artifact():
     lines.append("ARTIFACT  %s  (%.1f kB, %d objects) -- LEFT OPEN"
                  % (ARTIFACT, os.path.getsize(ARTIFACT) / 1024.0,
                     len(doc.Objects)))
-    lines.append("  roles: %s"
-                 % ", ".join(sorted(o.Name for o in doc.Objects
-                                    if getattr(o, "object_type", "") in
-                                    ("Blend", "CornerBlend",
-                                     "RollingMemberFace", "PreservedPiece"))))
+    lines.append("  roles: 3 ring blends + ONE CornerBlend (quad + tri in "
+                 "its compound Shape), %d reserved patch cells; %d old role "
+                 "object(s)"
+                 % (len(SC.reserved_cells(corner)),
+                    len([o for o in doc.Objects
+                         if getattr(o, "object_type", "")
+                         in ("RollingMemberFace", "PreservedPiece")])))
     for s in strips:
         if patch not in (getattr(s, "PatchA", None),
                         getattr(s, "PatchB", None)):
