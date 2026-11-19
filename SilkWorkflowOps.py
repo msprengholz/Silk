@@ -667,6 +667,18 @@ def _create_rolling_corner_blend(strips, name="CornerBlend", pin=None,
     #    placement is tried. Without one, the search's answer goes first
     #    (so a corner with no shared cuts is byte-identical) and the other
     #    placements that assemble are the fallbacks (#130).
+    # THE OWNER OF A CUT IS A UNIQUE CORNER IDENTITY, not the caller's
+    # `name` argument: every unnamed corner answers to "CornerBlend", so a
+    # second one read the first's cut entries as its OWN, its ring check
+    # found a "second cut" on a patch it does not carry, and the stage
+    # refused ("the ring's corner is OPEN ... owned cuts: .U1 ..."). Reserve
+    # the object's name BEFORE the cuts are written, and use it for both.
+    doc = FreeCAD.ActiveDocument
+    existing = _existing_corner_blend(doc, strips) if doc is not None else None
+    if existing is not None:
+        name = existing.Name
+    elif doc is not None:
+        name = _unique_object_name(doc, name)
     patches, _pwhy = corner_ring_patches(ordered)
     candidates = []
     if pin is not None:
@@ -2263,6 +2275,23 @@ def follow_corner_inputs(corner):
             % (corner.Name, patch.Name, prop, before, after,
                report["branch"]))
     return report
+
+
+def _unique_object_name(doc, base):
+    """`base` if the document has no such name, else FreeCAD's own scheme.
+
+    The document API in this build has no `getUniqueName`, and the corner's
+    cut OWNER must be the name the object will get: reserve it here, then
+    create the object with exactly that name.
+    """
+    taken = {o.Name for o in doc.Objects}
+    if base not in taken:
+        return base
+    for i in range(1, 10000):
+        candidate = "%s%03d" % (base, i)
+        if candidate not in taken:
+            return candidate
+    return "%s_%d" % (base, len(taken))
 
 
 def _existing_rolling_member(doc, strips):

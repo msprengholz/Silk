@@ -129,8 +129,66 @@ def test_two_rolled_corners_own_and_release_only_their_own_cuts(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_corners_with_the_default_name_do_not_share_an_owner(doc):
+    """Two corners built WITHOUT a name must not answer to one owner string.
+
+    The owner of a cut is a corner identity, so it has to be UNIQUE. When the
+    owner was the caller's `name` argument, every unnamed corner answered to
+    "CornerBlend": the second corner read the first's cut entries as its own,
+    its ring check found a "second cut" on a patch it does not carry, and the
+    stage refused with "the ring's corner is OPEN ... (owned cuts: .U1 ...)".
+    That is the wizard's own path (the panel does not name corners), and it
+    is why three of the owner's four junctions rolled and the fourth refused.
+
+    WOULD BE RED IF: the second unnamed corner is refused, or both corners'
+    entries are stored under one owner.
+    """
+    import FreeCAD
+    import demo01_fixture_model as DEMO
+    import SilkWorkflowOps as OPS
+    errors, checks = [], []
+    FreeCAD.setActiveDocument(doc.Name)
+    DEMO.build(doc, corners=False)
+    doc.recompute()
+    doc.recompute()
+    made = []
+    for ring in (("B_FT", "B_FR", "B_TR"), ("B_TR", "B_TBk", "B_BkR")):
+        c = OPS.create_corner_blend([doc.getObject(x) for x in ring])
+        doc.recompute()
+        doc.recompute()
+        made.append(c)
+        checks.append("ring %r -> %r" % (list(ring),
+                                         None if c is None
+                                         else (c.Name, c.Construction,
+                                               len(c.Poles or []))))
+        if c is None:
+            errors.append("an unnamed corner refusal on ring %r" % (list(ring),))
+        elif getattr(c, "Construction", None) != "rolling":
+            errors.append("an unnamed corner did not roll (%r)"
+                          % (getattr(c, "Construction", None),))
+        elif len(c.Poles or []) != 36:
+            errors.append("an unnamed corner has %d poles"
+                          % len(c.Poles or []))
+    names = [c.Name for c in made if c is not None]
+    if len(set(names)) != len(names):
+        errors.append("two corners share one object name: %r" % (names,))
+    owners = {}
+    for p in [o for o in doc.Objects if getattr(o, "object_type", "") == "Patch"]:
+        for e in SM.cut_entries(p):
+            owners.setdefault(e[2], set()).add(p.Name)
+    checks.append("cut owners in the document: %r" % (owners,))
+    if len(owners) != 2:
+        errors.append("the two corners stored their cuts under %d owner(s): %r"
+                      % (len(owners), sorted(owners)))
+    if names and any(n not in owners for n in names):
+        errors.append("a corner's own name is not the owner of its cuts: "
+                      "names %r, owners %r" % (names, sorted(owners)))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_a_patch_without_a_cut_list_reads_exactly_what_it_always_read,
     test_two_owners_hold_two_different_leaders_on_one_axis_end,
     test_two_rolled_corners_own_and_release_only_their_own_cuts,
+    test_corners_with_the_default_name_do_not_share_an_owner,
 ]
