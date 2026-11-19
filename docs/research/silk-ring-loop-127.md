@@ -14,6 +14,18 @@ half runs inside FreeCAD because it reads what `corner_inputs` assembles, and
 
 ---
 
+> **Closure (2026-11-19, #130).** The loop question below is resolved in the
+> production path: the member's real row is read first
+> (`SilkCorner._member_row_order`), the apex is derived from the LEADER cell
+> corner (`member_apex_corner`), and a folding interior is re-solved against
+> the Coons fill (`smooth_folding_interior`). Measured on the cube fixture:
+> 0/630 coincident pole pairs, 0/0/0 normal-field flips at n=39/81/150
+> without cap smoothing, shipped fallback byte-identical (ADR 0006). On the
+> demo all 12 pair orders and all four junctions roll with 36-pole quads,
+> 24-pole members and 5 pieces each (13/13 multi-corner gate). The row map
+> below stays as the measurement that named the rule; the "still open"
+> readings in this file are the earlier state, not today's acceptance.
+
 ## 1. The row map — his side, measured
 
 `Silk_CopyPasta_29_Full_Blend_Solid_3X4_Clean_Up.FCStd`, corner

@@ -452,7 +452,10 @@ readings of the arrangement, not of the shipped one.)*
 * The saddle fraction (5.1 % → 32 % with the cut, still the degenerate
   apex's cells): the rotational LARGE/SMALL pattern the video shows is still
   out of reach with one leader per seam.
-* #126 (the corner-cell refusal on the owner's own model) is untouched.
+* #126 (the corner-cell refusal on the owner's own model) is CLOSED by #130:
+  the owner-specific reader and ring-junction end resolution place the cut on
+  the right junction, and all four demo corners build through the default
+  rolling path (`Tests/test_demo01_fixture_clickthrough.py`, 2/2).
 
 ---
 
