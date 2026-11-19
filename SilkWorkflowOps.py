@@ -2302,7 +2302,8 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     or None when the selection is not a ring around the pinned patch."""
     from SilkCorner import (CornerBlend, CornerBlendViewProvider,
                              RollingMemberFace, RollingMemberFaceViewProvider,
-                             corner_inputs, CORNER_DEFAULT_TOL)
+                             corner_inputs, CORNER_DEFAULT_TOL,
+                             corner_object_model, OBJECT_MODEL_ONE)
     doc = FreeCAD.ActiveDocument
     if len(strips) == 1 and isinstance(strips[0], (list, tuple)):
         strips = list(strips[0])
@@ -2615,6 +2616,11 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
         corner.ViewObject.DisplayMode = "Flat Lines"
         corner.ViewObject.ShapeColor = (1.00, 0.67, 0.00)
         corner.ViewObject.Transparency = 30
+        # #119 G1-G3: the construction must be KNOWN before the first
+        # recompute, because execute uses it to build the compound Shape
+        # (quad + tri). The outer call records it again as a no-op.
+        _record_construction(corner, CORNER_CONSTRUCTION_ROLLING,
+                             settle=False)
         # #132 BEFORE the first recompute: a length the caller asked for is
         # the caller's, and the corner must not re-derive it away on its own
         # first pass (`LeaderMode = "fixed"`).
@@ -2635,13 +2641,15 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
         record_owned_cut(corner, p, letter, end, value)
 
 
-    # 3. the SMALL TRIANGULAR SURFACE beside it (the maintainer's own
-    #    second surface), and the owner's FreeCAD replacement of it.
-    # A 4-valent ring has FOUR blends and no triangular member -- there
-    # is nothing to put beside the 66 -- so the member face is a 3-valent
-    # thing only.
+    # 3. THE TRIANGULAR FACE is owned by the corner object (#119 G1-G3).
+    # A 4-valent ring has no triangular member. For a new one-object corner
+    # the CornerBlend's Shape is a compound of the quad and the tri, with
+    # the tri's three REAL boundary curves named on it; an OLD document's
+    # separate RollingMemberFace is still maintained as a restore shim.
     member = None
-    if len(strips) == 3:
+    one_object = corner_object_model(corner) == "one"
+    face_owner = corner if one_object else None
+    if len(strips) == 3 and not one_object:
         member = _existing_rolling_member(doc, strips)
         if member is None:
             member = doc.addObject("Part::FeaturePython", name + "Member")
@@ -2650,81 +2658,70 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
             member.ViewObject.ShapeColor = (0.20, 0.45, 0.95)
             member.ViewObject.Transparency = 0
             doc.recompute()
+        face_owner = member
     member_fill = None
     member_fill_gap = None
     member_junction_c0 = None
-    # WHICH SURFACE IS THE TRI (#119 follow-up): its own `CubicSurface_64`
-    # (the construction the maintainer's file stores) by default, the
-    # FreeCAD fill when asked for. The two are mutually exclusive on screen:
-    # exactly one of them is visible, so the corner never shows two faces in
-    # one place.
-    if member is not None:
+    if one_object and len(strips) == 3:
+        names = list(getattr(corner, "TriBoundaryEdges", None) or [])
+        real = [(corner, n) for n in names if n]
+        stale = _existing_member_fill(doc, corner)
+        if member_face == MEMBER_FACE_FILL and len(real) == 3:
+            member_fill = stale
+            if member_fill is None:
+                # EDGES ONLY for the one-object model: FreeCAD 1.1 crashes
+                # when a Surface::Filling takes a face INSIDE a compound as
+                # a support (#119 G1-G3). The documented edges-only path is
+                # sound; #128 replaces these supports with the NEIGHBOURING
+                # faces and measures the G1 gap there.
+                member_fill = create_fill(real, faces=[],
+                                          order=order, fallback_order=0,
+                                          name=name + "MemberFill")
+            if member_fill is not None:
+                member_junction_c0 = _face_junction_c0(member_fill, corner)
+        elif stale is not None:
+            try:
+                stale.ViewObject.Visibility = False
+            except Exception:
+                pass
+    elif member is not None:
         try:
             member.ViewObject.Visibility = (member_face
                                             == MEMBER_FACE_CUBICSURFACE64)
         except Exception:
             pass
-    if (member_face == MEMBER_FACE_FILL and member is not None
-            and member.Shape and member.Shape.Edges):
-        # The member's COLLAPSED row is a DEGENERATE edge (its two ends
-        # are the apex), so it is not a boundary curve a fill can take:
-        # the fill's boundary is the member's own three REAL edges (the
-        # two leader lines and the chord across the corner), which DO
-        # close a loop.  The member publishes their sub-shape NAMES
-        # (`BoundaryEdges`): they are the names of the compound's own
-        # children, and a compound's children are named BY POSITION, so
-        # they survive the shape replacement that a band-edge edit
-        # causes (see `SilkCorner.RollingMemberFace`).
-        names = list(getattr(member, "BoundaryEdges", None) or [])
-        if len(names) < 3:
-            names = ["Edge%d" % (i + 1) for i, e in
-                     enumerate(member.Shape.Edges) if e.Length > 1e-9]
-        real = [(member, name) for name in names]
-        if len(real) >= 3:
-            member_fill = _existing_member_fill(doc, member)
-            if member_fill is None:
-                # the SHIPPED fill component (#96), with #121's SELECTABLE
-                # C0 fallback: a boundary that cannot carry the requested
-                # continuity order still gets a C0 fill, which meets the
-                # boundary exactly.
-                member_fill = create_fill(real, faces=["Face1"] * len(real),
-                                          order=order, fallback_order=0,
-                                          name=name + "MemberFill")
-            if member_fill is not None:
-                # THE MEMBER'S FACE IS THE FILL NOW (#119, stage 1): the
-                # silk member is kept -- it carries the fill's boundary
-                # edges -- but hidden, so the spiderweb is not what the
-                # eye sees.
+        if (member_face == MEMBER_FACE_FILL and member.Shape
+                and member.Shape.Edges):
+            names = list(getattr(member, "BoundaryEdges", None) or [])
+            if len(names) < 3:
+                names = ["Edge%d" % (i + 1) for i, e in
+                         enumerate(member.Shape.Edges) if e.Length > 1e-9]
+            real = [(member, n) for n in names]
+            if len(real) >= 3:
+                member_fill = _existing_member_fill(doc, member)
+                if member_fill is None:
+                    member_fill = create_fill(real, faces=["Face1"] * 3,
+                                              order=order, fallback_order=0,
+                                              name=name + "MemberFill")
+                if member_fill is not None:
+                    try:
+                        member.ViewObject.Visibility = False
+                    except Exception:
+                        pass
+                    member_fill_gap = fill_normal_gap(member_fill, real,
+                                                      ["Face1"] * 3)
+                    member_junction_c0 = _face_junction_c0(member_fill, corner)
+        else:
+            stale = _existing_member_fill(doc, member)
+            if stale is not None:
                 try:
-                    member.ViewObject.Visibility = False
+                    stale.ViewObject.Visibility = False
                 except Exception:
                     pass
-                # the member keeps the fill, so it can re-point the
-                # fill's boundary when its own shape is replaced
-                # (SilkCorner.RollingMemberFace._refresh_fill).  The
-                # member does NOT link to the fill: a link would make
-                # the member depend on the fill while the fill depends
-                # on the member -- a cycle (see `SilkCorner.fill_of_member`).
-                # and the continuity the fill REACHED, measured by the
-                # shipped instrument against the face it replaces
-                member_fill_gap = fill_normal_gap(member_fill, real,
-                                                  ["Face1"] * len(real))
-                # and the C0 where the member's face meets the 66
-                member_junction_c0 = _face_junction_c0(member_fill, corner)
-    elif member is not None:
-        # the 64 IS the tri's face: an existing fill for this member (from
-        # an earlier "fill" build) is hidden rather than deleted -- the
-        # switch must be reversible, and the fill is not ours to destroy.
-        stale = _existing_member_fill(doc, member)
-        if stale is not None:
-            try:
-                stale.ViewObject.Visibility = False
-            except Exception:
-                pass
-    # 4. the FIVE PRESERVED PIECES (#130): the ring patches' own surface
-    #    beside the two surfaces above -- three cells from the patch that
-    #    carries the tri, one from each of the other two.
-    pieces = create_preserved_pieces(corner, member_patch=patch)
+    # 4. the FIVE PRESERVED CELLS are BOOKKEEPING on the corner (#119 G2):
+    # they are cells of the patches the patch already owns and draws, not
+    # five more surfaces and not five more tree nodes.
+    pieces = record_reserved_cells(corner, member_patch=patch)
     # #132: what the corner was just PLACED at -- the size `SetbackMode =
     # "auto"` holds (`SilkCorner._CutReference`).
     _record_cut_reference(corner, strips, patch)
@@ -2751,42 +2748,28 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
 # cells; this is the wiring that turns each of them into an object and
 # records them on the corner (`CornerBlend.Pieces`).
 
-def create_preserved_pieces(corner, member_patch=None, name=None):
-    """Attach the corner's FIVE PRESERVED PIECES (#130) and return them.
+def record_reserved_cells(corner, member_patch=None, name=None):
+    """Record the five PRESERVED CELLS on the corner (#119 G2).
 
-    `corner` is a built `CornerBlend`; `member_patch` the patch that carries
-    the triangular member (None asks the same automatic search the member
-    itself runs).  Returns the list of `PreservedPiece` objects -- an
-    already-populated corner returns the pieces it has (the corner stage is
-    idempotent), and a corner whose ring cannot supply them prints the
-    reason and returns [] rather than parking a half set in the tree.
-
-    WHICH CELLS is not decided here: `SilkMachinery.preserved_piece_cells`
-    derives them from the patch's own corner cell and the junction's
-    parametric ends, the same reading the corner fill and the member are
-    built from.  What this function owns is the OBJECT: one per cell, a
-    `PreservedPiece` linked to its patch and recorded on the corner, so the
-    five surfaces can be hidden or replaced as one list.
-
-    It is the ROLLING construction that has pieces: they are the surface the
-    corner's two surfaces leave over, and the shipped construction -- which
-    has no separate member -- is byte for byte the corner of before #130.
+    Each is a CELL OF A RING PATCH that the patch already computes and
+    draws; no `PreservedPiece` object and no second surface is created.
+    The records are `patch|role|cellU|cellV`, the same identity the old
+    objects carried, so a shared patch's far cell exists once by
+    construction. Returns the string list read back from the corner.
     """
-    from SilkCorner import (PreservedPiece, PreservedPieceViewProvider,
-                            corner_cell_of, ensure_pieces,
-                            corner_member_pin, CORNER_DEFAULT_TOL)
-    from SilkMachinery import (preserved_piece_cells, corner_ring_3,
-                               axis_intervals)
-    doc = FreeCAD.ActiveDocument
-    ensure_pieces(corner)
-    existing = list(getattr(corner, "Pieces", None) or [])
+    from SilkCorner import (corner_cell_of, corner_member_pin,
+                            CORNER_DEFAULT_TOL, ensure_reserved_cells)
+    from SilkMachinery import preserved_piece_cells, corner_ring_3, \
+        axis_intervals
+    ensure_reserved_cells(corner)
+    existing = list(getattr(corner, "ReservedCells", None) or [])
     if existing:
         return existing
     strips = list(getattr(corner, "Strips", None) or [])
     ordered, why = corner_ring_3(strips)
     if ordered is None:
         FreeCAD.Console.PrintError(
-            "Silk: the corner's preserved pieces were not created -- %s\n"
+            "Silk: the corner's reserved cells were not recorded -- %s\n"
             % why)
         return []
     patches = []
@@ -2795,54 +2778,28 @@ def create_preserved_pieces(corner, member_patch=None, name=None):
             if p is not None and p not in patches:
                 patches.append(p)
     if member_patch is None:
-        pin = corner_member_pin(strips, CORNER_DEFAULT_TOL)
+        pin = corner_member_pin(strips, CORNER_DEFAULT_TOL,
+                                owner=corner.Name)
         member_patch = pin[0][0] if pin and pin[0] else None
-    # derive EVERY piece before creating anything (the #80/#83 lesson: never
-    # park a dead object), and name the patch that cannot supply its cell.
     planned = []
     for p in patches:
-        cell = corner_cell_of(p, ordered, CORNER_DEFAULT_TOL)
+        cell = corner_cell_of(p, ordered, CORNER_DEFAULT_TOL,
+                              owner=corner.Name)
         cells, why = preserved_piece_cells(cell, member=(p is member_patch))
         if cells is None:
             FreeCAD.Console.PrintError(
-                "Silk: the corner's preserved pieces were not created -- on "
-                "%s, %s. Nothing was created.\n" % (p.Name, why))
+                "Silk: the corner's reserved cells were not recorded -- on "
+                "%s, %s\n" % (p.Name, why))
             return []
-        us, vs = axis_intervals(p, "U"), axis_intervals(p, "V")
+        us, vs = axis_intervals(p, "U", owner=corner.Name), \
+            axis_intervals(p, "V", owner=corner.Name)
         for role, iu, iv in cells:
-            planned.append((p, role, iu, iv, us[iu], vs[iv]))
-    base = name or getattr(corner, "Name", "Corner")
-    made = []
-    for (p, role, iu, iv, _uiv, _viv) in planned:
-        obj = doc.addObject("Part::FeaturePython",
-                            "%sPiece_%s_%s" % (base, p.Name, role))
-        obj.Label = "%s piece: %s (%s)" % (base, p.Name, role)
-        PreservedPiece(obj, p, iu, iv, role, corner)
-        PreservedPieceViewProvider(obj.ViewObject)
-        obj.ViewObject.DisplayMode = "Flat Lines"
-        made.append(obj)
-    corner.Pieces = made
-    doc.recompute()
-    for obj in made:
-        if not obj.Poles:
-            FreeCAD.Console.PrintError(
-                "Silk: the preserved piece %s did not build (%s cell %d/%d); "
-                "the pieces were removed again.\n"
-                % (obj.Name, obj.Patch.Name if obj.Patch else "?",
-                   obj.CellU, obj.CellV))
-            for o in made:
-                if doc.getObject(o.Name) is not None:
-                    doc.removeObject(o.Name)
-            corner.Pieces = []
-            doc.recompute()
-            return []
+            planned.append("%s|%s|%d|%d" % (p.Name, role, iu, iv))
+    corner.ReservedCells = planned
     FreeCAD.Console.PrintMessage(
-        "Silk: the corner keeps %d preserved piece(s), one cell of a ring "
-        "patch each: %s\n"
-        % (len(made),
-           ", ".join("%s (%s of %s)" % (o.Name, o.Role, o.Patch.Name)
-                     for o in made)))
-    return made
+        "Silk: the corner reserves %d patch cell(s), one of a ring patch "
+        "each: %s\n" % (len(planned), ", ".join(planned)))
+    return planned
 
 
 # ---- the corner fill (#96) ------------------------------------------------

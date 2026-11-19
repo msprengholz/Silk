@@ -115,23 +115,26 @@ def test_the_rolling_corner_builds_the_66_the_member_and_the_fill(doc):
                 "errors": ["the rolling corner did not build"],
                 "checks": checks}
     doc.recompute()
-    corner, member = res["corner"], res["member"]
-    checks.append("corner: %d poles, %d face(s)"
-                  % (len(corner.Poles), len(corner.Shape.Faces)))
-    checks.append("member: %d poles, %d face(s), %d edges"
-                  % (len(member.Poles), len(member.Shape.Faces),
-                     len(member.Shape.Edges)))
+    corner = res["corner"]
+    from SilkCorner import corner_tri_face, corner_tri_net
+    tri_face = corner_tri_face(corner)
+    tri_net = corner_tri_net(corner)
+    checks.append("corner: %d poles, %d face(s); corner-owned tri: %s poles"
+                  % (len(corner.Poles), len(corner.Shape.Faces),
+                     len(tri_net[0]) if tri_net else 0))
+    checks.append("compound edges: %d; tri boundary: %r"
+                  % (len(corner.Shape.Edges),
+                     list(getattr(corner, "TriBoundaryEdges", None) or [])))
     if len(corner.Poles) != 36:
         errors.append("the corner fill does not carry a 6x6 net")
-    if len(corner.Shape.Faces) != 1:
-        errors.append("the corner fill is not one face")
-    if len(member.Poles) != 24:
-        errors.append("the small triangular surface does not carry a 24-pole "
-                      "net")
-    if len(member.Shape.Faces) != 1:
-        errors.append("the small triangular surface is not one face")
+    if len(corner.Shape.Faces) != 2 or tri_face is None:
+        errors.append("the corner Shape is not a compound of quad and tri")
+    if tri_net is None:
+        errors.append("the corner does not carry a 24-pole triangular net")
+    if tri_face is None or len(tri_face.Faces) != 1:
+        errors.append("the corner's triangular face is not one face")
     # the member's collapsed row: six poles on the apex
-    row = list(member.Poles)[18:24]
+    row = list(tri_net[0])[18:24]
     apex = (row[0] - row[-1]).Length
     checks.append("the member's collapsed row: %.3e mm" % apex)
     if apex > 1e-9:
@@ -266,20 +269,18 @@ def test_the_default_corner_is_the_rolling_one(doc):
         return {"pass": False,
                 "errors": ["the default corner did not build"],
                 "checks": checks}
-    member = doc.getObject("DefaultMember")
+    from SilkCorner import corner_tri_face, corner_tri_net
+    tri_face = corner_tri_face(corner)
+    tri_net = corner_tri_net(corner)
     fill = doc.getObject("DefaultMemberFill")
-    checks.append("the default corner: %d poles, %d face(s); the member: %s "
-                  "(%d face(s)); a FreeCAD member filling: %s"
+    checks.append("the default corner: %d poles, %d face(s); corner-owned "
+                  "tri: %d poles, %d face(s); a FreeCAD member filling: %s"
                   % (len(corner.Poles), len(corner.Shape.Faces),
-                     getattr(member, "Name", None),
-                     len(member.Shape.Faces) if member is not None
-                     and member.Shape else 0,
+                     len(tri_net[0]) if tri_net else 0,
+                     len(tri_face.Faces) if tri_face is not None else 0,
                      getattr(fill, "Name", None)))
-    if member is None:
-        errors.append("the default corner built no triangular member")
-    elif not member.Shape or len(member.Shape.Faces) != 1:
-        errors.append("the default corner's triangular member is not one "
-                      "face -- its `CubicSurface_64` is the tri")
+    if tri_net is None or tri_face is None:
+        errors.append("the default corner carries no triangular member")
     if fill is not None:
         errors.append("the default corner built a FreeCAD member filling "
                       "(%s): the 64 is the default face" % fill.Name)

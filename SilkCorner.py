@@ -676,6 +676,131 @@ def corner_from_strips(strips, tol=CORNER_DEFAULT_TOL, pin=None,
     return p36, w36, corner_cells, None
 
 
+
+# ---- the ONE-OBJECT corner model (#119 G1-G3) ---------------------------
+#
+# A NEW rolling corner is ONE FeaturePython object: its Shape is a compound
+# of the quad (CubicSurface_66) and the triangular face (CubicSurface_64),
+# and the five preserved cells are bookkeeping on the corner -- patch cells
+# already exist on the patch, so no second surface is built for them. Old
+# documents keep their separate RollingMemberFace / PreservedPiece shims:
+# `ObjectModel` is absent there and reads "legacy", so their execute path is
+# byte-for-byte what it was.
+OBJECT_MODEL_PROP = "_ObjectModel"
+OBJECT_MODEL_ONE = "one"
+OBJECT_MODEL_LEGACY = "legacy"
+
+
+def ensure_object_model(obj, model=OBJECT_MODEL_LEGACY):
+    if not hasattr(obj, OBJECT_MODEL_PROP):
+        obj.addProperty("App::PropertyString", OBJECT_MODEL_PROP, "Internal",
+                        "the corner's tree model: 'one' (compound) or "
+                        "'legacy' (separate member and pieces)")
+        setattr(obj, OBJECT_MODEL_PROP, model)
+    return str(getattr(obj, OBJECT_MODEL_PROP, "") or OBJECT_MODEL_LEGACY)
+
+
+def corner_object_model(obj):
+    return str(getattr(obj, OBJECT_MODEL_PROP, "") or OBJECT_MODEL_LEGACY)
+
+
+def ensure_triangle(obj):
+    """The corner-owned triangular face's net and stable boundary names."""
+    if not hasattr(obj, "TriPoles"):
+        obj.addProperty("App::PropertyVectorList", "TriPoles", "Outputs",
+                        "the triangular face's 24 control poles")
+    if not hasattr(obj, "TriWeights"):
+        obj.addProperty("App::PropertyFloatList", "TriWeights", "Outputs",
+                        "the triangular face's 24 weights")
+    if not hasattr(obj, "TriBoundaryEdges"):
+        obj.addProperty("App::PropertyStringList", "TriBoundaryEdges",
+                        "Internal",
+                        "EdgeN names of the three real tri boundary curves "
+                        "in the compound Shape")
+    if not hasattr(obj, "TriFaceName"):
+        obj.addProperty("App::PropertyString", "TriFaceName", "Internal",
+                        "FaceN name of the triangular face in the compound")
+        obj.TriFaceName = ""
+
+
+def ensure_reserved_cells(obj):
+    """The five preserved patch-cell records (patch|role|u|v)."""
+    if not hasattr(obj, "ReservedCells"):
+        obj.addProperty("App::PropertyStringList", "ReservedCells", "Inputs",
+                        "the patch cells this corner reserves: "
+                        "patch|role|cellU|cellV")
+
+
+
+def corner_tri_net(corner):
+    """The corner-owned triangular net `(poles, weights)`, or None."""
+    poles = list(getattr(corner, "TriPoles", None) or [])
+    weights = list(getattr(corner, "TriWeights", None) or [])
+    return (poles, weights) if len(poles) == 24 and len(weights) == 24 else None
+
+
+def corner_tri_face(corner):
+    """The triangular face of a one-object corner's compound Shape."""
+    shape = getattr(corner, "Shape", None)
+    if shape is None or len(shape.Faces) < 2:
+        return None
+    name = str(getattr(corner, "TriFaceName", "") or "")
+    if name:
+        try:
+            face = shape.getElement(name)
+            if getattr(face, "Faces", None) or hasattr(face, "Area"):
+                return face.Faces[0] if getattr(face, "Faces", None) else face
+        except Exception:
+            pass
+    # Stable construction order is [quad face, tri face, real edges].
+    return shape.Faces[1]
+
+
+def reserved_cells(corner):
+    """`[(patch, role, iu, iv)]` from the corner's cell bookkeeping."""
+    doc = getattr(corner, "Document", None)
+    out = []
+    for raw in (getattr(corner, "ReservedCells", None) or []):
+        parts = str(raw).split("|")
+        if len(parts) != 4:
+            continue
+        patch = doc.getObject(parts[0]) if doc is not None else None
+        out.append((patch, parts[1], int(parts[2]), int(parts[3])))
+    return out
+
+def _edge_key(edge):
+    """A position-independent key for a Bezier boundary edge."""
+    pts = []
+    for t in (edge.FirstParameter, edge.LastParameter):
+        p = edge.valueAt(t)
+        pts.append((round(p.x, 9), round(p.y, 9), round(p.z, 9)))
+    return (tuple(sorted(pts)), round(edge.Length, 9))
+
+
+def _tri_face_shape(doc, poles, weights):
+    """The tri surface from its 24-pole net via AN.CubicSurface_64.
+
+    A temporary grid carrier is used because AN.CubicSurface_64 reads a
+    DocumentObject with Poles/Weights; no persistent object is created.
+    """
+    grid = doc.addObject("Part::FeaturePython", "_tri_grid_tmp")
+    surface = doc.addObject("Part::FeaturePython", "_tri_surf_tmp")
+    try:
+        grid.addProperty("App::PropertyVectorList", "Poles", "Inputs")
+        grid.addProperty("App::PropertyFloatList", "Weights", "Inputs")
+        grid.Poles = list(poles)
+        grid.Weights = [float(w) for w in weights]
+        AN.CubicSurface_64(surface, grid)
+        surface.recompute()
+        return surface.Shape
+    finally:
+        for tmp in (surface, grid):
+            if tmp is not None and doc.getObject(tmp.Name) is not None:
+                try:
+                    doc.removeObject(tmp.Name)
+                except Exception:
+                    pass
+
 def ensure_member_pin(obj):
     """#117: the triangular-member placement properties, added once.
 
@@ -1064,19 +1189,29 @@ def release_corner(corner):
     except Exception:
         pass
     member = None
-    for o in doc.Objects:
-        if (getattr(o, "object_type", "") == "RollingMemberFace"
-                and getattr(o, "Corner", None) is corner):
-            member = o
-            break
-    doomed = []
-    if member is not None:
-        fill = fill_of_member(doc, member)
+    if corner_object_model(corner) == OBJECT_MODEL_ONE:
+        # #119 G1-G3: the tri is part of the corner's own Shape; only an
+        # optional fill is a separate object.
+        fill = fill_of_member(doc, corner)
         if fill is not None:
-            doomed.append(fill)
             report["fill"] = fill.Name
-        doomed.append(member)
-        report["member"] = member.Name
+            doomed = [fill]
+        else:
+            doomed = []
+    else:
+        for o in doc.Objects:
+            if (getattr(o, "object_type", "") == "RollingMemberFace"
+                    and getattr(o, "Corner", None) is corner):
+                member = o
+                break
+        doomed = []
+        if member is not None:
+            fill = fill_of_member(doc, member)
+            if fill is not None:
+                doomed.append(fill)
+                report["fill"] = fill.Name
+            doomed.append(member)
+            report["member"] = member.Name
     for piece in list(getattr(corner, "Pieces", None) or []):
         doomed.append(piece)
         report["pieces"].append(getattr(piece, "Name", "?"))
@@ -1211,22 +1346,21 @@ class _CornerDeleteWatcher:
         pass
 
 
-def fill_of_member(doc, member):
-    """The `Surface::Filling` whose boundary is this member's shape, or
-    None.
+def fill_of_member(doc, owner):
+    """The `Surface::Filling` whose boundary is `owner`'s shape, or None.
 
-    THE MEMBER DOES NOT LINK TO THE FILL.  A link would make the member
-    DEPEND on the fill, while the fill depends on the member (its
-    boundary edges) -- a cycle, and FreeCAD's recompute order inside a
-    cycle is arbitrary: measured, the member then ends up touched after
-    every pass and the document never settles (#125).  So the fill is
-    FOUND by its boundary instead, which is the same direction the
-    dependency already runs."""
+    The owner does NOT link to the fill: a link would make the owner depend
+    on the fill while the fill depends on the owner's edges -- a cycle, and
+    FreeCAD's recompute order inside a cycle is arbitrary (measured in
+    #125). The fill is FOUND by its boundary, the direction of the real
+    dependency. One-object corners pass the CornerBlend itself; legacy
+    documents pass their `RollingMemberFace`.
+    """
     for o in doc.Objects:
         if getattr(o, "TypeId", "") != "Surface::Filling":
             continue
         for entry in (getattr(o, "BoundaryEdges", None) or []):
-            if entry and entry[0] is member:
+            if entry and entry[0] is owner:
                 return o
     return None
 
@@ -1289,6 +1423,9 @@ class CornerBlend:
         # today's automatic search) and MemberCorner its grid corner index
         # 0..3. Both are inert until MemberPatch is set.
         ensure_member_pin(obj)
+        ensure_object_model(obj, OBJECT_MODEL_ONE)
+        ensure_triangle(obj)
+        ensure_reserved_cells(obj)
         # Which construction this corner is (the corner stage records it
         # when it builds; an object built here directly has none yet).
         ensure_construction(obj)
@@ -1347,6 +1484,9 @@ class CornerBlend:
         ensure_grid_toggle(obj)
         migrate_shaded_display(obj)
         ensure_member_pin(obj)
+        ensure_object_model(obj)
+        ensure_triangle(obj)
+        ensure_reserved_cells(obj)
         ensure_construction(obj)
         ensure_pieces(obj)
         ensure_cut_record(obj)
@@ -1451,6 +1591,13 @@ class CornerBlend:
         it is the end interval, exactly as before."""
         return corner_cell_of(p, strips, tol, owner)[:4]
 
+    @staticmethod
+    def _purge(fp):
+        try:
+            fp.purgeTouched()
+        except Exception:
+            pass
+
     def _refuse(self, fp, why):
         """Refuse loudly and leave the object EMPTY rather than stale: a
         corner that can no longer be built shows nothing and says why."""
@@ -1517,6 +1664,61 @@ class CornerBlend:
             fp.Shape = Part.Shape()  # no surface to show; the grid is a view node
             return
 
+        # ONE OBJECT (#119 G1-G3): a new rolling corner owns BOTH surfaces.
+        # The Shape is a compound of the quad and the triangular member,
+        # plus the tri's three REAL boundary curves so a future fill can
+        # link to stable EdgeN names. Old documents (ObjectModel "legacy",
+        # with a separate RollingMemberFace) keep their quad-only shape and
+        # byte-identical restore path.
+        tri_poles, tri_weights = [], []
+        if (corner_object_model(fp) == OBJECT_MODEL_ONE
+                and corner_construction(fp)[0] == "rolling"
+                and len(list(fp.Strips)) == 3):
+            grids, _cells, why2 = corner_inputs(
+                list(fp.Strips), fp.tolerance,
+                (member_patch, int(getattr(fp, "MemberCorner", 0) or 0))
+                if member_patch is not None else None, owner=fp.Name)
+            found = member_grid(grids) if grids is not None else None
+            if found is None:
+                self._refuse(fp, why2 or "the ring carries no triangular member")
+                return
+            tri_poles, tri_weights = found
+            fp.TriPoles = tri_poles
+            fp.TriWeights = [float(w) for w in tri_weights]
+            tri_shape = _tri_face_shape(doc, tri_poles, tri_weights)
+            if not tri_shape or not hasattr(tri_shape, "Faces") \
+                    or not tri_shape.Faces:
+                self._refuse(fp, "the triangular face could not be built")
+                return
+            qface = max(surf_shape.Faces, key=lambda f: f.Area)
+            tface = max(tri_shape.Faces, key=lambda f: f.Area)
+            real = [(i, e) for i, e in enumerate(tri_shape.Edges)
+                    if e.Length > 1e-9]
+            if len(real) < 3:
+                self._refuse(fp, "the triangular face has fewer than three "
+                                 "real boundary edges")
+                return
+            compound = Part.Compound([qface, tface] +
+                                     [e for _i, e in real])
+            fp.Shape = compound
+            # names are POSITIONS in compound.Edges, not in the tri's own
+            # edge list -- the compound's children are named by position.
+            keys = [_edge_key(e) for _i, e in real]
+            names = []
+            for key in keys:
+                found_i = next((i for i, e in enumerate(compound.Edges)
+                                if _edge_key(e) == key), None)
+                names.append("Edge%d" % (found_i + 1)
+                             if found_i is not None else "")
+            fp.TriBoundaryEdges = names
+            fp.TriFaceName = "Face2"
+            self._purge(fp)
+            return
+        # legacy path (old documents with separate roles, or shipped corner)
+        fp.TriPoles = []
+        fp.TriWeights = []
+        fp.TriBoundaryEdges = []
+        fp.TriFaceName = ""
         # Shape is GEOMETRY ONLY (#108): the corner surface. The control
         # grid is a DISPLAY concern -- the view provider draws it as a Coin
         # node (SilkMachinery.set_grid_display reads fp.Legs), so it is not

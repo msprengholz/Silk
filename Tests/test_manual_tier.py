@@ -108,10 +108,10 @@ LOAD_BEARING_FAST = (
     "test_create_edge_3l",
     "test_create_patch_ground_truth",
     "test_create_blend_ground_truth",
-    # the corner as built: the ten roles, the pieces, the length rule
-    "test_the_cube_corner_produces_ten_roles",
-    "test_each_piece_is_the_patch_cell_the_rule_places",
-    "test_every_piece_edge_that_abuts_a_role_is_c0_to_it",
+    # the corner as built: the ten roles, the reserved cells, the length rule
+    "test_the_cube_corner_produces_ten_roles_in_one_object",
+    "test_each_cell_is_the_patch_cell_the_rule_places",
+    "test_every_cell_edge_that_abuts_a_role_is_c0_to_it",
     "test_the_leader_is_measured_from_the_junction_corner",
     "test_the_default_corner_is_the_rolling_one",
     # the tier gate itself

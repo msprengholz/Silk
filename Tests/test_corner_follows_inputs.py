@@ -56,6 +56,7 @@ import time
 
 import FreeCAD
 
+import SilkCorner as SC
 from SilkCorner import (LEADER_MODE_AUTO, LEADER_MODE_FIXED, SETBACK_MODE_AUTO,
                         SETBACK_MODE_FIXED, corner_construction, follow_modes)
 from SilkWorkflowOps import (create_corner_blend, seam_cut_length,
@@ -474,9 +475,10 @@ def test_a_following_corner_settles(doc):
             errors.append("leader %s / setback %s: the corner still moves on "
                           "a settled document (%.3e mm) -- a feedback loop"
                           % (leader, setback, moved_mm))
-        members = [o for o in doc.Objects
-                   if getattr(o, "object_type", "") == "RollingMemberFace"]
-        if not members or not members[0].Shape or not members[0].Shape.Faces:
+        corners = [o for o in doc.Objects
+                   if getattr(o, "object_type", "") == "CornerBlend"]
+        tri = SC.corner_tri_face(corners[0]) if corners else None
+        if tri is None:
             errors.append("leader %s / setback %s: the triangular member has "
                           "no face after the settle" % (leader, setback))
         # each pair is its own build
@@ -564,10 +566,7 @@ def test_the_followed_corner_is_still_fold_free(doc):
     coins = _coins(poles)
     flips = [len(SilkChecks._normal_field_flips(
         corner.Shape.Faces[0].Surface, n=n)[0]) for n in (39, 81, 150)]
-    members = [o for o in doc.Objects
-               if getattr(o, "object_type", "") == "RollingMemberFace"]
-    tri_faces = len(members[0].Shape.Faces) if members and members[0].Shape \
-        else 0
+    tri_faces = 1 if SC.corner_tri_face(corner) is not None else 0
     checks.append("after the follow: %d/630 coincident pole pairs, "
                   "normal-field flips n=39/81/150 %r, %d pole(s), tri %d "
                   "face(s)" % (coins, flips, len(poles), tri_faces))
