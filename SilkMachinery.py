@@ -421,17 +421,39 @@ def leader_pair_for(p, letter, owner=None):
     return tuple(pair)
 
 
+def corner_leader_pair(p, letter, owner=None):
+    """The leader pair ONE CORNER owns on an axis (#130).
+
+    A rolling cut belongs to the corner that placed it, not to the whole
+    axis end. On a shared patch a scalar slot holds the FIRST owner's
+    value while the others live only in the cut list; a corner reading
+    that slot sees another junction's cut and its ring opens. When a cut
+    list exists, an owner therefore reads ONLY its own entries and no
+    cut at all where it owns none. A document with no cut list (every
+    pre-#130 corner) still reads its scalar pair, byte for byte.
+    """
+    if owner is not None and cut_entries(p):
+        pair = [NO_LEADER_1, NO_LEADER_2]
+        for ax, end, who, value in cut_entries(p):
+            if ax == letter and who == owner:
+                pair[end] = float(value)
+        return tuple(pair)
+    return leader_pair(p, letter)
+
+
+def corner_leader(p, letter, owner=None):
+    """Alias with the old name, for callers that already pass `owner`."""
+    return corner_leader_pair(p, letter, owner)
+
+
 def axis_intervals(p, letter, extra=False, owner=None):
     """The intervals ONE PATCH's axis is cut into, band edges and leader
-    cuts together -- the reading every caller that has the patch in hand
-    wants, so none of them can forget the leader.
-
-    `extra=True` adds the patch's owned cut-list entries (#130). `owner`
-    substitutes that corner's own cut for the scalar slot. Both default
-    off, so every existing caller -- and every saved document whose list
-    is empty -- reads the very intervals it always read."""
+    cuts together. `owner` selects that corner's OWN cuts (#130); a
+    document with no cut list reads the scalar pair as before.
+    """
     s1, s2 = split_pair(p, letter)
-    l1, l2 = leader_pair_for(p, letter, owner)
+    l1, l2 = (corner_leader_pair(p, letter, owner)
+              if owner is not None else leader_pair(p, letter))
     return build_intervals(s1, s2, l1, l2,
                            cut_list_extras(p, letter) if extra else ())
 
@@ -1074,8 +1096,10 @@ def band_cells(p, ea, ss, owner=None):
     """
     us = split_pair(p, "U")
     vs = split_pair(p, "V")
-    ul = leader_pair_for(p, "U", owner)
-    vl = leader_pair_for(p, "V", owner)
+    ul = (corner_leader_pair(p, "U", owner) if owner is not None
+          else leader_pair(p, "U"))
+    vl = (corner_leader_pair(p, "V", owner) if owner is not None
+          else leader_pair(p, "V"))
     nu = len(build_intervals(*us, *ul))
     nv = len(build_intervals(*vs, *vl))
     if ea[0] == "U":  # seam along U: band fixes V interval, spans U cells
@@ -1126,7 +1150,8 @@ def ring_corner_gap(p, owner=None):
     """
     for letter in ("U", "V"):
         s1, s2 = split_pair(p, letter)
-        l1, l2 = leader_pair_for(p, letter, owner)
+        l1, l2 = (corner_leader_pair(p, letter, owner)
+                  if owner is not None else leader_pair(p, letter))
         cuts = axis_cuts(s1, s2, l1, l2)
         for split, leader in ((band_edge(s1), band_edge(l1)),
                               (band_edge(s2), band_edge(l2))):
@@ -1351,9 +1376,11 @@ def band_extent(p, ea, ss, end=None, owner=None):
     would be a guess."""
     along_letter, band_letter = seam_axis_roles(ea)
     along_pair = split_pair(p, along_letter)
-    along_l = leader_pair_for(p, along_letter, owner)
+    along_l = (corner_leader_pair(p, along_letter, owner)
+               if owner is not None else leader_pair(p, along_letter))
     band_pair = split_pair(p, band_letter)
-    band_l = leader_pair_for(p, band_letter, owner)
+    band_l = (corner_leader_pair(p, band_letter, owner)
+              if owner is not None else leader_pair(p, band_letter))
     along_ivs = build_intervals(*along_pair, *along_l)
     band_ivs = build_intervals(*band_pair, *band_l)
     corners = corner_cells(*along_pair, len(along_ivs), *along_l)

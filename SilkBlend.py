@@ -36,7 +36,8 @@ from SilkMachinery import patch_side as _patch_side, band_cells, \
     band_diagnosis, ensure_hidden_idxs_property, shared_seam, \
     seam_from_edge, split_pair, axis_splits, band_edge, \
     NO_BAND_1, NO_BAND_2, _EDGE_OF, _cyclic_adjacent, set_grid_display, \
-    split_band_cells, CORNER_PIECE, OUTER_PIECE, LEADER_PIECES
+    split_band_cells, CORNER_PIECE, OUTER_PIECE, LEADER_PIECES, \
+    band_extent, seam_axis_roles
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -576,6 +577,78 @@ def _cell_weights(p, idx):
     return list(stored[idx])
 
 
+
+def band_cell_from_extent(p, ea, ss, end=None, owner=None):
+    """The patch's ONE band cell as `(poles, weights)`, cut at `owner`'s
+    leaders (#130). `band_extent` applies the same interval arithmetic the
+    patch uses for display, but with the owner's cut pair; the cell is
+    segmented from the base surface exactly as `build_subgrids` does it.
+    """
+    ext = band_extent(p, ea, ss, end=end, owner=owner)
+    if ext[0] is None:
+        return None, ext[1]
+    (along_lo, along_hi), (band_lo, band_hi), _corner_end = ext
+    base = getattr(getattr(p, "Proxy", None), "_base_surface", None)
+    if base is None:
+        return None, "patch %s has no base surface" % getattr(p, "Name", "?")
+    along, band = seam_axis_roles(ea)
+    u0, u1 = (along_lo, along_hi) if along == "U" else (band_lo, band_hi)
+    v0, v1 = (band_lo, band_hi) if along == "U" else (along_lo, along_hi)
+    seg = base.copy()
+    seg.segment(u0, u1, v0, v1)
+    poles2d = seg.getPoles()
+    weights2d = seg.getWeights()
+    flat = []
+    flat_w = []
+    for r in range(4):
+        for c in range(4):
+            flat.append(poles2d[r][c])
+            flat_w.append(float(weights2d[r][c]))
+    return (flat, flat_w), None
+
+
+def blend_grid_from_cells(ea, ss_a, cell_a, eb, ss_b, cell_b, pairs,
+                          identity):
+    """The 24+24 blend grid from two 16-pole band cells. This is step 7 of
+    `run_blend`, lifted verbatim so a caller with OWNER-specific cells (a
+    second rolling corner, #130) gets the same construction -- not a
+    second, subtly different blend algorithm.
+    """
+    sga_p, sga_w = cell_a
+    sgb_p, sgb_w = cell_b
+    cmap = SEAM_CMAP
+    blend_poles = []
+    blend_weights = []
+    va = range(4) if ss_a == 0 else range(3, -1, -1)
+    vb = range(4) if ss_b == 0 else range(3, -1, -1)
+    for li in range(4):
+        if ea[0] == "U":
+            l_idx = [li * 4 + v for v in va]
+        else:
+            l_idx = [v * 4 + li for v in va]
+        l_rev = list(reversed([sga_p[i] for i in l_idx]))
+        l_rev_w = list(reversed([sga_w[i] for i in l_idx]))
+        ri = None
+        for lc_idx, rc_idx in pairs:
+            rb = cmap[eb].get(rc_idx)
+            if rb is not None and li == cmap[ea].get(lc_idx):
+                ri = rb
+                break
+        if ri is None:
+            ri = li if identity else 3 - li
+        if eb[0] == "U":
+            r_idx = [ri * 4 + v for v in vb]
+        else:
+            r_idx = [v * 4 + ri for v in vb]
+        rc = [sgb_p[i] for i in r_idx]
+        rc_w = [sgb_w[i] for i in r_idx]
+        res = AN.blend_poly_2x4_1x6(l_rev, l_rev_w, rc, rc_w,
+                                    2.0, 2.0, 2.0, 2.0)
+        blend_poles.append(res[0])
+        blend_weights.append(res[1])
+    return ([p for row in blend_poles for p in row],
+            [w for row in blend_weights for w in row])
+
 def run_blend(fp):
     """Build the 2-patch blend on fp (shared by Blend and
     BlendStrip). Silent return leaves the object untouched (missing /
@@ -783,56 +856,12 @@ def run_blend(fp):
     if identity is None:
         return
 
-    # Step 7: blend each paired row/column
-    # Subgraph flat = poles[U][V] = flat[U*4 + V]
-    # If shared edge runs ALONG U (row): perpendicular = V → take COLUMNS (const U)
-    # If shared edge runs ALONG V (col): perpendicular = U → take ROWS (const V)
-    blend_poles = []
-    blend_weights = []
-    # #31: strip index 0 sits at param 0 of the strip window. For ss=0 the
-    # shared edge is at index 0; for ss=1 it is at index 3. Build each row
-    # in shared→outer order, then orient: blend_poly_2x4_1x6 needs
-    # poles_0 outer→shared and poles_1 shared→outer.
-    va = range(4) if ss_a == 0 else range(3, -1, -1)   # left:  shared→outer
-    vb = range(4) if ss_b == 0 else range(3, -1, -1)   # right: shared→outer
-    for li in range(4):
-        # Left strip: shared edge → outward, then reverse for outer→shared.
-        # #107: the weights are read with the SAME indices as the poles, so
-        # l_rev_w[k] is the weight of l_rev[k].
-        if ea[0] == "U":  # shared along U → take COLUMNS
-            l_idx = [li * 4 + v for v in va]
-        else:  # shared along V → take ROWS
-            l_idx = [v * 4 + li for v in va]
-        l_rev = list(reversed([sga_p[i] for i in l_idx]))
-        l_rev_w = list(reversed([sga_w[i] for i in l_idx]))
+    # Step 7: blend each paired row/column (the shared pure helper).
+    blend_poles, blend_weights = blend_grid_from_cells(
+        ea, ss_a, (sga_p, sga_w), eb, ss_b, (sgb_p, sgb_w), pairs, identity)
 
-        # Map left param index to right param index: corner pairs fix
-        # the seam ends, the inferred alignment governs the middle.
-        ri = None
-        if leader <= 0.0:
-            for lc_idx, rc_idx in pairs:
-                rb = cmap[eb].get(rc_idx)
-                if rb is not None and li == cmap[ea].get(lc_idx):
-                    ri = rb
-                    break
-        if ri is None:
-            ri = li if identity else 3 - li
-
-        # Right strip: shared edge → outward (keep shared→outer direction)
-        if eb[0] == "U":  # shared along U → take COLUMNS
-            r_idx = [ri * 4 + v for v in vb]
-        else:  # shared along V → take ROWS
-            r_idx = [v * 4 + ri for v in vb]
-        rc = [sgb_p[i] for i in r_idx]
-        rc_w = [sgb_w[i] for i in r_idx]
-
-        res = AN.blend_poly_2x4_1x6(l_rev, l_rev_w, rc, rc_w,
-                                    2.0, 2.0, 2.0, 2.0)
-        blend_poles.append(res[0])
-        blend_weights.append(res[1])
-
-    fp.Poles = [p for row in blend_poles for p in row]
-    fp.Weights = [w for row in blend_weights for w in row]
+    fp.Poles = blend_poles
+    fp.Weights = blend_weights
     fp.Legs = AN.drawGrid(fp.Poles, 6)
 
     # Step 8: build blend surface using AN.CubicSurface_64

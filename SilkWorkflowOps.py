@@ -2817,7 +2817,7 @@ def create_preserved_pieces(corner, member_patch=None, name=None):
         obj = doc.addObject("Part::FeaturePython",
                             "%sPiece_%s_%s" % (base, p.Name, role))
         obj.Label = "%s piece: %s (%s)" % (base, p.Name, role)
-        PreservedPiece(obj, p, iu, iv, role)
+        PreservedPiece(obj, p, iu, iv, role, corner)
         PreservedPieceViewProvider(obj.ViewObject)
         obj.ViewObject.DisplayMode = "Flat Lines"
         made.append(obj)

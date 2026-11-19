@@ -37,9 +37,11 @@ import Part
 import ArachNURBS as AN
 
 from SilkBlend import band_cells, side_and_end, seam_direction, BLEND_TYPES, \
-    ensure_grid_toggle, migrate_shaded_display
+    ensure_grid_toggle, migrate_shaded_display, _resolve_seam, seam_identity, \
+    band_cell_from_extent, blend_grid_from_cells
 from SilkMachinery import (build_intervals, axis_intervals, split_pair,
-    leader_pair, leader_pair_for, cut_entries, band_edge, axis_cuts,
+    leader_pair, leader_pair_for, corner_leader_pair, cut_entries, band_edge,
+    axis_cuts,
     corner_cell_index, corner_ring,
     corner_grid, orient_junction_row, corner_ring_3,
     control_grid64_3_1, reverse_grid_rows, set_grid_display,
@@ -144,7 +146,7 @@ def member_apex_corner(p, cell, owner=None):
     idx = []
     for letter, ivs, i in (("U", us, iu_c), ("V", vs, iv_c)):
         s1, s2 = split_pair(p, letter)
-        l1, l2 = leader_pair_for(p, letter, owner)
+        l1, l2 = corner_leader_pair(p, letter, owner)
         cuts = axis_cuts(s1, s2, l1, l2)
         leads = [v for v in (band_edge(l1), band_edge(l2))
                  if v is not None and v in cuts]
@@ -218,7 +220,7 @@ def _member_row_order(pth, owner=None):
 # there is exactly ONE definition of "what corner does this strip set
 # make". No document, no object, no console here.
 
-def _corner_cell_net(p, cell):
+def _corner_cell_net(p, cell, owner=None):
     """Patch p's ring-corner subgrid cell as (flat poles, flat weights) in
     the row-major 4x4 order `control_grid64_3_1` reads, or (None, None).
 
@@ -235,8 +237,8 @@ def _corner_cell_net(p, cell):
     pth, iu_c, iv_c, _nu, nv = cell
     if pth is not p:
         return None, None
-    us = axis_intervals(p, "U")
-    vs = axis_intervals(p, "V")
+    us = axis_intervals(p, "U", owner=owner)
+    vs = axis_intervals(p, "V", owner=owner)
     if not (0 <= iu_c < len(us) and 0 <= iv_c < len(vs)):
         return None, None
     getter = getattr(getattr(p, "Proxy", None), "getSubgrid", None)
@@ -387,7 +389,7 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
     which patch that is."""
     if pinned is not None:
         pth, corner = pinned
-        poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
+        poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name), owner)
         if poles_c is None:
             return None, None
         for rev in _member_row_order(pth, owner):
@@ -403,7 +405,7 @@ def _tri_ring_member(base_grids, ordered, patches, corner_cells,
                 return cand, (pth, corner)
         return None, None
     for pth in patches:
-        poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name))
+        poles_c, weights_c = _corner_cell_net(pth, corner_cells.get(pth.Name), owner)
         if poles_c is None:
             continue
         for corner in _apex_corner_order(pth, corner_cells.get(pth.Name),
@@ -534,7 +536,12 @@ def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None, owner=None):
         # junction-end rows are compared ACROSS that reflection.
         # Comparing the raw indices is what reports a legitimately
         # reversed seam as a twisted input.
-        identity = seam_direction(s, tol)
+        seam = _resolve_seam(s, pa, pb, tol)
+        if seam is None:
+            return None, None, None, ("blend %s: no shared edge between %s "
+                                      "and %s" % (s.Name, pa.Name, pb.Name))
+        seam_a, seam_b, pairs = seam
+        identity = seam_identity(seam_a, seam_b, pairs)
         bca = band_cells(pa, e_a, ss_a, owner)
         bcb = band_cells(pb, e_b, ss_b, owner)
         if len(bca) != 1 or len(bcb) != 1:
@@ -542,9 +549,11 @@ def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None, owner=None):
                                       "1 cell per side (got %d/%d)"
                                       % (s.Name, len(bca), len(bcb)))
         li_map = {}
+        ends = {}
         for pth, e, bc in ((pa, e_a, bca), (pb, e_b, bcb)):
-            iu_c, iv_c, nu, nv = CornerBlend._corner_cell(pth, ordered, tol,
-                                                          owner)
+            _iu, _iv, _nu, _nv, u_end, v_end = corner_cell_of(pth, ordered,
+                                                              tol, owner)
+            iu_c, iv_c, nu, nv = _iu, _iv, _nu, _nv
             if iu_c is None or iv_c is None:
                 return None, None, None, ("patch %s: corner cell at the "
                                           "4-patch junction not found"
@@ -557,13 +566,34 @@ def _corner_inputs(strips, tol=CORNER_DEFAULT_TOL, pin=None, owner=None):
             else:
                 li_map[pth.Name] = 3 if iv_c > iv_b else 0
             corner_cells[pth.Name] = (pth, iu_c, iv_c, nu, nv)
+            # `band_extent` wants the junction end of the SEAM-PARALLEL
+            # axis: side U0/U1 runs along U, so it names V; the end we
+            # need then comes from the OTHER seam's U reading.
+            ends[pth.Name] = u_end if e[0] == "U" else v_end
         if li_map[pa.Name] != (3 - li_map[pb.Name] if identity is False
                                else li_map[pb.Name]):
             return None, None, None, ("blend %s: its two patches disagree "
                                       "about which end is the junction "
                                       "(twisted input)" % s.Name)
-        poles = list(getattr(s, "Poles", None) or [])
-        weights = list(getattr(s, "Weights", None) or [])
+        # #130: a second owner's cut on a shared patch changes THIS corner's
+        # strip. Re-derive it from the patches' own base surfaces with the
+        # owner's cut pair, using the SAME row algorithm as run_blend. A ring
+        # with no foreign owned cut keeps the stored net byte for byte.
+        any_cuts = any(cut_entries(pth) for pth in (pa, pb))
+        if any_cuts and owner is not None:
+            cell_a, why = band_cell_from_extent(pa, seam_a, ss_a,
+                                                ends[pa.Name], owner)
+            if cell_a is None:
+                return None, None, None, ("blend %s: %s" % (s.Name, why))
+            cell_b, why = band_cell_from_extent(pb, seam_b, ss_b,
+                                                ends[pb.Name], owner)
+            if cell_b is None:
+                return None, None, None, ("blend %s: %s" % (s.Name, why))
+            poles, weights = blend_grid_from_cells(
+                seam_a, ss_a, cell_a, seam_b, ss_b, cell_b, pairs, identity)
+        else:
+            poles = list(getattr(s, "Poles", None) or [])
+            weights = list(getattr(s, "Weights", None) or [])
         if len(poles) != 24 or len(weights) != 24:
             return None, None, None, ("blend %s: expected a 24-pole grid, "
                                       "got %d poles / %d weights"
@@ -1235,7 +1265,7 @@ def corner_cell_of(p, strips, tol=CORNER_DEFAULT_TOL, owner=None):
             continue
         letter = "V" if e[0] == "U" else "U"
         s1, s2 = split_pair(p, letter)
-        l1, l2 = leader_pair_for(p, letter, owner)
+        l1, l2 = corner_leader_pair(p, letter, owner)
         idx, _n, _end = corner_cell_index(s1, s2, l1, l2, int(e[1]))
         if e[0] == "U":
             iv_c, v_end = idx, int(e[1])
@@ -1617,8 +1647,10 @@ class RollingMemberFace:
             self._in_execute = False
 
     def _do_execute(self, fp):
+        owner = getattr(getattr(fp, "Corner", None), "Name", None)
         grids, _cells, why = corner_inputs(list(fp.Strips),
-                                          pin=_member_pin_of(fp))
+                                          pin=_member_pin_of(fp),
+                                          owner=owner)
         member = member_grid(grids) if grids is not None else None
         if member is None:
             FreeCAD.Console.PrintError(
@@ -1797,7 +1829,7 @@ class PreservedPiece:
     with the corner's own pieces settled too.
     """
 
-    def __init__(self, obj, patch, cell_u, cell_v, role=""):
+    def __init__(self, obj, patch, cell_u, cell_v, role="", corner=None):
         obj.addProperty("App::PropertyLink", "Patch", "Inputs",
                         "the ring patch this piece is a cell of").Patch = patch
         obj.addProperty("App::PropertyInteger", "CellU", "Inputs",
@@ -1809,6 +1841,14 @@ class PreservedPiece:
         obj.addProperty("App::PropertyString", "Role", "Inputs",
                         "which preserved piece this is, relative to the "
                         "patch's inner cell").Role = str(role)
+        # #130: the cut values that define this cell belong to one corner.
+        # A shared patch's scalar slot holds the FIRST owner's cut, so the
+        # piece must read the interval set of the corner it came from. A
+        # NAME, not a Link: Link -> Corner -> Pieces would be a dependency
+        # cycle and the document could never settle.
+        obj.addProperty("App::PropertyString", "Owner", "Inputs",
+                        "name of the rolling corner that owns this cut")
+        obj.Owner = str(getattr(corner, "Name", "") or "")
         obj.addProperty("App::PropertyFloat", "U0", "Outputs",
                         "the cell's first U parameter").U0
         obj.addProperty("App::PropertyFloat", "U1", "Outputs",
@@ -1856,8 +1896,9 @@ class PreservedPiece:
         if p is None:
             self._refuse(fp, "it names no patch")
             return
-        us = axis_intervals(p, "U")
-        vs = axis_intervals(p, "V")
+        owner = str(getattr(fp, "Owner", "") or "") or None
+        us = axis_intervals(p, "U", owner=owner)
+        vs = axis_intervals(p, "V", owner=owner)
         iu, iv = int(fp.CellU), int(fp.CellV)
         if not (0 <= iu < len(us) and 0 <= iv < len(vs)):
             self._refuse(fp, ("cell (%d, %d) does not exist on %s, whose axes "

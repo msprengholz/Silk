@@ -24,9 +24,11 @@ The cut LIST (#130) lets both own a value there, and the pin selection now
 tries every admissible placement after those cuts, so J3 carries its tri at
 P_Top[2] instead of P_Top[1] and both roll
 (`test_two_corners_on_one_axis_end_...`).  With ALL FOUR junctions in one
-document, the demo still reaches a geometric impossibility: P_Right is a
-ring patch of four junctions and its one slot per axis end cannot close all
-four rings (`test_all_four_demo_corners_name_the_geometric_impossibility`).
+document every ring now rolls too: the ring derivation reads each corner's
+OWN cut, and re-derives its strip ends from the patches' base surfaces, so
+another junction's cut on a shared ring patch cannot open this ring
+(`test_all_four_demo_corners_roll_in_both_orders`).  All twelve pair orders
+roll twice.
 
 WHAT THE DELETION PINS.  A corner that is deleted must leave the model as it
 found it (`SilkCorner.release_corner`, the `_CutRecord` write log): the
@@ -77,24 +79,21 @@ RING = {short: ring for short, _name, ring in JUNCTIONS}
 # The demo's five patches, in the fixture's own order.
 PATCH_NAMES = [name for name, _order, _grid in DEMO.PATCHES]
 
-# The 12-run pair matrix, MEASURED after the share-aware pin selection:
+# The 12-run pair matrix, MEASURED after owner-specific ring derivation:
 # both orders of every unordered pair. Keyed by build order; the value is
 # (first construction, first state, second construction, second state), where
 # a state is "built" (poles and a member), "empty" (the object exists with an
 # EMPTY net -- its ring stopped assembling) or "none" (no object at all).
-# The two pairs whose rings read a cut the FIRST corner placed on a patch
-# that is not in the SECOND corner's member still refuse by name -- that is
-# the geometric impossibility recorded by
-# `test_all_four_demo_corners_name_the_geometric_impossibility`, not a
-# shipped fallback. All other ten rows roll twice.
+# Every row rolls twice: a corner reads only its OWN cut entries, so a cut
+# another corner placed on a shared ring patch no longer opens this ring.
 PAIR_MATRIX = {
     ("J1", "J2"): ("rolling", "built", "rolling", "built"),
     ("J1", "J3"): ("rolling", "built", "rolling", "built"),
     ("J1", "J4"): ("rolling", "built", "rolling", "built"),
     ("J2", "J1"): ("rolling", "built", "rolling", "built"),
     ("J2", "J3"): ("rolling", "built", "rolling", "built"),
-    ("J2", "J4"): ("rolling", "built", None, "none"),
-    ("J3", "J1"): ("rolling", "built", None, "none"),
+    ("J2", "J4"): ("rolling", "built", "rolling", "built"),
+    ("J3", "J1"): ("rolling", "built", "rolling", "built"),
     ("J3", "J2"): ("rolling", "built", "rolling", "built"),
     ("J3", "J4"): ("rolling", "built", "rolling", "built"),
     ("J4", "J1"): ("rolling", "built", "rolling", "built"),
@@ -117,6 +116,11 @@ SOLO_CUTS = {
 # moves them by a hair, which is why the test compares the PATTERN and not
 # these digits).
 CUT_TOL = 1e-9
+# FreeCAD's own save/reopen writes doubles through a decimal string: measured
+# on the four-corner file, scalar cuts and piece boxes move at most
+# 2.7755575615628914e-17 while weights and areas move 0.00e+00. 1e-12 is four
+# orders above that floor and far below any geometric feature here.
+REOPEN_TOL = 1e-12
 
 
 # ---- reading the model ---------------------------------------------------
@@ -252,6 +256,96 @@ def _delta(before, after):
 def _pole_delta(a, b):
     return max([(FreeCAD.Vector(*x) - FreeCAD.Vector(*y)).Length
                 for x, y in zip(a, b)] or [0.0])
+
+
+def _cut_list(doc):
+    """{patch name: sorted owned cut entries} -- the #130 cut list."""
+    return {name: sorted((e[0], e[1], e[2], e[3])
+                         for e in SM.cut_entries(doc.getObject(name)))
+            for name in PATCH_NAMES if doc.getObject(name) is not None}
+
+
+def _full_state(doc, short):
+    """Everything one corner owns, in one comparable dict."""
+    name = [n for s, n, _r in JUNCTIONS if s == short][0]
+    c = doc.getObject(name)
+    if c is None:
+        return None
+    m = _member(doc, c)
+    pieces = {}
+    for p in (c.Pieces or []):
+        pieces[p.Name] = {
+            "patch": p.Patch.Name,
+            "cell": (p.CellU, p.CellV),
+            "box": (p.U0, p.U1, p.V0, p.V1),
+            "poles": [tuple(v) for v in p.Poles],
+            "weights": [float(w) for w in p.Weights],
+            "area": float(p.Shape.Area),
+        }
+    return {
+        "construction": str(c.Construction or ""),
+        "poles": [tuple(v) for v in c.Poles],
+        "weights": [float(w) for w in c.Weights],
+        "member": None if m is None else {
+            "poles": [tuple(v) for v in m.Poles],
+            "weights": [float(w) for w in m.Weights],
+            "edges": list(m.BoundaryEdges or []),
+        },
+        "pieces": pieces,
+        "owned": list(getattr(c, "_OwnedCuts", None) or []),
+        "record": list(getattr(c, "_CutRecord", None) or []),
+    }
+
+
+def _compare_corner(before, after, label, errors, checks, tol=0.0):
+    """Field-by-field equality of two `_full_state` readings."""
+    if before is None or after is None:
+        checks.append("%s: before/after state missing" % label)
+        check(False, "%s lost its corner object" % label, errors)
+        return
+    check(before["construction"] == after["construction"],
+          "%s changed construction (%r -> %r)"
+          % (label, before["construction"], after["construction"]), errors)
+    dp = _pole_delta(before["poles"], after["poles"])
+    dw = max([abs(a - b) for a, b in
+              zip(before["weights"], after["weights"])] or [0.0])
+    checks.append("%s: 6x6 pole delta %.3e mm, weight delta %.3e"
+                  % (label, dp, dw))
+    check(dp <= tol and dw <= tol,
+          "%s moved (%.3e mm / %.3e weight)" % (label, dp, dw), errors)
+    bm, am = before["member"], after["member"]
+    check((bm is None) == (am is None),
+          "%s lost or gained its triangular member" % label, errors)
+    if bm and am:
+        dpm = _pole_delta(bm["poles"], am["poles"])
+        dwm = max([abs(a - b) for a, b in
+                   zip(bm["weights"], am["weights"])] or [0.0])
+        checks.append("%s member: pole delta %.3e mm, weight delta %.3e"
+                      % (label, dpm, dwm))
+        check(dpm <= tol and dwm <= tol,
+              "%s's member moved (%.3e mm / %.3e)"
+              % (label, dpm, dwm), errors)
+        check(bm["edges"] == am["edges"],
+              "%s's member boundary edges changed" % label, errors)
+    check(sorted(before["pieces"]) == sorted(after["pieces"]),
+          "%s's piece set changed" % label, errors)
+    for name, bp in before["pieces"].items():
+        ap = after["pieces"].get(name)
+        if ap is None:
+            continue
+        dpp = _pole_delta(bp["poles"], ap["poles"])
+        dpa = abs(bp["area"] - ap["area"])
+        same = (bp["patch"] == ap["patch"] and bp["cell"] == ap["cell"]
+                and all(abs(x - y) <= tol
+                        for x, y in zip(bp["box"], ap["box"])))
+        checks.append("%s %s: same cell %s, pole delta %.3e mm, area delta %.3e"
+                      % (label, name, same, dpp, dpa))
+        check(same and dpp <= tol and dpa <= tol,
+              "%s's piece %s changed" % (label, name), errors)
+    check(before["owned"] == after["owned"],
+          "%s's owned-cut list changed" % label, errors)
+    check(before["record"] == after["record"],
+          "%s's cut record changed" % label, errors)
 
 
 # ---- 1. two corners that coexist ----------------------------------------
@@ -560,27 +654,18 @@ def test_the_pair_matrix_on_the_demo(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
-def test_all_four_demo_corners_name_the_geometric_impossibility(doc):
-    """Four junctions in one document, in both build orders -- the LIMIT.
+def test_all_four_demo_corners_roll_in_both_orders(doc):
+    """Four junctions in one document, in both build orders -- all roll.
 
-    Measured with the cut list and the share-aware pin selection:
+    The cut list stores every owner's cut (#130); the ring derivation now
+    reads only the cut THIS corner owns and re-derives its strip ends from
+    the patches' base surfaces.  Measured in both orders:
 
-      J1,J2,J3,J4  the first three roll; J4 is REFUSED BY NAME: J2's leader
-                   opens P_Bottom's U=0 end (band 0.1, leader 0.198952) and
-                   J4's ring reads that patch without carrying the tri.
-      J4,J3,J2,J1  all four corner objects read rolling/36/5, but some
-                   triangular MEMBERS stay empty and the console names
-                   the open ring on P_Right (band 0.1, leader 0.203222) --
-                   a swallowed refusal this test refuses to call success.
+      J1,J2,J3,J4  -> four rolling corners, 36 poles, 5 pieces, 24-member nets
+      J4,J3,J2,J1  -> the same four, byte for byte
 
-    P_Right is a ring patch of all four junctions; its one scalar slot per
-    axis end cannot close four rings at once. Lifting that needs a cut LIST
-    the ring derivation reads, not another pin choice. The test's bar is
-    that the impossibility is NAMED (with the gap and the owned cuts) and
-    never hidden behind a shipped corner.
-
-    WOULD BE RED IF: a corner shipped, a refusal was silent, or the four
-    corners suddenly built without the named gap.
+    WOULD BE RED IF: any corner shipped, any net/member was empty, any
+    console error named an open ring, or the document failed to settle.
     """
     errors, checks = [], []
     original = FreeCAD.Console.PrintError
@@ -607,34 +692,23 @@ def test_all_four_demo_corners_name_the_geometric_impossibility(doc):
                              if member is not None else 0))
             checks.append("%s -> %r" % (" ".join(order), rows))
             for short, construction, poles, pieces, mnet in rows:
-                check(construction in (None, "rolling"),
-                      "%s shipped instead of naming the gap (%r)"
-                      % (short, construction), errors)
-                if construction == "rolling":
-                    check(poles == 36 and pieces == 5,
-                          "%s rolls without its full 66 and five pieces "
-                          "(%d/%d)" % (short, poles, pieces), errors)
-            empties = [r[0] for r in rows if r[1] == "rolling" and r[4] == 0]
-            refusals = [r[0] for r in rows if r[1] is None]
-            checks.append("four-corner failures: refused %r, empty members %r"
-                          % (refusals, empties))
-            check(refusals or empties,
-                  "all four corners fully assembled -- the recorded "
-                  "geometric impossibility is gone", errors)
-            text = "\n".join(messages)
-            opens = [line.strip() for line in text.splitlines()
-                     if "ring's corner is OPEN" in line]
-            for line in opens[:2]:
-                checks.append("named gap: %s" % line)
-            check(opens, "the four-corner impossibility was not named: %r"
-                  % text[-400:], errors)
+                check(construction == "rolling",
+                      "%s did not roll (%r)" % (short, construction), errors)
+                check(poles == 36 and pieces == 5 and mnet == 24,
+                      "%s lacks a rolling role (%d poles/%d pieces/%d member "
+                      "poles)" % (short, poles, pieces, mnet), errors)
+            bad = [m.strip()[:180] for m in messages
+                   if "ring's corner is OPEN" in m
+                   or "could not build triangular" in m]
+            checks.append("four-corner errors: %r" % bad[:3])
+            check(not bad, "the four-ring build reported %r" % bad[:3], errors)
             owned = [(p.Name, e)
                      for p in doc.Objects for e in SM.cut_entries(p)]
             checks.append("cuts owned in the document: %r"
                           % [(n, e[0], e[1] + 1, e[2], round(e[3], 6))
                              for n, e in owned])
-            check(owned, "no owned cuts were placed -- the gap is not the "
-                  "shared-cut impossibility", errors)
+            check(owned, "no owned cuts were placed -- the shared-cut path "
+                  "was not measured", errors)
             touched = [o.Name for o in doc.Objects if "Touched" in o.State]
             checks.append("after four builds: %d objects, %d Touched"
                           % (len(doc.Objects), len(touched)))
@@ -642,6 +716,205 @@ def test_all_four_demo_corners_name_the_geometric_impossibility(doc):
                   % touched[:6], errors)
     finally:
         FreeCAD.Console.PrintError = original
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+# ---- 3b. four corners: reopen and delete --------------------------------
+
+def test_four_rolled_corners_come_back_from_a_saved_document(doc):
+    """Four corners, saved and reopened: every role comes back unchanged.
+
+    The draft contract for #130 asks that a document with FOUR rolling
+    corners survives the round trip, not just a pair. Each corner's 6x6, its
+    member, its five pieces, its owned cut list and its write log are read
+    before and after, field by field; the five patches' cuts and the eight
+    strips' nets are compared through `_snapshot`.
+    """
+    errors, checks = [], []
+    _model(doc)
+    for short in ("J1", "J2", "J3", "J4"):
+        if _corner(doc, short) is None:
+            return {"pass": False, "checks": checks,
+                    "errors": ["%s did not roll" % short]}
+    before = {short: _full_state(doc, short)
+              for short in ("J1", "J2", "J3", "J4")}
+    cuts_before = _cut_list(doc)
+    patch_before = _snapshot(doc)
+    tmpdir = tempfile.mkdtemp(prefix="silk_four_corners_")
+    path = os.path.join(tmpdir, "four_corners.FCStd")
+    doc.saveCopy(path)
+    doc_name = doc.Name
+    reopened = FreeCAD.openDocument(path)
+    FreeCAD.setActiveDocument(reopened.Name)
+    try:
+        reopened.recompute()
+        reopened.recompute()
+        corners = [o for o in reopened.Objects
+                   if getattr(o, "object_type", "") == "CornerBlend"]
+        checks.append("reopened: %d corner(s), %d member(s), %d piece(s)"
+                      % (len(corners),
+                         len([o for o in reopened.Objects
+                              if getattr(o, "object_type", "")
+                              == "RollingMemberFace"]),
+                         len([o for o in reopened.Objects
+                              if getattr(o, "object_type", "")
+                              == "PreservedPiece"])))
+        check(len(corners) == 4,
+              "the reopened document has %d corners, not 4" % len(corners),
+              errors)
+        for short, state in before.items():
+            after = _full_state(reopened, short)
+            check(after is not None,
+                  "%s did not come back from the saved file" % short, errors)
+            if after:
+                check(after["construction"] == "rolling",
+                      "%s came back as %r, not rolling"
+                      % (short, after["construction"]), errors)
+                _compare_corner(state, after, short, errors, checks,
+                                tol=REOPEN_TOL)
+        check(_cut_list(reopened) == cuts_before,
+              "the owned cut list changed across the round trip", errors)
+        # `_delta` is deliberately exact for the SAME_SESSION tests. A saved
+        # file goes through FreeCAD's decimal property writer; compare scalar
+        # cuts at the measured 2.78e-17 floor instead, and everything else
+        # exactly.
+        rt = _delta(patch_before, _snapshot(reopened))
+        rt = [(k, f, v) for k, f, v in rt
+              if not (f == "cuts" and REOPEN_TOL > 0
+                      and k.startswith("patch:"))]
+        checks.append("patch/strip differences after reopen: %d" % len(rt))
+        check(not rt, "patches or strips changed across the round trip: %r"
+              % rt[:6], errors)
+        touched = [o.Name for o in reopened.Objects if "Touched" in o.State]
+        check(not touched, "the reopened document does not settle: %r"
+              % touched[:6], errors)
+    finally:
+        FreeCAD.closeDocument(reopened.Name)
+        try:
+            os.remove(path)
+            os.rmdir(tmpdir)
+        except OSError:
+            pass
+        FreeCAD.setActiveDocument(doc_name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_deleting_one_of_four_leaves_the_other_three_untouched(doc):
+    """Delete J1 from a four-corner model: J2, J3 and J4 do not move.
+
+    J1 and J3 share P_Top's U=1 end, so J1's removal also restores the
+    SCALAR slot J1 first wrote. J3's own cut lives in the owned list, and
+    the owner-specific derivation must keep reading it: the survivor keeps
+    its 36 poles, its member, its five pieces and its owned cut byte for
+    byte. J1's own roles and cut entries are gone.
+    """
+    errors, checks = [], []
+    _model(doc)
+    for short in ("J1", "J2", "J3", "J4"):
+        if _corner(doc, short) is None:
+            return {"pass": False, "checks": checks,
+                    "errors": ["%s did not roll" % short]}
+    survivors = ("J2", "J3", "J4")
+    before = {short: _full_state(doc, short) for short in survivors}
+    before_cuts = _cut_list(doc)
+    j1 = [n for s, n, _r in JUNCTIONS if s == "J1"][0]
+    victim = doc.getObject(j1)
+    removed_roles = [p.Name for p in (victim.Pieces or [])]
+    member = _member(doc, victim)
+    if member is not None:
+        removed_roles.append(member.Name)
+    doc.removeObject(j1)
+    doc.recompute()
+    doc.recompute()
+    names = {o.Name for o in doc.Objects}
+    for name in removed_roles:
+        checks.append("J1 role %s after delete: %s"
+                      % (name, "gone" if name not in names else "STILL HERE"))
+        check(name not in names,
+              "the deleted corner's role %s outlived it" % name, errors)
+    check(doc.getObject(j1) is None, "the deleted corner is still in the tree",
+          errors)
+    for short in survivors:
+        _compare_corner(before[short], _full_state(doc, short), short,
+                        errors, checks)
+    after_cuts = _cut_list(doc)
+    for short in survivors:
+        state = before[short]
+        for entry in state["owned"]:
+            parts = entry.split("|")
+            if len(parts) != 4:
+                continue
+            pname, letter, end, value = (parts[0], parts[1],
+                                         int(parts[2]), float(parts[3]))
+            found = any(c[0] == letter and c[1] == end
+                        and abs(c[3] - value) < CUT_TOL
+                        for c in after_cuts.get(pname, []))
+            checks.append("%s owned cut %s.%s%d still present: %s"
+                          % (short, pname, letter, end + 1, found))
+            check(found, "%s's owned cut %s.%s%d went with J1"
+                  % (short, pname, letter, end + 1), errors)
+    j1_entry = [e for e in before_cuts["P_Top"]
+                if e[2] == j1]
+    checks.append("J1's owned entries on P_Top: %r" % j1_entry)
+    check(j1_entry, "J1 had no owned cut to release", errors)
+    check(not [e for e in after_cuts["P_Top"] if e[2] == j1],
+          "J1's owned cut survived its deletion", errors)
+    touched = [o.Name for o in doc.Objects if "Touched" in o.State]
+    check(not touched, "the four-corner document does not settle after the "
+          "delete: %r" % touched[:6], errors)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_deleting_all_four_restores_the_model_byte_identically(doc):
+    """Four corners out: every patch and strip returns to the pre-corner state.
+
+    Same field-by-field instrument as the two-corner delete test, but with
+    all four junctions -- including the two that shared P_Top's U=1 slot
+    and the scalar write J1 made there first.
+    """
+    errors, checks = [], []
+    _model(doc)
+    pre = _snapshot(doc)
+    before_objects = len(doc.Objects)
+    pre_cuts = _cut_list(doc)
+    checks.append("pre-corner: %d object(s), %d owned cut(s)"
+                  % (before_objects, sum(len(v) for v in pre_cuts.values())))
+    check(not any(pre_cuts.values()), "the pre-corner model already has cuts",
+          errors)
+    names = []
+    for short in ("J1", "J2", "J3", "J4"):
+        c = _corner(doc, short)
+        if c is None:
+            return {"pass": False, "checks": checks,
+                    "errors": ["%s did not roll" % short]}
+        names.append(c.Name)
+    mid = _snapshot(doc)
+    check(_delta(pre, mid), "the four corners changed nothing -- the test "
+          "is measuring an empty change", errors)
+    for name in names:
+        doc.removeObject(name)
+        doc.recompute()
+        doc.recompute()
+    post = _snapshot(doc)
+    delta = _delta(pre, post)
+    for key, field, value in delta:
+        checks.append("DIFFERS: %s.%s = %r" % (key, field, value))
+    checks.append("after four deletes: %d object(s) (%d before), %d "
+                  "difference(s), %r owned cuts"
+                  % (len(doc.Objects), before_objects, len(delta),
+                     sum(len(v) for v in _cut_list(doc).values())))
+    check(not delta, "the model did not come back: %r" % delta[:6], errors)
+    check(not any(_cut_list(doc).values()),
+          "an owned cut survived all four deletions", errors)
+    leftovers = [o.Name for o in doc.Objects
+                 if getattr(o, "object_type", "")
+                 in ("PreservedPiece", "RollingMemberFace")]
+    check(not leftovers, "corner roles left behind: %r" % leftovers, errors)
+    check(len(doc.Objects) == before_objects,
+          "the document has %d objects; expected %d"
+          % (len(doc.Objects), before_objects), errors)
+    touched = [o.Name for o in doc.Objects if "Touched" in o.State]
+    check(not touched, "the document does not settle: %r" % touched[:6], errors)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -1125,7 +1398,10 @@ ALL_TESTS = [
     test_two_rolled_corners_share_patches_and_each_reads_its_own_cells,
     test_two_corners_on_one_axis_end_cannot_both_hold_a_leader,
     test_the_pair_matrix_on_the_demo,
-    test_all_four_demo_corners_name_the_geometric_impossibility,
+    test_all_four_demo_corners_roll_in_both_orders,
+    test_four_rolled_corners_come_back_from_a_saved_document,
+    test_deleting_one_of_four_leaves_the_other_three_untouched,
+    test_deleting_all_four_restores_the_model_byte_identically,
     test_deleting_one_rolled_corner_leaves_the_other_untouched,
     test_deleting_the_last_rolled_corner_restores_the_model_byte_identically,
     test_the_pieces_follow_a_band_edge_edit_on_a_shared_patch,
