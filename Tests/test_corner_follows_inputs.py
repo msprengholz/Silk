@@ -717,3 +717,118 @@ def test_the_panel_flips_each_mode_and_the_corner_obeys(doc):
     finally:
         _close_panel(panel)
     return {"pass": not errors, "errors": errors, "checks": checks}
+
+def test_the_triangle_follows_the_third_blend_band(doc):
+    """AUTO-SIZE: the tri scales with the third, uncut blend.
+
+    The default cut length is the third seam's measured band width
+    (`third_band_widths`), so widening THAT band must widen the triangle --
+    without the user touching the corner. Widening the member patch's own
+    band edges must not move the size (that is the setback, not the target).
+
+    WOULD BE RED IF: the cut sides stayed at the old length, or the corner
+    collapsed.
+    """
+    from SilkBlend import side_and_end, band_edge_prop
+    errors, checks = [], []
+    strips, corner = _build(doc)
+    if corner is None or not corner.Poles:
+        return {"pass": False, "errors": ["the corner did not build"],
+                "checks": checks}
+    patch = _member_patch(corner, strips)
+    before = _sides(strips, patch)
+    before_vals = sorted(before.values())
+    third = [s for s in strips
+             if patch not in (getattr(s, "PatchA", None),
+                              getattr(s, "PatchB", None))]
+    checks.append("third seam %r, sides before %r"
+                  % ([s.Name for s in third],
+                     {k: round(v, 6) for k, v in before.items()}))
+    if len(third) != 1:
+        return {"pass": False,
+                "errors": ["the ring has %d uncut seams" % len(third)],
+                "checks": checks}
+    widen = []
+    for p in (third[0].PatchA, third[0].PatchB):
+        e, ss = side_and_end(third[0], p)
+        letter = "U" if e[0] == "V" else "V"
+        prop = band_edge_prop(letter, ss)
+        old = float(getattr(p, prop))
+        setattr(p, prop, 0.4 if ss == 0 else 0.6)
+        widen.append((p.Name, prop, old, float(getattr(p, prop))))
+    doc.recompute()
+    doc.recompute()
+    after = _sides(strips, patch)
+    checks.append("widened %r -> sides %r"
+                  % (widen, {k: round(v, 6) for k, v in after.items()}))
+    if len(after) != 2:
+        errors.append("the corner lost a rolled seam after the edit")
+    else:
+        vals = sorted(after.values())
+        if abs(vals[1] - vals[0]) > 1e-9:
+            errors.append("the triangle is no longer equal-sided: %r" % after)
+        if vals[0] <= before_vals[0] * 1.5:
+            errors.append("the cut sides did not follow the widened third "
+                          "band: %r -> %r" % (before_vals, vals))
+    checks.append("corner after the edit: %d poles, %d faces"
+                  % (len(corner.Poles or []),
+                     len(corner.Shape.Faces) if corner.Shape else -1))
+    if len(corner.Poles or []) != 36:
+        errors.append("the corner lost its 6x6 after the third-band edit")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
+def test_a_wider_setback_keeps_the_corner_alive_and_its_own_cut(doc):
+    """A SETBACK EDIT must not kill the corner, and its OWN cut must follow.
+
+    The rolling cut belongs to the corner (`_OwnedCuts`), and the corner's
+    cell reader reads THAT, not the scalar slot. Re-deriving the cut on an
+    input edit used to write only the scalar slot, so the corner kept reading
+    the OLD cut -- inside the new setback, hence inert -- and the corner went
+    EMPTY (measured on Demo 01: `VSplit1` 0.1 -> 0.15 gave 36 -> 0 poles).
+    """
+    from SilkBlend import side_and_end, band_edge_prop
+    from SilkMachinery import cut_entries, leader_pair
+    errors, checks = [], []
+    strips, corner = _build(doc)
+    if corner is None or not corner.Poles:
+        return {"pass": False, "errors": ["the corner did not build"],
+                "checks": checks}
+    patch = _member_patch(corner, strips)
+    edited = []
+    for s in strips:
+        if patch not in (getattr(s, "PatchA", None),
+                         getattr(s, "PatchB", None)):
+            continue
+        e, ss = side_and_end(s, patch)
+        letter = "U" if e[0] == "V" else "V"
+        prop = band_edge_prop(letter, ss)
+        setattr(patch, prop, 0.15 if ss == 0 else 0.85)
+        edited.append((prop, float(getattr(patch, prop))))
+    doc.recompute()
+    doc.recompute()
+    sides = _sides(strips, patch)
+    checks.append("setback widened %r -> sides %r, %d poles"
+                  % (edited, {k: round(v, 6) for k, v in sides.items()},
+                     len(corner.Poles or [])))
+    if len(corner.Poles or []) != 36:
+        errors.append("a setback edit emptied the corner (%d poles)"
+                      % len(corner.Poles or []))
+    if len(sides) == 2:
+        vals = sorted(sides.values())
+        if abs(vals[1] - vals[0]) > 1e-9:
+            errors.append("the triangle is no longer equal-sided: %r" % sides)
+    # the corner's OWN cut entry must be the value the patch carries
+    owned = {(e[0], e[1]): e[3] for e in cut_entries(patch)
+             if e[2] == corner.Name}
+    checks.append("owned cuts %r" % (owned,))
+    for (letter, end), value in owned.items():
+        scalar = leader_pair(patch, letter)[end]
+        if abs(scalar - value) > 1e-12:
+            errors.append("the corner's own cut %s%d is %r while the patch "
+                          "carries %r -- the follow wrote one and not the "
+                          "other" % (letter, end + 1, value, scalar))
+    if not owned:
+        errors.append("the corner records no owned cut after the edit")
+    return {"pass": not errors, "errors": errors, "checks": checks}
+

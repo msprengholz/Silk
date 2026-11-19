@@ -1461,6 +1461,17 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         items = self._collected[section]
         if any(i.obj is obj for i in items):
             return
+        if (section == SECTION_CORNER
+                and self.object_type(obj) == "CornerBlend"):
+            # a clicked CORNER loads its ring: the choices below read the
+            # corner's own recorded state (`apply_corner_choices` edits it)
+            ring = [s for s in (getattr(obj, "Strips", None) or [])
+                    if s is not None]
+            if len(ring) not in (CORNER_MIN, CORNER_MAX):
+                return
+            self._collected[section] = [_Collected(s) for s in ring]
+            self.refresh()
+            return
         if len(items) >= self.section_limit(section):
             return
         items.append(_Collected(obj))
@@ -1496,8 +1507,12 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         if section == SECTION_CORNER:
             # Corner Blend collects the 3 or 4 ring blends themselves
             # (identity, not geometry): a Blend object. A wrong type
-            # is ignored.
-            return self.object_type(obj) in BLEND_TYPES
+            # is ignored.  A CornerBlend is accepted too: clicking an
+            # existing rolled corner LOADS it -- its ring goes into the
+            # collection, and every choice below then shows what that
+            # corner carries, so it can be edited in place (`Apply`).
+            return (self.object_type(obj) in BLEND_TYPES
+                    or self.object_type(obj) == "CornerBlend")
         # Blend: an Edge object that is a seam right now. An edge with
         # fewer than two patches is not a seam, and a non-manifold one is
         # not blendable -- both are silently ignored here; the table still
@@ -2500,6 +2515,23 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
                 self.corner_member_patch.addItem(p.Name)
             idx = self.corner_member_patch.findText(keep)
             self.corner_member_patch.setCurrentIndex(max(idx, 0))
+            # A BUILT corner's placement is shown as its own recorded answer,
+            # unless the user has already typed a choice on this page.
+            if ring and self.corner_member_patch.currentIndex() <= 0:
+                from SilkCorner import recorded_member_pin
+                placed = existing_corner(ring)
+                pin = None
+                if placed is not None:
+                    patch = getattr(placed, "MemberPatch", None)
+                    if patch is not None:
+                        pin = (patch, int(getattr(placed, "MemberCorner", 0)))
+                    if pin is None:
+                        pin = recorded_member_pin(placed)
+                if pin is not None:
+                    at = self.corner_member_patch.findText(pin[0].Name)
+                    if at > 0:
+                        self.corner_member_patch.setCurrentIndex(at)
+                        self.corner_member_corner.setValue(int(pin[1]))
         finally:
             self.corner_member_patch.blockSignals(blocked)
         live = bool(patches)

@@ -705,6 +705,50 @@ def corner_object_model(obj):
     return str(getattr(obj, OBJECT_MODEL_PROP, "") or OBJECT_MODEL_LEGACY)
 
 
+MEMBER_RECORD_PROP = "_MemberPin"
+
+
+def ensure_member_record(obj):
+    """The corner's own record of WHERE it put the triangular member.
+
+    Internal, and separate from the user-facing `MemberPatch` / `MemberCorner`
+    on purpose (#117): an UNSET pin still means "the automatic search
+    decides", while this records the answer the stage actually built with, so
+    the corner can re-derive its cut after an edit even when the ring cannot
+    be searched again -- e.g. when a widened setback swallows the leader and
+    the ring temporarily refuses.
+    """
+    if not hasattr(obj, MEMBER_RECORD_PROP):
+        obj.addProperty("App::PropertyString", MEMBER_RECORD_PROP, "Internal",
+                        "the patch|corner the stage placed the triangular "
+                        "member at")
+        obj.setEditorMode(MEMBER_RECORD_PROP, 1)
+
+
+def record_member_pin(corner, patch, corner_index):
+    """Record that `corner` placed its triangular member at patch|corner."""
+    ensure_member_record(corner)
+    setattr(corner, MEMBER_RECORD_PROP,
+            "%s|%d" % (getattr(patch, "Name", "?"), int(corner_index)))
+
+
+def recorded_member_pin(corner):
+    """`(patch, corner_index)` the stage placed the member at, or None."""
+    doc = getattr(corner, "Document", None)
+    raw = str(getattr(corner, MEMBER_RECORD_PROP, "") or "")
+    if doc is None or "|" not in raw:
+        return None
+    name, idx = raw.rsplit("|", 1)
+    patch = doc.getObject(name)
+    try:
+        index = int(idx)
+    except ValueError:
+        return None
+    if patch is None:
+        return None
+    return (patch, index)
+
+
 def ensure_triangle(obj):
     """The corner-owned triangular face's net and stable boundary names."""
     if not hasattr(obj, "TriPoles"):

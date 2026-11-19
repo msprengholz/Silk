@@ -952,3 +952,123 @@ def test_the_panel_places_the_tri_sets_the_setback_and_defaults_to_equal_sides(d
         errors.append("(d) a refused rolling corner built %r, not the "
                       "shipped fallback" % refused["construction"])
     return {"pass": not errors, "errors": errors, "checks": checks}
+
+def test_selecting_a_rolled_corner_loads_its_choices(doc):
+    """THE CORNER, WHEN CLICKED, OPENS ITS OWN CHOICES -- ready to edit.
+
+    The panel's corner page used to be a CREATE page only: it collected the
+    ring's blends and built a corner. Clicking the built corner did nothing,
+    so there was no way to change its placement or a leader afterwards except
+    by re-collecting the blends by hand. Now the click LOADS it: the ring goes
+    into the collection, the placement shows the corner's recorded answer, the
+    leader rows show the lengths it actually carries (mm from the junction
+    corner), and the follow modes are mounted -- so `Apply` edits it in place.
+
+    WOULD BE RED IF: clicking the corner collected nothing, the placement read
+    "automatic" for a corner built on a patch, a leader row showed "equal" for
+    a seam the corner has cut, or Apply left the corner unchanged.
+    """
+    import SilkWorkflowOps as OPS
+    from SilkCorner import recorded_member_pin
+    from Tests.test_task_panel import _open_panel, _close_panel, _click
+    import SilkTaskPanel as TP
+
+    errors, checks = [], []
+    d = _fresh_demo("_ui_load_corner")
+    try:
+        panel = _open_panel(d)
+        try:
+            panel.sections.open(TP.SECTION_CORNER)
+            for name in DEMO_RING:
+                _click(d.getObject(name))
+            built = panel.panel_confirm()
+            d.recompute()
+            d.recompute()
+            corners = [o for o in d.Objects
+                       if getattr(o, "object_type", "") == "CornerBlend"]
+            if not built or not corners:
+                return {"pass": False, "checks": checks,
+                        "errors": ["the panel built no corner: %r"
+                                   % panel.status_text()]}
+            corner = corners[0]
+            placed = recorded_member_pin(corner)
+            patch = placed[0] if placed is not None else None
+            if patch is None:
+                return {"pass": False, "checks": checks,
+                        "errors": ["the corner records no member placement"]}
+            panel._collected[TP.SECTION_CORNER] = []
+            panel.refresh()
+            _click(corner)
+            ring_now = [i.obj.Name for i in
+                        panel._collected[TP.SECTION_CORNER]]
+            checks.append("clicked %s -> collected %r" % (corner.Name, ring_now))
+            if sorted(ring_now) != sorted(DEMO_RING):
+                errors.append("clicking the corner collected %r, not its ring"
+                              % (ring_now,))
+            shown = panel.corner_member_patch.currentText()
+            checks.append("placement shows %r[%d]"
+                          % (shown, int(panel.corner_member_corner.value())))
+            if shown != patch.Name:
+                errors.append("the placement shows %r, the corner sits on %r"
+                              % (shown, patch.Name))
+            seeds = {k: float(v.value())
+                     for k, v in panel._corner_leader_spins.items()}
+            carried = {}
+            for s in corner.Strips:
+                length, _w = OPS.seam_cut_length(s, patch,
+                                                 ring=list(corner.Strips))
+                if patch in (s.PatchA, s.PatchB) and length is not None:
+                    reach, _r = OPS.seam_cut_reach(s, patch,
+                                                   ring=list(corner.Strips))
+                    carried[s.Name] = reach["corner_mm"] + length
+            checks.append("leader rows %r, the corner carries %r"
+                          % ({k: round(v, 6) for k, v in seeds.items()},
+                             {k: round(v, 6) for k, v in carried.items()}))
+            # the spin shows CORNER_LEADER_DECIMALS places: compare at that
+            # precision, not at the instrument's
+            tol = 0.5 * 10.0 ** (-int(TP.CORNER_LEADER_DECIMALS))
+            for name, value in carried.items():
+                if abs(seeds.get(name, -1.0) - value) > tol:
+                    errors.append("seam %s shows %r mm, the corner carries "
+                                  "%r mm" % (name, seeds.get(name), value))
+            checks.append("follow modes mounted: %r / %r (%s)"
+                          % (panel.corner_leader_mode.currentText(),
+                             panel.corner_setback_mode.currentText(),
+                             panel.corner_follow_lbl.text()[:60]))
+            if not panel.corner_follow_lbl.text():
+                errors.append("the page does not say which follow modes are "
+                              "in force")
+            name = sorted(carried)[0]
+            panel._corner_leader_spins[name].setValue(carried[name] + 5.0)
+            applied = panel.on_apply_corner_choices()
+            d.recompute()
+            d.recompute()
+            seam = [s for s in corner.Strips if s.Name == name][0]
+            reach, _why = OPS.seam_cut_reach(seam, patch,
+                                             ring=list(corner.Strips))
+            after = OPS.seam_cut_length(seam, patch,
+                                        ring=list(corner.Strips))[0]
+            checks.append("apply=%r: seam %s cut side %.6f -> %.6f mm, "
+                          "%d poles; status %r"
+                          % (applied, name, carried[name], after,
+                             len(corner.Poles or []),
+                             panel.status_text()[:70]))
+            if not applied:
+                errors.append("Apply refused: %r" % panel.status_text())
+            if len(corner.Poles or []) != 36:
+                errors.append("Apply emptied the corner (%d poles)"
+                              % len(corner.Poles or []))
+            # the row is a length from the junction corner; the cut side is
+            # measured from the SETBACK, so the ask is (row - corner_mm)
+            want = (carried[name] + 5.0) - reach["corner_mm"]
+            if abs(after - want) > 1e-3:
+                errors.append("Apply did not move the cut of %s: cut side "
+                              "%.6f mm, asked for %.6f mm"
+                              % (name, after, want))
+        finally:
+            _close_panel(panel)
+    finally:
+        if d.Name in FreeCAD.listDocuments():
+            FreeCAD.closeDocument(d.Name)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+

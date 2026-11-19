@@ -744,6 +744,9 @@ def _create_rolling_corner_blend(strips, name="CornerBlend", pin=None,
     # (`SilkCorner._member_pin_of` reads the property, so a USER's pin
     # reaches the member too). Writing the search's answer back would turn a
     # choice nobody made into a stored one.
+    from SilkCorner import record_member_pin
+    if member_pin is not None:
+        record_member_pin(res["corner"], member_pin[0], member_pin[1])
     if pin is not None:
         from SilkCorner import ensure_member_pin
         corner = res["corner"]
@@ -2220,6 +2223,10 @@ def follow_corner_inputs(corner):
         return report
     member_patch = getattr(corner, "MemberPatch", None)
     if member_patch is None:
+        from SilkCorner import recorded_member_pin
+        found = recorded_member_pin(corner)
+        member_patch = found[0] if found is not None else None
+    if member_patch is None:
         found, _why = corner_member_pin(ordered, CORNER_DEFAULT_TOL)
         member_patch = found[0] if found is not None else None
     if member_patch is None:
@@ -2255,9 +2262,20 @@ def follow_corner_inputs(corner):
     # already inside one); `refollowing` is that guard, and the framework
     # re-runs the patch and this corner in the next pass on its own.
     with refollowing():
+        from SilkMachinery import (add_cut_entry, is_leader_cut_prop)
+        from SilkCorner import record_owned_cut
         for patch, prop, before, after in plan:
             setattr(patch, prop, after)
             record_cut(corner, patch, prop, before, after)
+            if is_leader_cut_prop(prop) and after not in (0.0, 1.0):
+                # THE OWNED ENTRY IS WHAT THE CORNER READS (#130). Writing
+                # only the scalar slot left the entry at the OLD cut, so the
+                # corner's own reader saw a leader INSIDE the new setback
+                # (inert), the ring stopped closing and the corner went
+                # EMPTY after a setback edit.
+                letter, end = prop[0], int(prop[-1]) - 1
+                add_cut_entry(patch, letter, end, corner.Name, after)
+                record_owned_cut(corner, patch, letter, end, after)
         # A single-object recompute is not the nested DOCUMENT recompute the
         # guard exists to prevent. Without it FreeCAD can leave the patch
         # Up-to-date at the old cut, and the strips keep that stale cache.
