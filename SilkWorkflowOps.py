@@ -1433,6 +1433,69 @@ def seam_cut_at_leg(strip, patch, leg_mm, tol=None, ring=None):
             None)
 
 
+# THE DEMO'S OWN PROPORTIONS (ADR 0006). A rolling corner's automatic
+# placement is the maintainer's: the SETBACK is 1/16 of the patch axis and the
+# CUT sits at 1/4 of the seam from the junction corner. Our blend default
+# (0.1 parameter at the 0 end) is a *parameter*, which on the demo's
+# anisotropic patches lands at 4.9..24.9 mm -- 1.6x to 4x his setback -- and
+# the G5 rule sized the cut by the third blend's band width, which put the
+# quad in a thin strip beside the corner instead of across it. Measured on
+# `Silk_Demo_01.FCStd`: his four corner quads are 1931.0 / 955.6 / 1982.5 /
+# 1532.0 mm^2; with the old defaults ours were 494.7 / 410.9 / 297.3 /
+# 600.1 mm^2, and with these numbers 1090.8 / 715.8 / 800.8 / 238.9 mm^2.
+ROLLING_SETBACK = 1.0 / 16.0
+ROLLING_CUT_FRACTION = 0.25
+# Silk's untouched blend default per end: the corner may replace THESE, and
+# nothing else (#64: a width the user set is his).
+BLEND_DEFAULT_SETBACK = {0: 0.1, 1: 0.9}
+
+
+def default_cut_home(reach):
+    """`(property, parameter)` -- where the corner's own default cuts.
+
+    THE CUT SITS AT 1/4 OF THE PATCH AXIS from the junction corner: the
+    maintainer's own `0.25` (ADR 0006), a PARAMETER, like the 1/16 setback it
+    pairs with. Expressing it as a length (mm) was #129's unit and it does not
+    reproduce this construction: on the demo it moved every cut and shrank the
+    quad to ~45 % of his. The pair (1/16, 1/4) is the demo's own cell.
+    """
+    from SilkMachinery import leader_cut_prop
+    value = (ROLLING_CUT_FRACTION if reach["corner_end"] == 0
+             else 1.0 - ROLLING_CUT_FRACTION)
+    return leader_cut_prop(reach["along"], reach["corner_end"]), value
+
+
+def default_setback_writes(strips, tol=None):
+    """`[(patch, prop, cur, want)]` -- 1/16 at each ring seam's junction end,
+    only where the band edge is still Silk's untouched blend default."""
+    from SilkBlend import side_and_end, band_edge_prop
+    from SilkMachinery import band_extent, seam_axis_roles
+    out = []
+    for s in strips:
+        for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
+            if p is None:
+                continue
+            e, ss = side_and_end(s, p, tol)
+            if not e:
+                continue
+            end, _why = seam_junction_end(s, p, strips, tol)
+            if end is None:
+                continue
+            ext = band_extent(p, e, ss, end)
+            if ext[0] is None:
+                continue
+            along, _band = seam_axis_roles(e)
+            prop = band_edge_prop(along, ext[2])
+            default = BLEND_DEFAULT_SETBACK[ext[2]]
+            cur = float(getattr(p, prop, default) or default)
+            if abs(cur - default) > 1e-12:
+                continue                 # the user's own width
+            want = (ROLLING_SETBACK if ext[2] == 0
+                    else 1.0 - ROLLING_SETBACK)
+            out.append((p, prop, cur, want))
+    return out
+
+
 def equal_cut_length(cuts):
     """The ONE length the cuts that bound the triangular member are made,
     from the lengths the corner stage's parameter default gives them.
@@ -1823,16 +1886,10 @@ def apply_corner_choices(strips, pin=None, leaders=None):
                 if reach is None:
                     return None, ("seam %s: %s" % (s.Name, why))
                 reaches.append(reach)
-            _target, leg, why = equal_cut_legs(reaches, member_patch, ordered)
-            if leg is None:
-                return None, ("the equalising rule cannot place the cut on "
-                              "%s's seams: %s" % (member_patch.Name, why))
             for reach in reaches:
                 if reach["seam"].Name in named:
                     continue
-                prop, write, why = seam_cut_at_leg(reach["seam"],
-                                                   member_patch, leg,
-                                                   ring=ordered)
+                prop, write = default_cut_home(reach)
                 if prop is None:
                     return None, ("seam %s: %s" % (reach["seam"].Name, why))
                 if abs(float(getattr(member_patch, prop, 0.0) or 0.0)
@@ -2174,13 +2231,9 @@ def _follow_leader_plan(strips, member_patch, owner=None):
         reaches.append(reach)
     if not reaches:
         return None, ("the ring carries no seam of %s" % member_patch.Name)
-    _target, leg, why = equal_cut_legs(reaches, member_patch, strips)
-    if leg is None:
-        return None, why
     plan = []
     for reach in reaches:
-        prop, value, why = seam_cut_at_leg(reach["seam"], member_patch, leg,
-                                          ring=strips)
+        prop, value = default_cut_home(reach)
         if prop is None:
             return None, why
         cur = _own_value(member_patch, prop, owner)
@@ -2677,6 +2730,23 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     #    leaves the user's model exactly as it was -- the corner stage
     #    falls back to the shipped construction, and that fallback must
     #    be the shipped corner, byte for byte.
+    # THE SETBACK FIRST: the reach of every cut is measured FROM it, so the
+    # demo's 1/16 has to be in place before a length is placed. Only edges
+    # still holding Silk's blend default are touched.
+    setbacks = default_setback_writes(strips)
+    if setbacks:
+        from SilkMachinery import follow_deferred
+        with follow_deferred():
+            for p, prop, cur, want in setbacks:
+                setattr(p, prop, want)
+            if FreeCAD.ActiveDocument is not None:
+                FreeCAD.ActiveDocument.recompute()
+                FreeCAD.ActiveDocument.recompute()
+        for p, prop, cur, want in setbacks:
+            FreeCAD.Console.PrintMessage(
+                "Silk: the rolling corner places the setback %s.%s %g -> %g "
+                "(1/16 of the axis, the demo's own proportion)\n"
+                % (p.Name, prop, cur, want))
     reaches = []
     for s in roll:
         if patch not in (getattr(s, "PatchA", None),
@@ -2715,36 +2785,20 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
                 % (asked, reach["seam"].Name, reach["corner_mm"]))
             return None
         asks.append((reach, leg))
-    equal_at = [i for i, (_r, leg) in enumerate(asks) if leg is None]
-    if equal_at:
-        target, capped, why = equal_cut_legs(reaches, patch, strips)
-        if capped is None:
-            FreeCAD.Console.PrintError(
-                "Silk: the rolling leader cannot be placed: %s. The "
-                "rolling construction was not built.\n" % why)
-            return None
-        if capped < target - CUT_LENGTH_TOL:
-            short = min(reaches, key=lambda r: r["max_mm"])
-            FreeCAD.Console.PrintMessage(
-                "Silk: the two cuts that bound the triangular member "
-                "cannot both be %g mm long -- seam %s can carry at most "
-                "%.6f mm (its setback %.6f to %.6f along %s, where the "
-                "band's own edge is). Rolling both at %.6f mm: the best "
-                "reachable pair.\n"
-                % (target, short["seam"].Name, short["max_mm"],
-                   short["setback"], short["t_far"], short["along"],
-                   capped))
-        for i in equal_at:
-            asks[i] = (asks[i][0], capped)
+    # a seam nobody asked a length for is cut at the corner's own 1/4 of the
+    # patch axis (the demo's placement), not at a length
     planned = []
     for reach, leg in asks:
-        prop, value, why = seam_cut_at_leg(reach["seam"], patch, leg,
-                                          ring=strips)
-        if prop is None:
-            FreeCAD.Console.PrintError(
-                "Silk: the rolling leader cannot be placed: %s. The "
-                "rolling construction was not built.\n" % why)
-            return None
+        if leg is None:
+            prop, value = default_cut_home(reach)
+        else:
+            prop, value, why = seam_cut_at_leg(reach["seam"], patch, leg,
+                                               ring=strips)
+            if prop is None:
+                FreeCAD.Console.PrintError(
+                    "Silk: the rolling leader cannot be placed: %s. The "
+                    "rolling construction was not built.\n" % why)
+                return None
         cur = float(getattr(patch, prop, 0.0) or 0.0)
         if abs(cur - value) < 1e-12:
             continue

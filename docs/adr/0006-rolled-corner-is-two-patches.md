@@ -50,16 +50,25 @@ the one patch per corner where two different ring corners are correct,
 #127). The other two patches keep one cut per axis end, and **the third blend
 is not cut** -- it is one full-length side of the quad.
 
-**The cut is a LENGTH, not a fraction (#129).** `create_corner_blend` /
-`create_rolling_corner_66` take the leader as **mm from the junction corner**,
-per seam (`leaders={seam: mm}`), and the **default is `leader=None`**:
-`equal_cut_length` puts the tri's two cut sides at the **geometric mean** of
-the length the parameter default (`ROLLING_LEADER` = 0.25) gives them, so the
-triangle comes out roughly even-sided -- the owner's rule (2026-10-22):
-*"ideally both segment lengths should be close to the same absolute length
-(not u or v values between 0 and 1, but the actual length in eg. mm). this
-ensures a neat, closer to even sided triangle"*. A leader that does not clear
-its setback is INERT and is refused **by name**, atomically.
+**The automatic placement is the demo's own (#133, superseding the G5
+rule).** With nothing typed, a rolling corner places the **setback at 1/16 of
+the patch axis** and the **cut at 1/4 of the axis from the junction corner** --
+his two numbers, read off `Silk_Demo_01` (`Resources/Demo_files/`). Those are
+PARAMETERS, which is what his file stores; the G5 rule sized the cut from the
+third blend's band width and measured 494.7 / 410.9 / 297.3 / 600.1 mm^2 on
+the demo's four quads against his 1931.0 / 955.6 / 1982.5 / 1532.0. The rule
+is applied **only where the band edge is still Silk's untouched blend default
+(0.1 / 0.9)**: a width the user set is never overwritten (#64), and a saved
+corner keeps the cut it stores. The equal-sided rule (#129) remains available
+when asked for, and an explicit `leaders={seam: mm}` still wins: a length
+somebody typed is theirs.
+
+**The cut is a LENGTH where the caller gives one (#129).** `create_corner_blend`
+/ `create_rolling_corner_66` take the leader as **mm from the junction
+corner**, per seam (`leaders={seam: mm}`), and a leader that does not clear its
+setback is INERT and refused **by name**, atomically. What the *default* is
+changed in #133: the maintainer's 1/4 of the axis, not the equalised
+geometric mean (which stays reachable when asked for).
 
 **Whose choice is what.** The owner's choice is **which corner carries the
 tri** (equivalently the patch it sits on, `MemberPatch` / `MemberCorner`),

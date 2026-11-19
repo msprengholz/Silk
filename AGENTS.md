@@ -206,6 +206,18 @@ creates them anymore.
   only; the SHIPPED construction still writes the band edge (that is where
   the construction of before #119 cut), and a corner that carries no recorded
   construction reads as shipped.
+- **The automatic placement is the DEMO'S OWN (#133): setback 1/16, cut 1/4.**
+  With nothing typed a rolling corner puts the band edge at **1/16** of the
+  patch axis and the cut at **1/4 of the axis from the junction corner** --
+  his numbers, read off `Resources/Demo_files/Silk_Demo_01.FCStd`. Both are
+  PARAMETERS (his file stores parameters). The G5 rule that sized the cut by
+  the third blend's band width is superseded: on the demo's four quads it read
+  494.7 / 410.9 / 297.3 / 600.1 mm^2 against his 1931.0 / 955.6 / 1982.5 /
+  1532.0. The 1/16 is written **only where the band edge is still Silk's
+  untouched 0.1 / 0.9** (a width the user set stays his, #64); a saved corner
+  keeps its stored cut; an explicit `leaders={seam: mm}` still wins; the
+  equal-sided #129 rule stays available when asked for. Measured comparison:
+  `Tests/demo_corner_match.py` -> `_inspect/demo_corner_match.txt`.
 - **A corner hides its whole JUNCTION-END BLOCK, not one cell.**
   `SilkMachinery.corner_cell_block` names the cells from the corner cell to
   the patch edge on BOTH axes; the corner's own cuts subdivide the square it
