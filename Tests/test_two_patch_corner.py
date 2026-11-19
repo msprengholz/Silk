@@ -115,10 +115,20 @@ def _fixture(doc):
 
 
 def _member_of(doc):
-    for o in doc.Objects:
-        if getattr(o, "object_type", "") == "RollingMemberFace":
-            return o
-    return None
+    """A read view of the corner-owned triangular face."""
+    from SilkCorner import corner_tri_face, corner_tri_net
+    corners = [o for o in doc.Objects
+               if getattr(o, "object_type", "") == "CornerBlend"]
+    if not corners:
+        return None
+    net = corner_tri_net(corners[0])
+    if net is None:
+        return None
+    class _TriView:
+        Shape = corner_tri_face(corners[0])
+        Poles = net[0]
+        Weights = net[1]
+    return _TriView()
 
 
 def _two_patch(doc, **kw):
@@ -379,7 +389,8 @@ def test_the_tri_is_beside_the_quad_not_inside_it(doc):
         return {"pass": False,
                 "errors": ["the two-patch corner or its tri did not build"],
                 "checks": checks}
-    ds = _interior_distances(member.Shape, corner.Shape, grid=8)
+    quad = max(corner.Shape.Faces, key=lambda f: f.Area)
+    ds = _interior_distances(member.Shape, quad, grid=8)
     bb = corner.Shape.BoundBox
     extent = max(bb.XLength, bb.YLength, bb.ZLength) or 1.0
     lo, hi = min(ds) / extent * 100.0, max(ds) / extent * 100.0
@@ -390,12 +401,12 @@ def test_the_tri_is_beside_the_quad_not_inside_it(doc):
                      HIS_TRI_QUAD_PERCENT[0], HIS_TRI_QUAD_PERCENT[1],
                      "BELOW" if lo < HIS_TRI_QUAD_PERCENT[0] else "inside"))
     checks.append("areas: quad %.6f mm^2, tri %.6f mm^2"
-                  % (corner.Shape.Area, member.Shape.Area))
+                  % (quad.Area, member.Shape.Area))
     # THE BAR (1): the two surfaces share no area.  The control is the quad
     # against ITSELF: same code, same tolerance, an overlap that must show.
     try:
-        shared = _shared_area(corner.Shape, member.Shape)
-        control = _shared_area(corner.Shape, corner.Shape)
+        shared = _shared_area(quad, member.Shape)
+        control = _shared_area(quad, quad)
     except Exception as exc:            # a boolean that will not run is not
         return {"pass": False,             # a pass
                 "errors": ["the overlap instrument did not run: %r" % (exc,)],
