@@ -335,7 +335,8 @@ CORNER_FOLLOW_IN_FORCE = (
     "Following: leader %s (%s), setback %s (%s)")
 
 
-def _seam_seed(s, strips, patch=None, construction=None, fresh=False):
+def _seam_seed(s, strips, patch=None, construction=None, fresh=False,
+               owner=None):
     """The length (mm from the junction corner) ONE seam seeds its editor
     with: what it carries now, else `CORNER_LEADER_AUTO` ("equal").
 
@@ -358,7 +359,7 @@ def _seam_seed(s, strips, patch=None, construction=None, fresh=False):
             if p is None:
                 continue
             here, _why = seam_leader(s, p, construction=construction,
-                                     ring=strips)
+                                     ring=strips, owner=owner)
             if here is not None:
                 break
         if here is not None:
@@ -366,7 +367,7 @@ def _seam_seed(s, strips, patch=None, construction=None, fresh=False):
     return CORNER_LEADER_AUTO
 
 
-def corner_cut_seed(strips, construction=None):
+def corner_cut_seed(strips, construction=None, corner=None):
     """The leader each seam of `strips` is cut at RIGHT NOW, per seam name,
     in MM from the junction corner.
 
@@ -376,7 +377,9 @@ def corner_cut_seed(strips, construction=None):
     shipped one) and converted to a length in the stage's own unit. A seam
     that carries no cut seeds at `CORNER_LEADER_AUTO` ("equal") -- the
     stage's equalising rule is what places a cut nobody has asked for."""
-    return {s.Name: _seam_seed(s, strips, construction=construction)
+    owner = getattr(corner, "Name", None) if corner is not None else None
+    return {s.Name: _seam_seed(s, strips, construction=construction,
+                               owner=owner)
             for s in strips}
 
 
@@ -2558,7 +2561,8 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         elif existing_corner(ring) is not None:
             from SilkCorner import corner_construction
             built, _note = corner_construction(existing_corner(ring))
-            seeds = corner_cut_seed(ring, construction=built)
+            seeds = corner_cut_seed(ring, construction=built,
+                                    corner=existing_corner(ring))
         else:
             seeds = corner_leader_seed(ring, self._corner_pin(patches),
                                        construction=self.corner_construction_choice())
@@ -2896,6 +2900,10 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
         The shipped construction has no leader cut, so it reports none."""
         from SilkWorkflowOps import seam_cut_length
         patch = getattr(corner, "MemberPatch", None)
+        if patch is None:
+            from SilkCorner import recorded_member_pin
+            found = recorded_member_pin(corner)
+            patch = found[0] if found is not None else None
         ring = list(getattr(corner, "Strips", None) or [])
         if not ring:
             return {}
@@ -2913,7 +2921,10 @@ class SilkTaskPanel(QtWidgets.QWidget if QtWidgets else object):
             if patch not in (getattr(s, "PatchA", None),
                              getattr(s, "PatchB", None)):
                 continue
-            length, _why = seam_cut_length(s, patch, ring=ring)
+            length, _why = seam_cut_length(
+                s, patch, ring=ring,
+                owner=getattr(corner, "Name", None) if corner is not None
+                else None)
             if length is not None:
                 out[s.Name] = length
         return out

@@ -1386,16 +1386,23 @@ def seam_cut_at_leg(strip, patch, leg_mm, tol=None, ring=None):
             None)
 
 
-def seam_cut_length(strip, patch, tol=None, ring=None):
+def seam_cut_length(strip, patch, tol=None, ring=None, owner=None):
     """(mm, None) or (None, why): the TRIANGULAR MEMBER's cut side along
     this seam -- the arc from the seam's setback to the leader cut the patch
     carries at that end.  This is the quantity #129 equalises, and the one a
-    panel or an instrument reports."""
-    from SilkMachinery import band_edge, leader_pair, seam_length
+    panel or an instrument reports.
+
+    `owner` selects WHICH corner's cut is read (#130): a shared axis end can
+    carry two corners' cuts, and the scalar slot holds only the first one's.
+    Without it the scalar pair is read, which is the pre-#130 behaviour.
+    """
+    from SilkMachinery import (band_edge, leader_pair, seam_length,
+                               corner_leader_pair)
     reach, why = seam_cut_reach(strip, patch, tol, ring)
     if reach is None:
         return None, why
-    l1, l2 = leader_pair(patch, reach["along"])
+    l1, l2 = (corner_leader_pair(patch, reach["along"], owner)
+              if owner is not None else leader_pair(patch, reach["along"]))
     cut = band_edge(l1 if reach["corner_end"] == 0 else l2)
     if cut is None:
         return None, ("%s carries no leader cut at the %d end of its %s "
@@ -1565,7 +1572,8 @@ def corner_ring_patches(strips):
     return patches, None
 
 
-def seam_leader(strip, patch, tol=None, construction=None, ring=None):
+def seam_leader(strip, patch, tol=None, construction=None, ring=None,
+                owner=None):
     """`(leader_mm, None)` or `(None, why)`: the rolling leader `patch`'s
     side of `strip` is cut at today, as a LENGTH IN MM along the seam from
     the junction corner (#129).
@@ -1607,7 +1615,12 @@ def seam_leader(strip, patch, tol=None, construction=None, ring=None):
     prop, t_corner, why = home(strip, patch, 0.0, tol, ring)
     if prop is None:
         return None, why
-    stored = band_edge(getattr(patch, prop, 0.0) or 0.0)
+    if owner is not None and prop[:1] in ("U", "V") and prop[-1:] in ("1", "2"):
+        from SilkMachinery import corner_leader_pair
+        stored = band_edge(corner_leader_pair(patch, prop[0],
+                                              owner)[int(prop[-1]) - 1])
+    else:
+        stored = band_edge(getattr(patch, prop, 0.0) or 0.0)
     if stored is None:
         return None, ("%s.%s carries no cut" % (patch.Name, prop))
     e, _ss = side_and_end(strip, patch, tol)
@@ -1979,7 +1992,8 @@ def _record_cut_reference(corner, strips, member_patch):
         reach, why = seam_cut_reach(s, member_patch, ring=strips)
         if reach is None:
             continue
-        length, _why = seam_cut_length(s, member_patch, ring=strips)
+        length, _why = seam_cut_length(s, member_patch, ring=strips,
+                                       owner=getattr(corner, "Name", None))
         if length is not None:
             placed[s.Name] = (length, reach["setback"])
     if placed:
@@ -2059,7 +2073,8 @@ def set_follow_modes(corner, leader=None, setback=None, settle=True):
     return follow_modes(corner)
 
 
-def _follow_setback_plan(strips, member_patch, placed, leader_auto):
+def _follow_setback_plan(strips, member_patch, placed, leader_auto,
+                         owner=None):
     """`([(patch, prop, before, after)], None)` for `SetbackMode = "auto"`,
     or `(None, why)` when the recorded pair no longer fits the model.
 
@@ -2116,14 +2131,31 @@ def _follow_setback_plan(strips, member_patch, placed, leader_auto):
             writes.append((leader_cut_prop(reach["along"],
                                           reach["corner_end"]), cut))
         for name, value in writes:
-            cur = float(getattr(member_patch, name, 0.0) or 0.0)
+            cur = _own_value(member_patch, name, owner)
             if abs(cur - value) < 1e-12:
                 continue
             plan.append((member_patch, name, cur, value))
     return plan, None
 
 
-def _follow_leader_plan(strips, member_patch):
+def _own_value(patch, prop, owner):
+    """The value the CORNER reads for `prop` -- its own cut when it has one.
+
+    A shared patch's scalar slot holds ONE owner's cut, so comparing a
+    corner's next cut against that slot made two corners on one patch take
+    turns rewriting the same end forever (measured: J1 and J3 on `P_Top`
+    wrote ULeader2 0.735594 <-> 0.714921 on every pass, the strips stayed
+    Touched and the document never settled). The corner's own entry is its
+    answer; the slot is only the first owner's copy.
+    """
+    from SilkMachinery import is_leader_cut_prop, corner_leader_pair
+    if is_leader_cut_prop(prop):
+        letter, end = prop[0], int(prop[-1]) - 1
+        return float(corner_leader_pair(patch, letter, owner)[end])
+    return float(getattr(patch, prop, 0.0) or 0.0)
+
+
+def _follow_leader_plan(strips, member_patch, owner=None):
     """`([(patch, prop, before, after)], None)` for `LeaderMode = "auto"`,
     or `(None, why)` when the rule cannot be placed.
 
@@ -2151,7 +2183,7 @@ def _follow_leader_plan(strips, member_patch):
                                           ring=strips)
         if prop is None:
             return None, why
-        cur = float(getattr(member_patch, prop, 0.0) or 0.0)
+        cur = _own_value(member_patch, prop, owner)
         if abs(cur - value) < 1e-12:
             continue
         plan.append((member_patch, prop, cur, value))
@@ -2242,13 +2274,14 @@ def follow_corner_inputs(corner):
         else:
             plan, why = _follow_setback_plan(
                 ordered, member_patch, placed,
-                leader_mode == LEADER_MODE_AUTO)
+                leader_mode == LEADER_MODE_AUTO, owner=corner.Name)
             if plan is None:
                 report["note"] = ("the recorded cut does not fit the model "
                                   "any more: %s" % why)
                 plan = None
     if plan is None and leader_mode == LEADER_MODE_AUTO:
-        plan, why = _follow_leader_plan(ordered, member_patch)
+        plan, why = _follow_leader_plan(ordered, member_patch,
+                                        owner=corner.Name)
         if plan is None:
             report["note"] = "the cut cannot be re-derived: %s" % why
             return report
@@ -2264,8 +2297,21 @@ def follow_corner_inputs(corner):
     with refollowing():
         from SilkMachinery import (add_cut_entry, is_leader_cut_prop)
         from SilkCorner import record_owned_cut
+        from SilkMachinery import cut_entries
         for patch, prop, before, after in plan:
-            setattr(patch, prop, after)
+            if is_leader_cut_prop(prop):
+                # the slot is the FIRST owner's copy: a later owner adds its
+                # entry and leaves the slot alone (the same rule the build
+                # follows), or two corners would overwrite each other's cut
+                letter, end = prop[0], int(prop[-1]) - 1
+                taken = any(e[0] == letter and e[1] == end
+                            and e[2] != corner.Name
+                            for e in cut_entries(patch))
+                if not taken and abs(float(getattr(patch, prop, 0.0) or 0.0)
+                                     - after) > 1e-12:
+                    setattr(patch, prop, after)
+            else:
+                setattr(patch, prop, after)
             record_cut(corner, patch, prop, before, after)
             if is_leader_cut_prop(prop) and after not in (0.0, 1.0):
                 # THE OWNED ENTRY IS WHAT THE CORNER READS (#130). Writing
