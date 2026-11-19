@@ -19,7 +19,8 @@ module asserts it end to end and against the objects that came out:
     inventory shows all 8 seams blended;
   * each CornerBlend fills its junction: 36 poles, one valid face, the
     junction point inside the fill's box, and an idempotent second ask in
-    either strip order.
+    either strip order. All four junctions build (#130); no refusal is
+    tolerated on the owner's model.
 
 No continuity label is asserted anywhere.
 """
@@ -63,28 +64,19 @@ def test_demo01_clickthrough_builds_the_documented_model(doc):
     """
     errors, checks, report = [], [], []
     result = MODEL.build(doc)
-    # #126: a junction the DEFAULT (rolling) construction cannot build is
-    # refused BY NAME with nothing created -- the measured limit of this model
-    # (CB_J4; see `_assert_corners`).  Every OTHER problem is an error.
-    for problem in result["problems"]:
-        if problem.startswith("corner ") and "Nothing was created" in problem:
-            checks.append("%s" % problem.strip())
-            continue
-        errors.append(problem)
-
+    # #126/#127 closed by #130: every junction of the owner's own model
+    # now reaches the rolling construction. A refusal here is an error, not
+    # a recorded limit.
+    errors.extend(result["problems"])
     counts = (len(result["edges"]), len(result["patches"]),
               len(result["blends"]), len(result["corners"]))
-    if counts[:3] != (12, 5, 8) or counts[3] != 4 - len(
-            [p for p in result["problems"]
-             if p.startswith("corner ") and "Nothing was created" in p]):
+    if counts != (12, 5, 8, 4):
         errors.append("click-through reached %d edges / %d patches / "
-                      "%d blends / %d corners, want 12/5/8/4 (minus any "
-                      "junction the default construction refused by name)"
+                      "%d blends / %d corners, want 12/5/8/4"
                       % counts)
     else:
         checks.append("click-through: 12 Edges -> 5 Patches -> 8 Blends -> "
-                      "%d CornerBlends (%d junction(s) refused by name)"
-                      % (counts[3], 4 - counts[3]))
+                      "4 CornerBlends (all junctions built)")
     report.append("counts: %d edges, %d patches, %d blends, %d corners"
                   % counts)
 
@@ -276,7 +268,7 @@ def _assert_corners(result, doc):
                       "returned %s" % (built, sorted(result["corners"])))
     else:
         checks.append("%d CornerBlend(s) in the document after the second "
-                      "asks (no object for a refused junction)" % len(built))
+                      "asks (one per junction)" % len(built))
     return errors, checks, report
 
 
