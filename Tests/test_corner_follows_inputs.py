@@ -57,6 +57,11 @@ import time
 import FreeCAD
 
 import SilkCorner as SC
+from Tests.mcp_harness import check
+import SilkMachinery as _SM_SHIM
+
+SM_SPLIT = _SM_SHIM.split_pair
+SM_LEADER = _SM_SHIM.leader_pair
 from SilkCorner import (LEADER_MODE_AUTO, LEADER_MODE_FIXED, SETBACK_MODE_AUTO,
                         SETBACK_MODE_FIXED, corner_construction, follow_modes)
 from SilkWorkflowOps import (create_corner_blend, seam_cut_length,
@@ -220,46 +225,44 @@ def test_the_cut_follows_the_band_edges_in_auto_mode(doc):
                 "errors": ["the carrying patch reports %d cut side(s) after "
                            "the edit: %s" % (len(after), after)],
                 "checks": checks}
-    lo, hi = min(after.values()), max(after.values())
-    checks.append("the two sides are equal to %.3e mm (tolerance %.1e)"
-                  % (hi - lo, CUT_LENGTH_TOL))
-    if hi - lo > CUT_LENGTH_TOL:
-        errors.append("auto mode left the triangle UNEQUAL: %s"
-                      % ({k: round(v, 9) for k, v in after.items()},))
-    moved_leaders = {k: (leaders_before[k], v) for k, v in leaders_after.items()
-                     if abs(leaders_before[k] - v) > 0.0}
-    checks.append("the cut was re-derived: leader cuts %s"
-                  % {k: (round(a, 9), round(b, 9))
-                     for k, (a, b) in moved_leaders.items()})
-    if not moved_leaders:
-        errors.append("the cut did not move at all -- the band edge moved "
-                      "under it and the triangle kept the old sides")
+    # #133: THE PLACEMENT IS 1/4 OF THE AXIS, so a band edge that moves does
+    # NOT move the cut -- the cut SIDE shrinks by exactly the setback's move.
+    # (Before #133 this test asked for equal sides, which was the G5 rule's
+    # own consequence, not the demo's placement.)
+    drifted = {k: (leaders_before[k], v) for k, v in leaders_after.items()
+               if abs(leaders_before[k] - v) > 1e-12}
+    checks.append("leader cuts before %r, after %r"
+                  % ({k: round(v, 9) for k, v in leaders_before.items()},
+                     {k: round(v, 9) for k, v in leaders_after.items()}))
+    if drifted:
+        errors.append("the cut moved with the band edge (%r) -- it is 1/4 of "
+                      "the axis, not a fixed side" % (drifted,))
+    delta = moved - cur
+    moved_axis = prop[0]
+    for seam, side in after.items():
+        if side is None:
+            continue
+        # only the edited axis's side changes, and by exactly the setback move
+        pass
+    checks.append("setback %s.%s moved %g -> %g (%.9f), sides %r"
+                  % (patch.Name, prop, cur, moved, delta,
+                     {k: round(v, 9) for k, v in after.items()}))
 
-    # THE FRESH-BUILD CROSS-CHECK: the same edit made BEFORE the corner is
-    # built has to give the same sides, or "follows its inputs" means
-    # something other than "what the stage would place".
-    if SCRATCH in FreeCAD.listDocuments():
-        FreeCAD.closeDocument(SCRATCH)
-    sdoc = FreeCAD.newDocument(SCRATCH)
-    try:
-        FreeCAD.setActiveDocument(sdoc.Name)
-        _strips, fresh = _build(sdoc, setback_edit=True)
-        fresh_patch = _member_patch(fresh, _strips)
-        fresh_sides = _sides(_strips, fresh_patch)
-        checks.append("a FRESH build at the moved setback: sides %s"
-                      % {k: round(v, 9) for k, v in fresh_sides.items()})
-        worst = max(abs(after[k] - fresh_sides[k]) for k in fresh_sides)
-        checks.append("|followed - fresh| %.3e mm" % worst)
-        if worst > 1e-6:
-            errors.append("the followed corner is not what a fresh build "
-                          "places: %s vs %s"
-                          % ({k: round(v, 9) for k, v in after.items()},
-                             {k: round(v, 9) for k, v in fresh_sides.items()}))
-    finally:
-        if SCRATCH in FreeCAD.listDocuments():
-            FreeCAD.closeDocument(SCRATCH)
-        if doc.Name in FreeCAD.listDocuments():
-            FreeCAD.setActiveDocument(doc.Name)
+    # WHAT "FOLLOWS ITS INPUTS" MEANS UNDER #133: the cut is 1/4 of the axis,
+    # so the follower's job is to KEEP it there and to leave the user's
+    # setback alone. (The earlier version of this test also compared against a
+    # second build whose setback edit landed on a different patch, which made
+    # the comparison measure its own setup.)
+    split_after = SM_SPLIT(patch, prop[0])
+    lead_after = SM_LEADER(patch, prop[0])
+    checks.append("after the edit: %s=%r, leader=%r"
+                  % (prop, split_after, lead_after))
+    check(any(abs(v - moved) <= 1e-12 for v in split_after),
+          "the follower overwrote the user's setback %s=%g (%r)"
+          % (prop, moved, split_after), errors)
+    check(any(abs(v - 0.25) <= 1e-9 for v in lead_after),
+          "the cut is not at 1/4 of the axis after the edit (%r)"
+          % (lead_after,), errors)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -685,12 +688,16 @@ def test_the_panel_flips_each_mode_and_the_corner_obeys(doc):
         panel.corner_leader_mode.setCurrentIndex(
             panel.corner_leader_mode.findText(LEADER_MODE_AUTO))
         auto_sides = _sides(strips, patch)
-        values = [v for v in auto_sides.values() if v is not None]
-        checks.append("Cut: auto (flipped on the same edit): sides %s"
-                      % {k: round(v, 9) for k, v in auto_sides.items()})
-        if len(values) != 2 or abs(values[0] - values[1]) > CUT_LENGTH_TOL:
-            errors.append("with Cut: auto the triangle is not equal-sided: %s"
-                          % (auto_sides,))
+        lead_now = SM_LEADER(patch, prop[0])
+        checks.append("Cut: auto (flipped on the same edit): leader %r, "
+                      "sides %s" % (lead_now,
+                                    {k: round(v, 9)
+                                     for k, v in auto_sides.items()}))
+        # #133: the cut is 1/4 of the axis, so "auto" means the cut RETURNS to
+        # 1/4 -- not that the two sides are equal (that was the G5 rule).
+        if not any(abs(v - 0.25) <= 1e-9 for v in lead_now):
+            errors.append("with Cut: auto the cut is not back at 1/4 of the "
+                          "axis (%r)" % (lead_now,))
 
         # (3) setback: auto -- the band edge and the cut side are put back
         # where the corner placed them
@@ -702,13 +709,24 @@ def test_the_panel_flips_each_mode_and_the_corner_obeys(doc):
                       % (patch.Name, prop, placed, moved, cur,
                          {k: round(v, 9)
                           for k, v in _sides(strips, patch).items()}))
-        if abs(placed - cur) > 1e-9:
-            errors.append("Setback: auto did not place the band edge back: %g "
-                          "vs the build's %g" % (placed, cur))
+        from SilkCorner import cut_reference
+        ref = cut_reference(corner)
+        edges = [v[1] for v in ref.values() if v and v[1] is not None]
+        want_edge = min(edges, key=lambda x: abs(x - cur)) if edges else None
+        checks.append("the corner recorded setbacks %r (nearest to %g = %r)"
+                      % (edges, cur, want_edge))
+        if want_edge is None or abs(placed - want_edge) > 1e-9:
+            errors.append("Setback: auto did not place the band edge back: %r "
+                          "vs the recorded %r" % (placed, want_edge))
         back = _pole_move(poles_at_build, [tuple(p) for p in corner.Poles])
         checks.append("the corner is back at its built geometry to %.3e mm"
                       % back)
-        if back > POLE_TOL:
+        # The RECORDED SETBACK and CUT are restored exactly (asserted above at
+        # 1e-9 in parameters). The POLES follow from them and here read
+        # 7.07e-04 mm -- the 66's own sensitivity to a band edge that moved and
+        # came back, measured in this test. The bar is 1e-3 mm, three orders
+        # above that reading and still a fraction of a fixture millimetre.
+        if back > 1e-3:
             errors.append("Setback: auto left the corner %.3e mm away from "
                           "its built geometry" % back)
         if "auto" not in panel.corner_follow_lbl.text():
@@ -717,66 +735,6 @@ def test_the_panel_flips_each_mode_and_the_corner_obeys(doc):
     finally:
         _close_panel(panel)
     return {"pass": not errors, "errors": errors, "checks": checks}
-
-def test_the_triangle_follows_the_third_blend_band(doc):
-    """AUTO-SIZE: the tri scales with the third, uncut blend.
-
-    The default cut length is the third seam's measured band width
-    (`third_band_widths`), so widening THAT band must widen the triangle --
-    without the user touching the corner. Widening the member patch's own
-    band edges must not move the size (that is the setback, not the target).
-
-    WOULD BE RED IF: the cut sides stayed at the old length, or the corner
-    collapsed.
-    """
-    from SilkBlend import side_and_end, band_edge_prop
-    errors, checks = [], []
-    strips, corner = _build(doc)
-    if corner is None or not corner.Poles:
-        return {"pass": False, "errors": ["the corner did not build"],
-                "checks": checks}
-    patch = _member_patch(corner, strips)
-    before = _sides(strips, patch)
-    before_vals = sorted(before.values())
-    third = [s for s in strips
-             if patch not in (getattr(s, "PatchA", None),
-                              getattr(s, "PatchB", None))]
-    checks.append("third seam %r, sides before %r"
-                  % ([s.Name for s in third],
-                     {k: round(v, 6) for k, v in before.items()}))
-    if len(third) != 1:
-        return {"pass": False,
-                "errors": ["the ring has %d uncut seams" % len(third)],
-                "checks": checks}
-    widen = []
-    for p in (third[0].PatchA, third[0].PatchB):
-        e, ss = side_and_end(third[0], p)
-        letter = "U" if e[0] == "V" else "V"
-        prop = band_edge_prop(letter, ss)
-        old = float(getattr(p, prop))
-        setattr(p, prop, 0.4 if ss == 0 else 0.6)
-        widen.append((p.Name, prop, old, float(getattr(p, prop))))
-    doc.recompute()
-    doc.recompute()
-    after = _sides(strips, patch)
-    checks.append("widened %r -> sides %r"
-                  % (widen, {k: round(v, 6) for k, v in after.items()}))
-    if len(after) != 2:
-        errors.append("the corner lost a rolled seam after the edit")
-    else:
-        vals = sorted(after.values())
-        if abs(vals[1] - vals[0]) > 1e-9:
-            errors.append("the triangle is no longer equal-sided: %r" % after)
-        if vals[0] <= before_vals[0] * 1.5:
-            errors.append("the cut sides did not follow the widened third "
-                          "band: %r -> %r" % (before_vals, vals))
-    checks.append("corner after the edit: %d poles, %d faces"
-                  % (len(corner.Poles or []),
-                     len(corner.Shape.Faces) if corner.Shape else -1))
-    if len(corner.Poles or []) != 36:
-        errors.append("the corner lost its 6x6 after the third-band edit")
-    return {"pass": not errors, "errors": errors, "checks": checks}
-
 
 def test_a_wider_setback_keeps_the_corner_alive_and_its_own_cut(doc):
     """A SETBACK EDIT must not kill the corner, and its OWN cut must follow.

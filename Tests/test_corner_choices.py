@@ -432,7 +432,7 @@ def test_apply_writes_the_choices_onto_an_existing_corner(doc):
     before = {n: leader_pair(doc.getObject(n), "U")
               for n in PATCH_NAMES}
     blocked, why = apply_corner_choices(
-        strips, leaders={"B_AB": 0.1, "B_BC": 0.25, "B_CA": 0.25})
+        strips, leaders={"B_AB": 0.05, "B_BC": 0.25, "B_CA": 0.25})
     after = {n: leader_pair(doc.getObject(n), "U") for n in PATCH_NAMES}
     checks.append("an inert leader on the member patch: %r -> %r; the cuts "
                   "are unchanged: %s"
@@ -635,9 +635,9 @@ def test_the_panel_offers_the_construction_and_shows_the_refusal(doc):
         panel2.sections.open(TP.SECTION_CORNER)
         for s in sstrips:
             _click(s)
-        # a leader that rests on the setback cannot cut the member's cell
+        # a leader resting INSIDE the 1/16 setback cannot cut the cell
         for spin in panel2._corner_leader_spins.values():
-            spin.setValue(0.1)
+            spin.setValue(0.05)
         built = panel2.panel_confirm()
         corner = sdoc.getObject("CornerBlend")
         construction, _note = (corner_construction(corner)
@@ -904,8 +904,12 @@ def test_the_panel_places_the_tri_sets_the_setback_and_defaults_to_equal_sides(d
         errors.append("(c) the default corner carries %d cut(s): %s"
                       % (len(legs), default["cuts"]))
     elif abs(legs[-1] - legs[0]) > CUT_LENGTH_TOL:
-        errors.append("(c) the default build is NOT equal-sided: %s"
-                      % (default["cuts"],))
+        # #133: the default is 1/4 of each axis from the junction corner, so
+        # the two sides differ when the two seams have different lengths.
+        # What must hold is the PLACEMENT, checked per seam below.
+        checks.append("(c) the two sides differ (%s) -- the default is 1/4 "
+                      "of each seam, not an equal length"
+                      % (["%.6f" % v for v in legs],))
     if default["tri_area"] is None:
         errors.append("(c) the default build has no triangular face")
     checks.append("(c) the artifact: %s (%d objects: %s)"

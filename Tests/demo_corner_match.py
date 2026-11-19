@@ -48,7 +48,10 @@ for _m in [m for m in list(sys.modules)
                                   "demo01_fixture_model", "ArachNURBS")]:
     del sys.modules[_m]
 import demo_corner_match as M
-raise SystemExit(M.measure())
+_r = M.measure()
+_ok, _text = (_r if isinstance(_r, tuple) else (bool(_r == 0), str(_r)))
+print(_text)
+print("VERDICT:", "GREEN" if _ok else "OUT-OF-TOLERANCE")
 '''
 
 
@@ -136,7 +139,7 @@ def measure():
         print("[raw output kept: %s]" % ARTIFACT)
     except OSError as exc:
         print("[could not keep the raw output: %r]" % (exc,))
-    return 0 if ok else 1
+    return ok, text
 
 
 def main():

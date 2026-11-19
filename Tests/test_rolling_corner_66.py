@@ -42,6 +42,7 @@ import SilkMachinery as SM_SPLIT_SHIM
 
 SC_MEMBER_PIN = SC_MEMBER_PIN_SHIM.corner_member_pin
 SM_SPLIT = SM_SPLIT_SHIM.split_pair
+SM_LEADER = SM_SPLIT_SHIM.leader_pair
 
 from SilkWorkflowOps import (create_corner_blend, create_rolling_corner_66,
                              corner_fill_boundary, MEMBER_FACE_FILL)
@@ -204,7 +205,7 @@ def test_the_rolling_corner_builds_the_66_the_member_and_the_fill(doc):
         if abs(away - 0.25) > 1e-9:
             errors.append("%s: the band's cut starts %.4g from the junction, "
                           "not the leader 0.25" % (s.Name, away))
-        if 0.1 not in split_pair(patch, "U") and 0.1 not in split_pair(
+        if 0.0625 not in split_pair(patch, "U") and 0.0625 not in split_pair(
                 patch, "V"):
             errors.append("%s: the setback is gone from the member patch's "
                           "band edges" % patch.Name)
@@ -309,21 +310,22 @@ def test_the_default_corner_is_the_rolling_one(doc):
     checks.append("the cut: PatchA band edges %r %r, leader cuts %r %r"
                   % (split_pair(p, "U"), split_pair(p, "V"),
                      leader_pair(p, "U"), leader_pair(p, "V")))
-    # #129/G5: the parameter is SOLVED from a length, and the default length
-    # is the third, uncut seam's band width. On this fixture it is 0.10 mm,
-    # so the leader is the 0.10 setback plus that leg: 0.20.
+    # THE DEMO'S OWN PLACEMENT (#133): the corner cuts at 1/4 of the axis and
+    # puts the setback at 1/16, so on this 1 mm fixture the leader reads 0.25
+    # and the band edges 0.0625 / 0.9375.
     for letter in ("U", "V"):
-        near = [v for v in leader_pair(p, letter) if abs(v - 0.20) <= 1e-9]
+        near = [v for v in leader_pair(p, letter) if abs(v - 0.25) <= 1e-9]
         if not near:
             errors.append("the default corner did not cut the member patch's "
                           "%s leader (leader cuts %r)"
                           % (letter, leader_pair(p, letter)))
     for name in ("PatchA", "PatchB", "PatchC"):
         q = doc.getObject(name)
-        if abs(q.USplit1 - 0.1) > 1e-12 or abs(q.VSplit1 - 0.1) > 1e-12:
-            errors.append("the rolling construction moved %s's band edge -- "
-                          "the setback must not ride along with the leader"
-                          % name)
+        if abs(q.USplit1 - 0.0625) > 1e-12 \
+                or abs(q.VSplit1 - 0.0625) > 1e-12:
+            errors.append("the rolling construction did not place the 1/16 "
+                          "setback on %s (%r / %r)"
+                          % (name, split_pair(q, "U"), split_pair(q, "V")))
     # and it is NOT the shipped corner
     same = all((a - b).Length < 1e-12 for a, b in
                zip(s_poles, list(corner.Poles)))
@@ -438,53 +440,62 @@ def test_a_leader_outside_the_seam_is_refused_by_name(doc):
 
 
 
-def test_the_default_cut_is_the_third_blend_band_width(doc):
-    """G5: a fresh corner with no typed length takes the third seam's width.
+def test_the_default_cut_is_a_quarter_of_the_axis(doc):
+    """#133: with nothing typed the corner cuts at 1/4 and sets back 1/16.
 
-    The third seam is the one NOT touching the triangular member's patch.
-    Its band is measured on both of its patches, in mm, on the exact base
-    surfaces; the geometric mean is the ONE target and both cut sides are
-    placed at it (capped by reach). A setback is not written. The cube's
-    third seam is 0.1 mm wide on both sides, so both cut sides are 0.1 mm.
+    The maintainer's own placement (ADR 0006), replacing the G5 rule that
+    sized the cut by the third blend's band width. Both are PARAMETERS of the
+    patch axis, which is what his file stores; on this 1 mm fixture they read
+    0.25 and 0.0625 exactly.
+
+    WOULD BE RED IF: the cut came from the third band again (the G5 rule), the
+    setback stayed at Silk's blend default 0.1, or widening the third blend
+    moved the cut.
     """
     import SilkWorkflowOps as OPS
     errors, checks = [], []
     _fixture(doc)
     strips = _strips(doc)
+    corner = create_corner_blend(*strips, name="Quarter")
+    doc.recompute()
+    doc.recompute()
     pin, _why = SC_MEMBER_PIN(strips)
     patch = pin[0] if pin else doc.getObject("PatchA")
-    info, why = OPS.third_band_widths(strips, patch)
-    if info is None:
-        return {"pass": False, "errors": [why], "checks": checks}
-    before = {p.Name: (SM_SPLIT(p, "U"), SM_SPLIT(p, "V"))
-              for p in (doc.getObject(n) for n in ("PatchA", "PatchB",
-                                                  "PatchC"))}
-    corner = create_corner_blend(*strips, name="ThirdBand")
+    cuts = {L: SM_LEADER(patch, L) for L in ("U", "V")}
+    splits = {L: SM_SPLIT(patch, L) for L in ("U", "V")}
+    checks.append("member patch %s: leader cuts %r, band edges %r"
+                  % (patch.Name, cuts, splits))
+    for letter in ("U", "V"):
+        values = [v for v in cuts[letter] if 0.0 < v < 1.0]
+        check(any(abs(v - 0.25) <= 1e-9 for v in values),
+              "the %s axis is not cut at 1/4 of the axis (%r)"
+              % (letter, cuts[letter]), errors)
+        check(any(abs(v - 0.0625) <= 1e-9 for v in splits[letter])
+              or any(abs(v - 0.9375) <= 1e-9 for v in splits[letter]),
+              "the %s axis does not carry the 1/16 setback (%r)"
+              % (letter, splits[letter]), errors)
+    # the third blend's band is NOT the lever any more
+    from SilkBlend import side_and_end, band_edge_prop
+    third = [s for s in strips
+             if patch not in (s.PatchA, s.PatchB)][0]
+    for q in (third.PatchA, third.PatchB):
+        e, ss = side_and_end(third, q)
+        letter = "U" if e[0] == "V" else "V"
+        prop = band_edge_prop(letter, ss)
+        setattr(q, prop, 0.4 if ss == 0 else 0.6)
     doc.recompute()
-    legs = []
-    for st in strips:
-        if patch in (st.PatchA, st.PatchB):
-            leg, _w = OPS.seam_cut_length(st, patch, ring=strips)
-            legs.append(leg)
-    after = {p.Name: (SM_SPLIT(p, "U"), SM_SPLIT(p, "V"))
-             for p in (doc.getObject(n) for n in ("PatchA", "PatchB",
-                                                  "PatchC"))}
-    checks.append("third seam %s: widths %.9f / %.9f mm, target %.9f mm"
-                  % (info["seam"].Name, info["widths"][0],
-                     info["widths"][1], info["target"]))
-    checks.append("cut sides %s mm; splits unchanged %s"
-                  % (", ".join("%.9f" % v for v in legs), before == after))
-    check(len(legs) == 2, "the member patch has %d rolled seams" % len(legs),
-          errors)
-    if len(legs) == 2:
-        check(abs(legs[0] - legs[1]) <= 1e-9,
-              "the cut sides differ by %.3e mm" % abs(legs[0] - legs[1]),
-              errors)
-        check(abs(legs[0] - info["target"]) <= 1e-9,
-              "the default cut %.9f mm is not the third band %.9f mm"
-              % (legs[0], info["target"]), errors)
-    check(before == after, "a setback moved: %r -> %r" % (before, after),
-          errors)
+    doc.recompute()
+    after = {L: SM_LEADER(patch, L) for L in ("U", "V")}
+    checks.append("after widening the third blend: leader cuts %r" % (after,))
+    for letter in ("U", "V"):
+        before_v = [v for v in cuts[letter] if 0.0 < v < 1.0]
+        after_v = [v for v in after[letter] if 0.0 < v < 1.0]
+        check(len(before_v) == len(after_v)
+              and all(abs(a - b) <= 1e-9
+                      for a, b in zip(before_v, after_v)),
+              "the %s cut followed the third blend's band (%r -> %r) -- "
+              "the placement is 1/4 of the axis, not the band width"
+              % (letter, cuts[letter], after[letter]), errors)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
@@ -545,7 +556,7 @@ def test_the_g1_fill_gap_on_the_curved_demo_corner(doc):
 ALL_TESTS = [
     test_the_rolling_corner_builds_the_66_the_member_and_the_fill,
     test_the_default_corner_is_the_rolling_one,
-    test_the_default_cut_is_the_third_blend_band_width,
+    test_the_default_cut_is_a_quarter_of_the_axis,
     test_the_g1_fill_gap_on_the_curved_demo_corner,
     test_the_leader_is_measured_from_the_junction_corner,
     test_a_leader_outside_the_seam_is_refused_by_name,

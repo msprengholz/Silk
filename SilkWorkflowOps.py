@@ -1896,9 +1896,11 @@ def apply_corner_choices(strips, pin=None, leaders=None):
                        - write) < 1e-12:
                     continue
                 plan.append((member_patch, prop, write))
-                # the leader that cut side lands at, for the message below
+                # the length from the junction corner the cut lands at, for
+                # the message below: 1/4 of the axis under the new placement
                 seam_writes.append((reach["seam"].Name,
-                                    reach["corner_mm"] + leg))
+                                    ROLLING_CUT_FRACTION
+                                    * reach["max_corner_mm"]))
         # The same condition the corner stage refuses on, decided BEFORE the
         # first write: a leader that does not cut the member's cell back on
         # both axes leaves a 6x6 with coincident poles (or a refusal deeper

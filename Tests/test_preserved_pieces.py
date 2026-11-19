@@ -40,11 +40,14 @@ from Tests import cube_corner_model as ccm
 from Tests.mcp_harness import check
 
 CUBE_CELLS = (
-    ("PatchA", SM.PRESERVED_BEYOND_U, 2, 1, 0.80 * 0.10),
-    ("PatchA", SM.PRESERVED_BEYOND_V, 1, 2, 0.10 * 0.80),
-    ("PatchA", SM.PRESERVED_BEYOND_BOTH, 2, 2, 0.80 * 0.80),
-    ("PatchB", SM.PRESERVED_BEYOND_BOTH, 1, 1, 0.90 * 0.90),
-    ("PatchC", SM.PRESERVED_BEYOND_BOTH, 1, 1, 0.90 * 0.90),
+    # #133: the automatic placement is the demo's -- setback 1/16 and cut 1/4
+    # of the axis -- so the member patch's three intervals are 0.0625 / 0.1875
+    # / 0.75 and the other two patches carry the 1/16 edge alone.
+    ("PatchA", SM.PRESERVED_BEYOND_U, 2, 1, 0.75 * 0.1875),
+    ("PatchA", SM.PRESERVED_BEYOND_V, 1, 2, 0.1875 * 0.75),
+    ("PatchA", SM.PRESERVED_BEYOND_BOTH, 2, 2, 0.75 * 0.75),
+    ("PatchB", SM.PRESERVED_BEYOND_BOTH, 1, 1, 0.9375 * 0.9375),
+    ("PatchC", SM.PRESERVED_BEYOND_BOTH, 1, 1, 0.9375 * 0.9375),
 )
 
 C0_TOL = 1e-9
