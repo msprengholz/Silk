@@ -49,6 +49,7 @@ from Tests import cube_corner_model as ccm
 from Tests.mcp_harness import check
 
 TOL = 1e-9          # mm: the cut edge and the corner fill share it
+OPS_FILL_BAR = 1.0  # deg: FILL_NORMAL_GAP_TOL_DEG, the shipped #121 bar
 
 
 def _fixture(doc):
@@ -150,9 +151,21 @@ def test_the_rolling_corner_builds_the_66_the_member_and_the_fill(doc):
         errors.append("the FreeCAD replacement of the small triangular "
                       "surface did not build")
     else:
-        checks.append("the FreeCAD replacement: %s, %d face(s)"
+        checks.append("the FreeCAD replacement: %s, %d face(s), order %r, "
+                      "gap %r deg (bar %.1f deg)"
                       % (res["member_fill"].Name,
-                         len(res["member_fill"].Shape.Faces)))
+                         len(res["member_fill"].Shape.Faces),
+                         res.get("member_fill_order"),
+                         (res["member_fill_gap"] or {}).get("max_gap_deg"),
+                         OPS_FILL_BAR))
+        check(res.get("member_fill_order") == 1,
+              "order 1 was not reached on the cube: %r"
+              % res.get("member_fill_order"), errors)
+        gap = (res.get("member_fill_gap") or {}).get("max_gap_deg")
+        check(gap is not None and gap <= OPS_FILL_BAR,
+              "the G1 fill gap %.3f deg is above the %.1f deg bar"
+              % (gap if gap is not None else float("inf"), OPS_FILL_BAR),
+              errors)
     # the leader was written where the cut lives
     checks.append("the cut moved: %s"
                   % ", ".join("%s.%s -> %g" % (w[0], w[1], w[3])
@@ -474,10 +487,66 @@ def test_the_default_cut_is_the_third_blend_band_width(doc):
           errors)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
+
+def test_the_g1_fill_gap_on_the_curved_demo_corner(doc):
+    """#128's measured reading: neighbour supports, order 1, curved corner.
+
+    The cube is planar and reads 0 deg at any order, so it cannot prove G1.
+    This builds the demo's `CB_J1_FrontTopRight` with `member_face="fill"`,
+    reads the tangent-plane gap on all three neighbour supports and pins the
+    instrument's floor (`solve_uv`: 4.5e-13 mm of residual) beside the bar.
+    """
+    import Tests.demo01_fixture_model as DEMO
+    import SilkWorkflowOps as OPS
+    errors, checks = [], []
+    DEMO.build(doc, corners=False)
+    doc.recompute()
+    doc.recompute()
+    strips = [doc.getObject(n) for n in ("B_FT", "B_FR", "B_TR")]
+    corner = OPS.create_corner_blend(*strips, name="CurvedFill",
+                                     member_face=MEMBER_FACE_FILL)
+    doc.recompute()
+    doc.recompute()
+    fills = [o for o in doc.Objects
+             if getattr(o, "TypeId", "") == "Surface::Filling"]
+    fill = fills[0] if fills else None
+    if corner is None or fill is None:
+        return {"pass": False,
+                "errors": ["the curved G1 fill was not built"],
+                "checks": checks}
+    patch = getattr(corner, "MemberPatch", None)
+    if patch is None:
+        found, _why = SC_MEMBER_PIN(strips)
+        patch = found[0] if found else None
+    boundary, why = OPS.member_fill_boundary(corner, patch)
+    if boundary is None:
+        return {"pass": False, "errors": [why], "checks": checks}
+    links, supports = boundary
+    gap = OPS.fill_normal_gap(fill, links, supports) or {}
+    order = int(list(fill.BoundaryOrder or [0])[0])
+    checks.append("curved fill: order %r, gap %.6g deg (bar %.1f deg), "
+                  "floor 4.5e-13 mm of parameter residual"
+                  % (order, gap.get("max_gap_deg", float("inf")),
+                     OPS_FILL_BAR))
+    for row in gap.get("per_edge", []):
+        checks.append("  %s: gap %r deg, residual %.3e mm, reference %.3e mm"
+                      % (row.get("label"), row.get("gap_deg"),
+                         row.get("residual", 0.0),
+                         row.get("ref_residual", 0.0)))
+    check(order == 1, "the curved fill reached order %r, not 1" % order,
+          errors)
+    check(bool(gap.get("measurable")),
+          "no gap station was measurable on the curved fill", errors)
+    check(gap.get("max_gap_deg", float("inf")) <= OPS_FILL_BAR,
+          "the curved fill's gap %.6g deg is above the %.1f deg bar"
+          % (gap.get("max_gap_deg", float("inf")), OPS_FILL_BAR), errors)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
 ALL_TESTS = [
     test_the_rolling_corner_builds_the_66_the_member_and_the_fill,
     test_the_default_corner_is_the_rolling_one,
     test_the_default_cut_is_the_third_blend_band_width,
+    test_the_g1_fill_gap_on_the_curved_demo_corner,
     test_the_leader_is_measured_from_the_junction_corner,
     test_a_leader_outside_the_seam_is_refused_by_name,
 ]

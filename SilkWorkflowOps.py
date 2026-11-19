@@ -2265,6 +2265,69 @@ def _existing_member_fill(doc, member):
     return None
 
 
+def _same_edge(a, b, tol=1e-7):
+    """True when two edges run between the same two points."""
+    ap = [a.valueAt(a.FirstParameter), a.valueAt(a.LastParameter)]
+    bp = [b.valueAt(b.FirstParameter), b.valueAt(b.LastParameter)]
+    return ((ap[0] - bp[0]).Length <= tol
+            and (ap[1] - bp[1]).Length <= tol) or \
+           ((ap[0] - bp[1]).Length <= tol
+            and (ap[1] - bp[0]).Length <= tol)
+
+
+def member_fill_boundary(corner, patch):
+    """`((links, faces), None)` for the tri's fill: its NEIGHBOUR faces.
+
+    The one-object corner's Shape is [quad face, tri face, the tri's three
+    real edges]. The chord edge is the one also on the quad face; its
+    support is the quad face (`Face1`). Each of the other two leader edges
+    is a knot line of the MEMBER PATCH: the patch's own cell beyond it
+    borders the tri. Its support is that patch cell's `FaceN`. No support
+    is ever the tri's own spiderweb (#128).
+    """
+    shape = getattr(corner, "Shape", None)
+    names = [n for n in (getattr(corner, "TriBoundaryEdges", None) or [])
+             if n]
+    if shape is None or len(shape.Faces) < 2 or len(names) != 3:
+        return None, ("the corner does not carry a compound quad, tri and "
+                      "three named tri boundary edges")
+    quad = shape.Faces[0]
+    chord, leaders = [], []
+    for name in names:
+        try:
+            edge = shape.getElement(name)
+        except Exception:
+            edge = None
+        if edge is None:
+            return None, "the tri boundary %s.%s does not resolve" % (
+                corner.Name, name)
+        (chord if any(_same_edge(edge, qe) for qe in quad.Edges)
+         else leaders).append((name, edge))
+    if len(chord) != 1 or len(leaders) != 2:
+        return None, ("the tri boundary has %d quad-side edge(s) and %d "
+                      "leader edge(s), want 1 and 2"
+                      % (len(chord), len(leaders)))
+    links = [(corner, chord[0][0])]
+    faces = ["Face1"]
+    for name, edge in leaders:
+        patch_edge, patch_face = None, None
+        for i, pe in enumerate(getattr(patch.Shape, "Edges", None) or [], 1):
+            if not _same_edge(edge, pe):
+                continue
+            patch_edge = "Edge%d" % i
+            for j, pf in enumerate(patch.Shape.Faces, 1):
+                if any(_same_edge(pe, fe) for fe in pf.Edges):
+                    patch_face = "Face%d" % j
+                    break
+            break
+        if patch_edge is None or patch_face is None:
+            return None, ("%s's leader %s has no patch edge/face to abut"
+                          % (patch.Name, name))
+        links.append((patch, patch_edge))
+        faces.append(patch_face)
+    return (links, faces), None
+
+
 def _face_junction_c0(face_obj, corner, n=41):
     """The C0 residual (mm) where `face_obj`'s boundary meets `corner`'s
     surface: the worst distance from a sampled point of the face's
@@ -2715,21 +2778,34 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     member_fill_gap = None
     member_junction_c0 = None
     if one_object and len(strips) == 3:
-        names = list(getattr(corner, "TriBoundaryEdges", None) or [])
-        real = [(corner, n) for n in names if n]
         stale = _existing_member_fill(doc, corner)
-        if member_face == MEMBER_FACE_FILL and len(real) == 3:
+        links, supports = [], []
+        if member_face == MEMBER_FACE_FILL:
+            boundary, why = member_fill_boundary(corner, patch)
+            if boundary is None:
+                FreeCAD.Console.PrintError(
+                    "Silk: the neighbouring fill over %s cannot be built: "
+                    "%s. The corner and its cuts stand; no fill was left "
+                    "behind.\n" % (corner.Name, why))
+            else:
+                links, supports = boundary
             member_fill = stale
-            if member_fill is None:
-                # EDGES ONLY for the one-object model: FreeCAD 1.1 crashes
-                # when a Surface::Filling takes a face INSIDE a compound as
-                # a support (#119 G1-G3). The documented edges-only path is
-                # sound; #128 replaces these supports with the NEIGHBOURING
-                # faces and measures the G1 gap there.
-                member_fill = create_fill(real, faces=[],
+            if links and member_fill is None:
+                member_fill = create_fill(links, faces=supports,
                                           order=order, fallback_order=0,
                                           name=name + "MemberFill")
+            elif links and (list(member_fill.BoundaryEdges or [])
+                            != [(o, s) for o, s in links]
+                            or list(member_fill.BoundaryFaces or [])
+                            != supports):
+                member_fill.BoundaryEdges = links
+                member_fill.BoundaryFaces = supports
+                member_fill.touch()
+                member_fill.recompute(True)
+                member_fill.purgeTouched()
             if member_fill is not None:
+                gap = fill_normal_gap(member_fill, links, supports)
+                member_fill_gap = gap
                 member_junction_c0 = _face_junction_c0(member_fill, corner)
         elif stale is not None:
             try:
@@ -2779,6 +2855,10 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     _record_cut_reference(corner, strips, patch)
     return {"corner": corner, "member": member, "member_fill": member_fill,
             "member_fill_gap": member_fill_gap,
+            "member_fill_order": (int(list(member_fill.BoundaryOrder or [])[0])
+                                  if member_fill is not None
+                                  and list(member_fill.BoundaryOrder or [])
+                                  else None),
             "member_junction_c0": member_junction_c0,
             "member_face": member_face if member is not None else None,
             "leader": leader,
