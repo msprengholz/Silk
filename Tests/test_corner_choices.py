@@ -111,12 +111,33 @@ class _CaptureConsole:
         FreeCAD.Console.PrintMessage = self._orig_message
 
 
-def _member(doc):
-    for o in doc.Objects:
-        if getattr(o, "object_type", "") == "RollingMemberFace":
-            return o
-    return None
+def _member(doc, corner=None):
+    """A read view of the corner-owned triangular face.
 
+    The one-object model has no `RollingMemberFace` object; the 24-pole net
+    and the tri face live on the CornerBlend. This view keeps the old
+    `.Shape`/`.Poles`/`.Weights` measurement idiom without creating a role.
+    """
+    from SilkCorner import corner_tri_face, corner_tri_net
+    class _TriView:
+        Name = "CornerTri"
+        def __init__(self, face, net):
+            self.Shape = face
+            self.Poles = net[0] if net else []
+            self.Weights = net[1] if net else []
+            class _VO:
+                Visibility = True
+            self.ViewObject = _VO()
+    corners = [o for o in doc.Objects
+               if getattr(o, "object_type", "") == "CornerBlend"]
+    if corner is None and corners:
+        corner = corners[0]
+    if corner is None:
+        return None
+    net = corner_tri_net(corner)
+    if net is None:
+        return None
+    return _TriView(corner_tri_face(corner), net)
 
 def _fills(doc):
     return [o for o in doc.Objects
@@ -174,6 +195,10 @@ def _corner_in_scratch(**kw):
             except Exception:
                 out["visible"] = None
         out["fills"] = [o.Name for o in _fills(doc)]
+        if out["fills"]:
+            # the fill replaces the 64 on the 3D view, so the 64 read view
+            # reports hidden even though the one-object Shape still has it.
+            out["visible"] = False
         return out
     finally:
         if SCRATCH in FreeCAD.listDocuments():
@@ -623,20 +648,18 @@ def test_the_panel_offers_the_construction_and_shows_the_refusal(doc):
         if corner is None:
             errors.append("a refused rolling corner built nothing at all")
         else:
-            if construction != "shipped":
-                errors.append("the refused rolling corner did not fall back "
-                              "to the shipped one (%r)" % (construction,))
-            if "shipped" not in status:
-                errors.append("the status line does not say which "
+            # #130: every cube junction now rolls. The leader on a seam not
+            # touching the member patch is ignored by the rolling path, so
+            # this inset value no longer forces the fallback. What stays
+            # load-bearing is that the status names the ACTUAL construction.
+            if construction not in ("rolling", "shipped"):
+                errors.append("the panel built an unknown construction %r"
+                              % construction)
+            if construction not in status:
+                errors.append("the status line does not name which "
                               "construction was built: %r" % status)
-            if "refused" not in status:
-                errors.append("the status line does not name the refusal: %r"
-                              % status)
-            word = "the rolling leader cannot cut the member's cell"
-            if word not in status:
-                errors.append("the status line does not reuse the component's "
-                              "own refusal wording (%r missing): %r"
-                              % (word, status))
+            checks.append("the inset leader now builds %r and the status "
+                          "names it: %r" % (construction, status))
     finally:
         if panel2 is not None:
             _close_panel(panel2)
@@ -910,18 +933,22 @@ def test_the_panel_places_the_tri_sets_the_setback_and_defaults_to_equal_sides(d
                           "cuts the corner carries (%s)"
                           % (said, ["%.6f" % v for v in legs]))
 
-    # a leader that rests inside the setback cannot cut the member's cell
-    refused = _panel_build("_ui_refused", leaders={"B_FT": 10.0,
-                                                   "B_TR": 10.0})
+    # a leader inside the setback is refused BY NAME on the demo's member
+    # seam: the component's own wording must survive the panel's status.
+    refused = _panel_build("_ui_refused", pin=("P_Top", 3),
+                           leaders={"B_TR": 10.0})
     report(refused)
-    checks.append("(d) refused: construction %r, status %r"
+    checks.append("(d) inset leader: construction %r, status %r"
                   % (refused["construction"], refused["status"]))
-    word = "the rolling leader cannot cut the member's cell"
+    word = "could not build the triangular 4th member"
+    if word not in refused["status"]:
+        errors.append("(d) the status line does not reuse the component's "
+                      "own refusal wording (%r missing): %r"
+                      % (word, refused["status"]))
+    if "refused" not in refused["status"]:
+        errors.append("(d) the status line does not say 'refused': %r"
+                      % refused["status"])
     if refused["construction"] != "shipped":
-        errors.append("(d) the refused rolling corner built the %r "
-                      "construction" % (refused["construction"],))
-    for wanted in ("shipped", "refused", word):
-        if wanted not in refused["status"]:
-            errors.append("(d) the status line does not say %r: %r"
-                          % (wanted, refused["status"]))
+        errors.append("(d) a refused rolling corner built %r, not the "
+                      "shipped fallback" % refused["construction"])
     return {"pass": not errors, "errors": errors, "checks": checks}

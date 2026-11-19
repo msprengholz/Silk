@@ -1826,7 +1826,8 @@ def apply_corner_choices(strips, pin=None, leaders=None):
     if not plan and target is None:
         return corner, None
     from SilkCorner import record_cut
-    from SilkMachinery import follow_deferred, is_leader_cut_prop
+    from SilkMachinery import (follow_deferred, is_leader_cut_prop,
+                               remove_cut_entries, add_cut_entry)
     # #132: everything from here to the settling recompute is ONE PLAN -- the
     # cut moves, the pin moves with it, the modes say what the placed cuts
     # mean, and only then does the corner re-derive anything.  No corner may
@@ -1835,6 +1836,16 @@ def apply_corner_choices(strips, pin=None, leaders=None):
     # follower running between "clear the old patch" and "cut the new one"
     # put the cleared cut back).
     with follow_deferred():
+        if construction == CORNER_CONSTRUCTION_ROLLING:
+            # #130: the scalar slot is only half of a cut. The corner's owned
+            # entry is what its own cell reader sees, so moving to another
+            # member patch must release every entry on the OLD patches; a
+            # scalar clear alone leaves the old cell live in the reader.
+            for p in patches:
+                if p is member_patch:
+                    continue
+                if remove_cut_entries(p, corner.Name):
+                    record_cut(corner, p, p.Name + "|owned", 0.0, 0.0)
         for p, prop, write in plan:
             before = float(getattr(p, prop, write) or 0.0)
             setattr(p, prop, write)
@@ -1843,6 +1854,15 @@ def apply_corner_choices(strips, pin=None, leaders=None):
                 # a debt the corner carries, exactly like the one it placed
                 # when it was built.
                 record_cut(corner, p, prop, before, write)
+                if write not in (0.0, 1.0):
+                    from SilkMachinery import cut_entries
+                    letter, end = prop[0], int(prop[-1]) - 1
+                    taken = any(e[0] == letter and e[1] == end
+                                and e[2] != corner.Name
+                                for e in cut_entries(p))
+                    add_cut_entry(p, letter, end, corner.Name, write)
+                    from SilkCorner import record_owned_cut
+                    record_owned_cut(corner, p, letter, end, write)
         if target is not None:
             corner.MemberPatch = target[0]
             corner.MemberCorner = int(target[1])
