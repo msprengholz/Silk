@@ -59,10 +59,13 @@ def _derivation(patch, entries, tol=0.01):
     the corner-cell mapping above is this test's own.
     """
     from SilkBlend import side_and_end
-    from SilkMachinery import band_cells, build_intervals, split_pair
+    from SilkMachinery import (band_cells, build_intervals, split_pair,
+                               leader_pair, corner_cell_index)
 
-    nu = len(build_intervals(*split_pair(patch, "U")))
-    nv = len(build_intervals(*split_pair(patch, "V")))
+    us, vs = split_pair(patch, "U"), split_pair(patch, "V")
+    ul, vl = leader_pair(patch, "U"), leader_pair(patch, "V")
+    nu = len(build_intervals(*us, *ul))
+    nv = len(build_intervals(*vs, *vl))
     bands = set()
     by_axis = {"U": [], "V": []}
     for entry in entries:
@@ -80,10 +83,32 @@ def _derivation(patch, entries, tol=0.01):
         for etype_v, other_v in by_axis["V"]:
             if other_u is other_v:
                 continue
-            iv_c = nv - 1 if etype_u[1] == "1" else 0
-            iu_c = nu - 1 if etype_v[1] == "1" else 0
+            iv_c, _n, _end = corner_cell_index(
+                *vs, *vl, int(etype_u[1]))
+            iu_c, _n, _end = corner_cell_index(
+                *us, *ul, int(etype_v[1]))
             junctions.add(iu_c * nv + iv_c)
     return bands, junctions, nu * nv
+
+
+def _owner_corner_cells(document, patch, tol=0.01):
+    """Cells that built corners reserve on `patch` in their OWN cut view.
+
+    With several corner cuts on one patch the owner-specific interval count
+    differs from the scalar display grid; the corner records the cell it
+    fills in that owner view. These are part of the hidden set alongside the
+    ring's no-owner junction cells.
+    """
+    from SilkCorner import corner_cell_of
+    out = set()
+    for corner in document.Objects:
+        if getattr(corner, "object_type", "") != "CornerBlend":
+            continue
+        cell = corner_cell_of(patch, list(getattr(corner, "Strips", []) or []),
+                              tol, getattr(corner, "Name", None))
+        if cell[0] is not None and cell[1] is not None:
+            out.add(cell[0] * cell[3] + cell[1])
+    return out
 
 
 def _hidden(patch):
@@ -160,7 +185,6 @@ def test_demo01_ring_hides_every_junction_corner_cell(doc):
           "3-valent junctions, each pinning a corner on three patches)"
           % total, errors)
 
-    before = {p.Name: sorted(_hidden(p)) for p in patches}
     from SilkWorkflowOps import create_corner_blend
     for name, ring, _point in MODEL.CORNERS:
         corner = create_corner_blend([result["blends"][b] for b in ring],
@@ -169,13 +193,24 @@ def test_demo01_ring_hides_every_junction_corner_cell(doc):
               "the corner blend %s refused on the ring the test just built"
               % name, errors)
     doc.recompute()
-    after = {p.Name: sorted(_hidden(p)) for p in patches}
-    check(after == before,
-          "creating the corner blends CHANGED the hidden sets: %s -> %s -- "
-          "the ring path and the corner path must agree"
-          % (before, after), errors)
-    checks.append("after the four corner blends: hidden sets byte-identical "
-                  "(%s)" % after)
+    # The rolling leader cuts the member patch again: cell INDICES shift and
+    # the end sliver becomes a preserved piece while the region between the
+    # setback and the leader is hidden. The invariant is that the post-cut
+    # hidden set is the ring derivation with the CURRENT cuts, not that the
+    # old indices survived.
+    after_entries = _blended_seams(doc)
+    for patch in patches:
+        bands, junctions, _n = _derivation(patch, after_entries)
+        expected = bands | junctions | _owner_corner_cells(doc, patch)
+        hidden = _hidden(patch)
+        check(hidden == expected,
+              "after corners %s: hidden cells %s, want bands %s + junction "
+              "corners %s + owner cells %s = %s"
+              % (patch.Name, sorted(hidden), sorted(bands),
+                 sorted(junctions), sorted(_owner_corner_cells(doc, patch)),
+                 sorted(expected)), errors)
+        checks.append("after corners %s: %d hidden cells (%s)"
+                      % (patch.Name, len(hidden), sorted(hidden)))
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 

@@ -44,6 +44,25 @@ def _failed(results):
     return [(n, d) for (n, ok, d) in results if not ok]
 
 
+def _tri_view(doc, corner=None):
+    """A read view of the corner-owned triangular face."""
+    from SilkCorner import corner_tri_face, corner_tri_net
+    corners = [o for o in doc.Objects
+               if getattr(o, "object_type", "") == "CornerBlend"]
+    if corner is None and corners:
+        corner = corners[0]
+    if corner is None:
+        return None
+    net = corner_tri_net(corner)
+    if net is None:
+        return None
+    class _TriView:
+        Shape = corner_tri_face(corner)
+        Poles = net[0]
+        Weights = net[1]
+    return _TriView()
+
+
 def _report(lines):
     """Emit the raw numbers (the harness prints errors, not `checks`)."""
     for line in lines:
@@ -211,8 +230,9 @@ def _assert_corners(result, doc):
         if not corner.Shape or corner.Shape.isNull():
             problems.append("null Shape")
         else:
-            if len(corner.Shape.Faces) != 1:
-                problems.append("%d faces, want 1" % len(corner.Shape.Faces))
+            if len(corner.Shape.Faces) != 2:
+                problems.append("%d faces, want 2 (quad + tri in one "
+                                "compound)" % len(corner.Shape.Faces))
             if not corner.Shape.isValid():
                 problems.append("Shape is not valid")
         strips = [s.Name for s in corner.Strips]
@@ -236,7 +256,7 @@ def _assert_corners(result, doc):
                           "(%.3f..%.3f, %.3f..%.3f, %.3f..%.3f)"
                           % ((name, point) + (bb.XMin, bb.XMax, bb.YMin,
                                               bb.YMax, bb.ZMin, bb.ZMax)))
-        checks.append("corner %-24s 36 poles, 1 face, valid=%s, junction %s "
+        checks.append("corner %-24s 36 poles, 2 faces, valid=%s, junction %s "
                       "inside box (%.2f..%.2f, %.2f..%.2f, %.2f..%.2f)"
                       % (name, corner.Shape.isValid(),
                          "(%.0f, %.0f, %.0f)" % point,
@@ -344,15 +364,12 @@ def test_a_demo_junction_rolls_on_the_patch_that_carries_two_junctions(doc):
         checks.append("corner_inputs assembles the ring")
 
     # the cut: the MEMBER patch's own two axis ends, the setback untouched
-    member = None
-    for o in doc.Objects:
-        if getattr(o, "object_type", "") == "RollingMemberFace":
-            member = o
-    if member is None:
+    member = _tri_view(doc, corner)
+    if member is None or member.Shape is None:
         errors.append("the corner built no triangular member")
     else:
-        checks.append("the triangular member %s is in the tree (%d poles)"
-                      % (member.Name, len(member.Poles)))
+        checks.append("the corner-owned triangular face is in the compound "
+                      "(%d poles)" % len(member.Poles))
     member_patch = None
     for p in (strips[0].PatchA, strips[0].PatchB, strips[1].PatchA,
               strips[1].PatchB, strips[2].PatchA, strips[2].PatchB):

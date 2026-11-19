@@ -2246,6 +2246,12 @@ def follow_corner_inputs(corner):
         for patch, prop, before, after in plan:
             setattr(patch, prop, after)
             record_cut(corner, patch, prop, before, after)
+        # A single-object recompute is not the nested DOCUMENT recompute the
+        # guard exists to prevent. Without it FreeCAD can leave the patch
+        # Up-to-date at the old cut, and the strips keep that stale cache.
+        for patch, _prop, _before, _after in plan:
+            patch.touch()
+            patch.recompute()
     try:
         corner.touch()      # this pass built nothing; the next one derives it
     except Exception:
@@ -2694,6 +2700,18 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     if written:
         # #132: a PLAN, not a derivation -- no corner may re-derive its cut
         # between two entries of it (`SilkMachinery.follow_deferred`).
+        # Touch the patched geometry explicitly: FreeCAD can leave the
+        # patch Up-to-date after a nested onChanged recompute, and then
+        # its `_subgrids` stay at the PRE-cut intervals while the strips
+        # and the corner read the NEW ones (measured: P_Top's cell 0 was
+        # 2.233 mm off after the fourth demo corner).
+        touched = []
+        for pname, _prop, _old, _new in written:
+            p = doc.getObject(pname)
+            if p is not None and p not in touched:
+                p.touch()
+                p.recompute()
+                touched.append(p)
         from SilkMachinery import follow_deferred
         with follow_deferred():
             doc.recompute()
@@ -2781,6 +2799,37 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     for p, letter, end, value in owned:
         record_owned_cut(corner, p, letter, end, value)
 
+
+    # A failed candidate can write a scalar slot and restore it AFTER the
+    # patch's last execute. The successful owner may then add only a cut-list
+    # entry, leaving the patch cache built at the failed candidate's number.
+    # Settle every touched scalar slot to its FIRST owner's value and rebuild
+    # the patch before the ring strips are read by the caller.
+    from SilkMachinery import cut_entries, leader_cut_prop, follow_deferred
+    settled = []
+    for p, _letter, _end, _value in owned:
+        if p in settled:
+            continue
+        settled.append(p)
+        for letter, end in {(e[0], e[1]) for e in cut_entries(p)}:
+            first = [e[3] for e in cut_entries(p)
+                     if e[0] == letter and e[1] == end]
+            if not first:
+                continue
+            prop = leader_cut_prop(letter, end)
+            sentinel = 0.0 if end == 0 else 1.0
+            want = float(first[0])
+            if abs(float(getattr(p, prop, sentinel) or sentinel)
+                   - want) > 1e-12:
+                setattr(p, prop, want)
+    if settled:
+        with follow_deferred():
+            # The cache can be stale even when the scalar is already right:
+            # a failed candidate's value was the last one actually built.
+            for p in settled:
+                p.touch()
+                p.recompute()
+            doc.recompute()
 
     # 3. THE TRIANGULAR FACE is owned by the corner object (#119 G1-G3).
     # A 4-valent ring has no triangular member. For a new one-object corner
