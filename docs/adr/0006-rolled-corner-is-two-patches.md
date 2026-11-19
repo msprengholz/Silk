@@ -96,7 +96,10 @@ setback 0.1): 0/630 coincident pairs, the member keeps its own 15/276, 0/0/0
 flips **without** `smooth_degenerate_cap` (the smoothing is a byte-identical
 no-op there: the built 6x6 IS the raw assembly), seam `k_gap`
 7.8e-15..1.6e-14 /mm exact and 0.0067..0.0093 sampled, the cut's C0
-1.4e-17..5.6e-17 mm, areas 0.046713 / 0.020609 mm2.
+1.4e-17..5.6e-17 mm, areas 0.046713 / 0.020609 mm2 (the shipped 0.1 setback;
+under the default 1/16 + 1/4 placement the same cube corner reads 0.029978
+quad / 0.032201 tri -- the tri now EXCEEDS the quad, ratio 1.074, because a
+smaller setback widens the tri's cell and narrows the quad's band).
 
 **The tri-to-quad percentage is a READING, not the acceptance.** Its minimum
 sits **below** the maintainer's 16 % floor on both fixtures (3.51 % on the

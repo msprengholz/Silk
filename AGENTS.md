@@ -160,7 +160,14 @@ creates them anymore.
   SHIPPED raw assembly folds 19/23/24 and its built form reads 0), seam
   `k_gap` 7.8e-15..1.6e-14 /mm exact and 0.0067..0.0093 sampled (floor 0), the
   cut C0 1.4e-17..5.6e-17 mm, the document settles (0 Touched, 0.0001 s a
-  pass, poles move 0.000e+00), areas 66 0.046713 mm² / tri 0.020609 mm². The
+  pass, poles move 0.000e+00), areas 66 0.046713 mm² / tri 0.020609 mm² under
+  the shipped 0.1 setback. **Under the DEFAULT 1/16 setback + 1/4 cut (ADR 0006's
+  automatic placement) the same cube corner reads quad 0.029978 / tri 0.032201
+  mm² — ratio 1.074, the TRI now the larger patch**, on every demo junction too
+  (1.048..1.434). A smaller setback widens the tri's cell [setback, cut] and
+  narrows the quad's band, so the ratio is a consequence of the placement, not
+  a defect of the assembly: 0/630 coincident poles, no collapsed 6x6 side, 0
+  normal-field flips. The
   tri's interior reads **7.5 %..53.5 %** of the corner's extent from the 66
   (his 16..62 %): the minimum is BELOW his floor, so that percentage is a
   READING and the acceptance is non-overlap, one shared curve and no fold —
