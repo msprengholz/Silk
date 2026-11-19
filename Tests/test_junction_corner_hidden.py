@@ -100,14 +100,16 @@ def _owner_corner_cells(document, patch, tol=0.01):
     ring's no-owner junction cells.
     """
     from SilkCorner import corner_cell_of
+    from SilkMachinery import corner_cell_block
     out = set()
     for corner in document.Objects:
         if getattr(corner, "object_type", "") != "CornerBlend":
             continue
         cell = corner_cell_of(patch, list(getattr(corner, "Strips", []) or []),
                               tol, getattr(corner, "Name", None))
-        if cell[0] is not None and cell[1] is not None:
-            out.add(cell[0] * cell[3] + cell[1])
+        # the corner hides its whole JUNCTION-END BLOCK: its own cuts
+        # subdivide the square it sits on into strips
+        out |= corner_cell_block(cell)
     return out
 
 

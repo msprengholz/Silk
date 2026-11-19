@@ -539,11 +539,13 @@ def _linked_band_cells(fp, p):
                 continue
             for so in list(getattr(ob, "Strips", []) or []):
                 if so.PatchA is p or so.PatchB is p:
-                    cc = _CB._corner_cell(
-                        p, list(ob.Strips), fp.tolerance)
-                    if cc[0] is not None and cc[1] is not None:
-                        iu_c, iv_c, nu, nv = cc
-                        idxs.add(iu_c * nv + iv_c)
+                    from SilkCorner import corner_cell_of
+                    from SilkMachinery import corner_cell_block
+                    cell = corner_cell_of(p, list(ob.Strips), fp.tolerance,
+                                          getattr(ob, "Name", None))
+                    # the corner hides its WHOLE junction-end block: the
+                    # strips must not give any of those cells back
+                    idxs |= corner_cell_block(cell)
                     break
     except ImportError:
         pass

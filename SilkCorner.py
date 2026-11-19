@@ -45,7 +45,8 @@ from SilkMachinery import (build_intervals, axis_intervals, split_pair,
     corner_cell_index, corner_ring,
     corner_grid, orient_junction_row, corner_ring_3,
     control_grid64_3_1, reverse_grid_rows, set_grid_display,
-    ring_corner_gap, CUT_OWNED_PROP, add_cut_entry, remove_cut_entries)
+    ring_corner_gap, corner_cell_block, CUT_OWNED_PROP, add_cut_entry,
+    remove_cut_entries)
 
 import os, Silk_dummy
 path_Silk = os.path.dirname(Silk_dummy.__file__)
@@ -1658,9 +1659,13 @@ class CornerBlend:
             self._refuse(fp, why)
             return
 
-        # hide the corner cells (the region this blend covers)
+        # hide the corner region (the area this blend covers): the whole
+        # JUNCTION-END BLOCK, because the corner's own cuts subdivide the
+        # square it sits on into strips (`corner_cell_block`).
         for name, (pth, iu_c, iv_c, nu, nv) in corner_cells.items():
-            idx = iu_c * nv + iv_c
+            cell = corner_cell_of(pth, list(fp.Strips), fp.tolerance,
+                                  fp.Name)
+            block = corner_cell_block(cell) or {iu_c * nv + iv_c}
             try:
                 pth.removeProperty("_HideSubgridIdx")  # superseded
             except Exception:
@@ -1671,7 +1676,7 @@ class CornerBlend:
                                 "subgrid cell indices hidden by blends")
                 pth.setEditorMode("_HiddenSubgridIdxs", 1)
             cur = set(int(i) for i in (pth._HiddenSubgridIdxs or []))
-            cur.add(idx)
+            cur |= block
             pth._HiddenSubgridIdxs = sorted(cur)
 
         fp.Poles = p36

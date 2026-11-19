@@ -206,6 +206,14 @@ creates them anymore.
   only; the SHIPPED construction still writes the band edge (that is where
   the construction of before #119 cut), and a corner that carries no recorded
   construction reads as shipped.
+- **A corner hides its whole JUNCTION-END BLOCK, not one cell.**
+  `SilkMachinery.corner_cell_block` names the cells from the corner cell to
+  the patch edge on BOTH axes; the corner's own cuts subdivide the square it
+  sits on, so hiding only the leader-bounded cell leaves the rest of that
+  square drawn as stray subpatches under it (measured on the owner's model:
+  three cells of a 3x3 stayed visible). The preserved pieces are one step the
+  other way and stay visible. Pinned by
+  `Tests/test_preserved_pieces.py::test_the_corner_hides_its_whole_junction_end_block`.
 - **The cut is placed by LENGTH, and its sides are EQUALISED (#129).** The
   owner's rule (2026-10-22): *"ideally both segment lengths should be close
   to the same absolute length (not u or v values between 0 and 1, but the

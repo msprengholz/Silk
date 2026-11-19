@@ -30,6 +30,16 @@ leaves behind: **ten roles in all** (#130).
   read through `Patch.getSubgrid`, never re-fits
   (`SilkMachinery.preserved_piece_cells`, `Tests/test_preserved_pieces.py`).
 
+**What the corner HIDES on its patches.** The corner covers the
+**junction-end block**: on every ring patch, every cell from the corner cell
+to the patch edge on **both** axes (`SilkMachinery.corner_cell_block`), not
+just the leader-bounded cell. The corner's own cuts subdivide the square it
+sits on into strips, so hiding one cell left the rest of that square drawn as
+stray subpatches under the corner -- measured on the owner's model with one
+rolled corner: three cells of a 3x3 block stayed visible. The preserved pieces
+are the cell one step the OTHER way, so they stay visible: the exposed
+original surface is the point of them.
+
 **How the division is expressed.** The patch that carries the tri carries
 **two cuts per axis end**: the **setback** (its band edge, the user's) and
 the **leader** (`ULeader1/2`, `VLeader1/2`, additive and default-off, #119).

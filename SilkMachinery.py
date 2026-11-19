@@ -1067,6 +1067,17 @@ def corner_cell_index(s1, s2, l1=NO_LEADER_1, l2=NO_LEADER_2, end=None):
     edge = band_edge(s1) if end == 0 else band_edge(s2)
     if (edge is not None and not (lead > edge if end == 0 else lead < edge)):
         return (0 if end == 0 else n - 1), n, end
+    # The cell is asked for BY ITS TWO ENDS, never by a distance from the axis
+    # end: the axis may carry a second band edge beyond the leader (a patch
+    # with a third seam), and the interval past the leader then belongs to
+    # that BAND, not to this corner.  With no setback at the junction end the
+    # corner reaches from the axis end to its leader, which is the same rule
+    # with the end standing in for the missing edge.
+    limit = edge if edge is not None else (0.0 if end == 0 else 1.0)
+    want = tuple(sorted((limit, lead)))
+    for i, (a, b) in enumerate(ivs):
+        if abs(a - want[0]) <= 1e-12 and abs(b - want[1]) <= 1e-12:
+            return i, n, end
     return (1 if end == 0 else n - 2), n, end
 
 
@@ -1239,6 +1250,35 @@ PRESERVED_BEYOND_V = "beyond_v"
 PRESERVED_BEYOND_BOTH = "beyond_both"
 PRESERVED_PIECE_ROLES = (PRESERVED_BEYOND_U, PRESERVED_BEYOND_V,
                          PRESERVED_BEYOND_BOTH)
+
+
+def corner_cell_block(cell):
+    """The subgrid cells the corner's OWN square covers on one patch.
+
+    `cell` is a patch's ring-corner cell as `SilkCorner.corner_cell_of`
+    reports it: `(iu, iv, nu, nv, u_end, v_end)`.  The corner covers the
+    JUNCTION-END BLOCK -- every cell from the corner cell to the patch edge
+    on BOTH axes -- not just the corner cell.
+
+    WHY THE WHOLE BLOCK.  A rolling corner cuts its member patch twice per
+    axis, and those cuts subdivide the whole axis, so the square the corner
+    sits on is split into strips.  Hiding only the leader-bounded cell left
+    the rest of the square drawn as stray subpatches under the corner
+    (measured on the owner's model with one rolled corner: three cells of the
+    block -- `(0,0)`, `(0,1)`, `(1,0)` of a 3x3 -- stayed visible).
+
+    The preserved pieces are the cell one step the OTHER way (`iu + du`,
+    `iv + dv`), so they are outside the block and stay visible: the exposed
+    original surface is the point of them.
+    """
+    if not cell:
+        return set()
+    iu, iv, nu, nv, u_end, v_end = cell
+    if None in (iu, iv, nu, nv, u_end, v_end):
+        return set()
+    us = range(iu, nu) if u_end == 1 else range(0, iu + 1)
+    vs = range(iv, nv) if v_end == 1 else range(0, iv + 1)
+    return {i * nv + j for i in us for j in vs}
 
 
 def preserved_piece_cells(cell, member=False):

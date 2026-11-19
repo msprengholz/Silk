@@ -317,10 +317,48 @@ def test_two_junctions_on_one_axis_still_leave_the_band_one_cell(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_the_corner_cell_is_between_the_setback_and_the_leader(doc):
+    """The corner cell is the interval BOUNDED by the setback and the leader.
+
+    A rolling corner's cell is the region the band is cut back to: from the
+    band edge at the JUNCTION END (its setback) to that end's own leader cut.
+    The cell is asked for by those two numbers, so an axis that carries a
+    second band edge on its far side -- the demo's ring patches carry a third
+    seam -- still names the strip beside the leader, not the band beyond it.
+    """
+    errors, checks = [], []
+    cases = (
+        # label, (Split1, Split2, Leader1, Leader2, end), the cell
+        ("3 intervals, end 0", (0.1, 1.0, 0.25, 1.0, 0), (0.1, 0.25)),
+        ("3 intervals, end 1", (0.1, 0.5, 0.0, 0.25, 1), (0.25, 0.5)),
+        ("4 intervals, end 0", (0.1, 0.9, 0.85, 1.0, 0), (0.1, 0.85)),
+        ("4 intervals, end 1", (0.1, 0.9, 0.0, 0.85, 1), (0.85, 0.9)),
+        ("no setback at the end", (0.0, 0.9, 0.7, 1.0, 0), (0.0, 0.7)),
+    )
+    for label, (s1, s2, l1, l2, end), want in cases:
+        ivs = SM.build_intervals(s1, s2, l1, l2)
+        idx, n, named = SM.corner_cell_index(s1, s2, l1, l2, end)
+        cell = ivs[idx] if idx is not None and 0 <= idx < n else None
+        checks.append("%s: intervals %r -> cell %r (want %r)"
+                      % (label, ivs, cell, want))
+        if cell is None:
+            errors.append("%s: no corner cell named at all" % label)
+            continue
+        if max(abs(cell[0] - want[0]), abs(cell[1] - want[1])) > 1e-12:
+            errors.append("%s: the corner cell is %r, want the interval "
+                          "between the setback and the leader %r"
+                          % (label, cell, want))
+        if named != end:
+            errors.append("%s: the cell names end %r, not %r"
+                          % (label, named, end))
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_a_patch_without_a_leader_reads_exactly_what_it_always_read,
     test_a_leader_cut_subdivides_the_axis_and_leaves_the_band_one_cell,
     test_a_leader_inside_the_band_is_inert_and_named,
     test_the_ring_loop_closes_at_one_cut_and_opens_at_two,
     test_two_junctions_on_one_axis_still_leave_the_band_one_cell,
+    test_the_corner_cell_is_between_the_setback_and_the_leader,
 ]

@@ -228,8 +228,55 @@ def test_every_cell_edge_that_abuts_a_role_is_c0_to_it(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_the_corner_hides_its_whole_junction_end_block(doc):
+    """The corner hides the JUNCTION-END BLOCK, not one cell.
+
+    A rolling corner cuts its member patch twice per axis, so the square the
+    corner sits on is split into strips by those cuts. Covering only the
+    leader-bounded cell leaves the rest of the square -- and the strips the
+    cuts created -- drawn as stray subpatches under the corner. That is the
+    report: "the sub patches that are created to allow the rolled corner are
+    not hidden correctly".
+
+    Contract: on every ring patch, every cell inside the block between the
+    corner cell and the patch edge on BOTH axes is hidden, and every
+    preserved piece (the cell one step AWAY from the junction) stays visible.
+    """
+    errors, checks = [], []
+    _strips, corner = _corner(doc)
+    if corner is None or not corner.Poles:
+        return {"pass": False, "errors": ["the corner did not build"],
+                "checks": checks}
+    pieces = {(p.Name, iu, iv) for p, _r, iu, iv in SC.reserved_cells(corner)}
+    for patch in [doc.getObject(n) for n in ("PatchA", "PatchB", "PatchC")]:
+        cell = SC.corner_cell_of(patch, list(corner.Strips),
+                                 SC.CORNER_DEFAULT_TOL, corner.Name)
+        iu, iv, nu, nv, u_end, v_end = cell
+        us = list(range(iu, nu)) if u_end == 1 else list(range(0, iu + 1))
+        vs = list(range(iv, nv)) if v_end == 1 else list(range(0, iv + 1))
+        block = {(i, j) for i in us for j in vs}
+        hidden = {divmod(int(k), nv) for k in
+                  (getattr(patch, "_HiddenSubgridIdxs", None) or [])}
+        missing = sorted(block - hidden)
+        pieces_visible = {c for c in pieces if c[0] == patch.Name}
+        hidden_pieces = sorted(pieces_visible & hidden)
+        checks.append("%s: corner cell (%d,%d) of %dx%d, block %r, hidden %r"
+                      % (patch.Name, iu, iv, nu, nv, sorted(block),
+                         sorted(hidden)))
+        check(not missing,
+              "%s leaves %d cell(s) of the junction-end block VISIBLE: %r -- "
+              "the corner's own square is drawn as stray subpatches"
+              % (patch.Name, len(missing), missing), errors)
+        check(not hidden_pieces,
+              "%s HIDES its preserved piece cell(s) %r -- the exposed original "
+              "surface must stay visible" % (patch.Name, hidden_pieces),
+              errors)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 ALL_TESTS = [
     test_the_cube_corner_produces_ten_roles_in_one_object,
     test_each_cell_is_the_patch_cell_the_rule_places,
     test_every_cell_edge_that_abuts_a_role_is_c0_to_it,
+    test_the_corner_hides_its_whole_junction_end_block,
 ]
