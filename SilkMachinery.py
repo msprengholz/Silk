@@ -326,13 +326,13 @@ def ensure_cut_list(obj):
 def cut_entries(p):
     """`[(letter, end, owner, value), ...]` from a patch's cut list.
 
-    A missing property (every patch built before #130) is an empty list.
-    Malformed entries are skipped rather than breaking the reader.
+    A fifth field, when present, is the scalar slot's original value before
+    ANY corner wrote it (#130/#131). Old four-field entries read as before.
     """
     out = []
     for raw in (getattr(p, CUT_LIST_PROP, None) or []):
         parts = str(raw).split("|")
-        if len(parts) != 4 or parts[0] not in ("U", "V") \
+        if len(parts) not in (4, 5) or parts[0] not in ("U", "V") \
                 or parts[1] not in ("0", "1"):
             continue
         try:
@@ -343,6 +343,35 @@ def cut_entries(p):
     return out
 
 
+def _cut_raw_entries(p):
+    """Raw fields of the cut list, including the optional original value."""
+    out = []
+    for raw in (getattr(p, CUT_LIST_PROP, None) or []):
+        parts = str(raw).split("|")
+        if len(parts) in (4, 5) and parts[0] in ("U", "V") \
+                and parts[1] in ("0", "1"):
+            out.append(parts)
+    return out
+
+
+def cut_original(p, letter, end, owner):
+    """The value the scalar slot carried before corners cut it, or None."""
+    for parts in _cut_raw_entries(p):
+        if (parts[0], int(parts[1]), parts[2]) == (letter, int(end), owner):
+            if len(parts) == 5:
+                try:
+                    return float(parts[4])
+                except ValueError:
+                    return None
+    for parts in _cut_raw_entries(p):
+        if (parts[0], int(parts[1])) == (letter, int(end)) and len(parts) == 5:
+            try:
+                return float(parts[4])
+            except ValueError:
+                continue
+    return None
+
+
 def cut_list_extras(p, letter):
     """`[(end, value), ...]` of one axis's extra cuts, in stored order."""
     return [(end, value) for ax, end, _owner, value in cut_entries(p)
@@ -351,22 +380,43 @@ def cut_list_extras(p, letter):
 
 def add_cut_entry(p, letter, end, owner, value):
     """Put one owned extra cut into `p`'s list, replacing that owner's
-    previous entry for the same axis end (a re-cut is not a second cut)."""
+    previous entry for the same axis end (a re-cut is not a second cut).
+
+    The first writer also records the scalar slot's original value; later
+    owners inherit it from the entry already present, so releasing the LAST
+    owner restores the model exactly (#131).
+    """
     ensure_cut_list(p)
-    kept = [e for e in cut_entries(p)
-            if (e[0], e[1], e[2]) != (letter, end, owner)]
-    kept.append((letter, end, owner, float(value)))
-    setattr(p, CUT_LIST_PROP,
-            ["%s|%d|%s|%.17g" % e for e in kept])
+    raw = _cut_raw_entries(p)
+    original = None
+    for parts in raw:
+        if (parts[0], int(parts[1]), parts[2]) == (letter, int(end), owner) \
+                and len(parts) == 5:
+            try:
+                original = float(parts[4])
+            except ValueError:
+                original = None
+            break
+    if original is None:
+        original = cut_original(p, letter, end, None)
+    if original is None:
+        prop = "%sLeader%d" % (letter, int(end) + 1)
+        sentinel = 0.0 if int(end) == 0 else 1.0
+        original = float(getattr(p, prop, sentinel) or sentinel)
+    kept = [e for e in raw
+            if (e[0], int(e[1]), e[2]) != (letter, int(end), owner)]
+    kept.append([letter, str(int(end)), owner, "%.17g" % float(value),
+                 "%.17g" % float(original)])
+    setattr(p, CUT_LIST_PROP, ["|".join(e) for e in kept])
 
 
 def remove_cut_entries(p, owner):
     """Remove every extra cut owned by `owner`; return the entries gone."""
-    old = cut_entries(p)
-    gone = [e for e in old if e[2] == owner]
+    raw = _cut_raw_entries(p)
+    gone = [e for e in raw if e[2] == owner]
     if gone:
         setattr(p, CUT_LIST_PROP,
-                ["%s|%d|%s|%.17g" % e for e in old if e[2] != owner])
+                ["|".join(e) for e in raw if e[2] != owner])
     return gone
 
 

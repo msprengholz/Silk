@@ -2712,12 +2712,18 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
         for op, _letter, _end, _value in owned:
             remove_cut_entries(op, owner)
         with follow_deferred():
-            for p, prop, cur, _value in planned:
-                try:
-                    setattr(p, prop, cur)
-                except Exception:
-                    pass
-            if planned:
+            # Only the slots THIS candidate actually wrote are restored.
+            # A second owner's entry lands in the cut list but does NOT
+            # overwrite the first owner's scalar slot; restoring that slot
+            # from the full plan would erase the first owner's live cut.
+            for pname, prop, cur, _value in written:
+                p = doc.getObject(pname)
+                if p is not None:
+                    try:
+                        setattr(p, prop, cur)
+                    except Exception:
+                        pass
+            if written:
                 doc.recompute()
                 doc.recompute()
 

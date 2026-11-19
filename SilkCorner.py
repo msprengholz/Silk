@@ -1156,7 +1156,6 @@ def recorded_cuts(corner):
         out.append((patch, name, prop, float(parts[2]), float(parts[3])))
     return out
 
-
 def release_corner(corner):
     """Undo a corner that is being DELETED (#131): its own surfaces go, and
     the cuts it wrote on the ring's patches go back to the values it found.
@@ -1223,16 +1222,44 @@ def release_corner(corner):
         except Exception as exc:
             report["kept"].append("%s could not be removed: %r" % (name, exc))
     owner = corner.Name
+    from SilkMachinery import cut_entries, cut_original, leader_cut_prop
+    # Capture the pre-corner value of every slot this corner owns BEFORE
+    # removing entries: the write log's `before` may be a previous owner's
+    # cut, not the value the model carried before any corner existed.
+    originals = {}
+    for patch_name, letter, end, _value in recorded_owned_cuts(corner):
+        patch = doc.getObject(patch_name)
+        if patch is not None:
+            originals[(patch_name, leader_cut_prop(letter, end))] = \
+                cut_original(patch, letter, end, owner)
     for patch_name, letter, end, value in recorded_owned_cuts(corner):
         patch = doc.getObject(patch_name)
         if patch is None:
             report["kept"].append("%s.%s%d is owned by a corner whose patch "
                                   "is gone" % (patch_name, letter, end + 1))
             continue
+        prop = leader_cut_prop(letter, end)
+        sentinel = 0.0 if end == 0 else 1.0
+        current = float(getattr(patch, prop, sentinel) or sentinel)
+        original = cut_original(patch, letter, end, owner)
         gone = remove_cut_entries(patch, owner)
         if gone:
             report["cuts"].append((patch_name, "%sLeader%d" % (letter, end + 1),
                                     float("nan"), value))
+            remaining = [e for e in cut_entries(patch)
+                         if e[0] == letter and e[1] == end]
+            if remaining:
+                # another corner had to share this scalar slot: hand it to
+                # the first remaining owner instead of clearing the slot.
+                setattr(patch, prop, remaining[0][3])
+                report["cuts"].append((patch_name, prop, current,
+                                       remaining[0][3]))
+            else:
+                # the LAST owner restores the value the scalar slot held
+                # before ANY corner cut it, carried on the entry itself.
+                target = sentinel if original is None else original
+                setattr(patch, prop, target)
+                report["cuts"].append((patch_name, prop, current, target))
     try:
         setattr(corner, CUT_OWNED_PROP, [])
     except Exception:
@@ -1248,9 +1275,20 @@ def release_corner(corner):
                 "%s.%s stays %g: it has held that since, not the %g this "
                 "corner wrote" % (name, prop, current, written))
             continue
+        target = before
+        if prop.startswith(("U", "V")) and prop.endswith(("1", "2")):
+            letter, end = prop[0], int(prop[-1]) - 1
+            remaining = [e for e in cut_entries(patch)
+                         if e[0] == letter and e[1] == end]
+            if remaining:
+                target = remaining[0][3]
+            elif (name, prop) in originals:
+                original = originals[(name, prop)]
+                if original is not None:
+                    target = original
         try:
-            setattr(patch, prop, before)
-            report["cuts"].append((name, prop, before, written))
+            setattr(patch, prop, target)
+            report["cuts"].append((name, prop, target, written))
         except Exception as exc:
             report["kept"].append("%s.%s could not be restored: %r"
                                   % (name, prop, exc))

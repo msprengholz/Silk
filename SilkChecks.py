@@ -1549,7 +1549,51 @@ def _oracle_canonical_corner_grids(strips, tol=0.01):
     return None, why
 
 
-def _corner_reference_rows(strips, tol=0.01):
+def _owner_strip_row(s, strips, tol, owner):
+    """The junction row of strip `s` as corner `owner` derives it (#130).
+
+    A shared strip has ONE stored net, cut at the scalar slot of its first
+    owner; a second corner owns its own cut entries and re-derives its strip
+    ends from them. This mirror does the same from the patch base surfaces
+    so CB1 compares a corner to its own boundary, not to a foreign scalar.
+    """
+    if not owner:
+        return None, None
+    from SilkBlend import (_resolve_seam, band_cell_from_extent,
+                           blend_grid_from_cells)
+    seam = _resolve_seam(s, s.PatchA, s.PatchB, tol)
+    if seam is None:
+        return None, "blend %s: no resolved seam" % s.Name
+    ea, eb, pairs = seam
+    li, why = _oracle_strip_junction_row(s, list(strips), tol)
+    if li is None:
+        return None, why
+    cells, sides = [], []
+    for p in (s.PatchA, s.PatchB):
+        _se, ss = _oracle_side_and_end(s, p, tol)
+        if ss is None:
+            return None, ("blend %s: no seam side on %s" % (s.Name, p.Name))
+        others = []
+        for t in strips:
+            if t is s or p not in (t.PatchA, t.PatchB):
+                continue
+            te, _ts = _oracle_side_and_end(t, p, tol)
+            if te:
+                others.append(int(te[1]))
+        if len(others) != 1:
+            return None, ("blend %s: patch %s has %d partner seams at the "
+                          "junction" % (s.Name, p.Name, len(others)))
+        cell, why = band_cell_from_extent(p, _se, ss, others[0], owner)
+        if cell is None:
+            return None, why
+        cells.append(cell)
+        sides.append(ss)
+    poles, _weights = blend_grid_from_cells(
+        ea, sides[0], cells[0], eb, sides[1], cells[1], pairs,
+        _oracle_seam_identity(s, tol))
+    return poles[li * 6: li * 6 + 6], None
+
+def _corner_reference_rows(strips, tol=0.01, owner=None):
     """Independently derive each ring strip's corner-end row — the
     6-pole edge of the strip's blend surface at the corner-cell side.
 
@@ -1564,14 +1608,21 @@ def _corner_reference_rows(strips, tol=0.01):
     """
     rows = []
     for s in strips:
-        li, why = _oracle_strip_junction_row(s, list(strips), tol)
-        if li is None:
-            return None, why
-        poles = list(getattr(s, "Poles", None) or [])
-        if len(poles) != 24:
-            return None, ("blend %s: expected a 24-pole grid, got %d"
-                          % (getattr(s, "Name", None) or s, len(poles)))
-        rows.append(poles[li * 6: li * 6 + 6])
+        row = None
+        if owner:
+            row, why = _owner_strip_row(s, list(strips), tol, owner)
+            if row is None and why:
+                return None, why
+        if row is None:
+            li, why = _oracle_strip_junction_row(s, list(strips), tol)
+            if li is None:
+                return None, why
+            poles = list(getattr(s, "Poles", None) or [])
+            if len(poles) != 24:
+                return None, ("blend %s: expected a 24-pole grid, got %d"
+                              % (getattr(s, "Name", None) or s, len(poles)))
+            row = poles[li * 6: li * 6 + 6]
+        rows.append(row)
     return rows, None
 
 
@@ -1596,7 +1647,8 @@ def _check_corner_blend(cb, strips, reference_poles):
                         "ok" if ok else "bad")))
 
     rows, why = _corner_reference_rows(
-        strips, tol=getattr(cb, "tolerance", 0.01))
+        strips, tol=getattr(cb, "tolerance", 0.01),
+        owner=getattr(cb, "Name", None))
     if rows is None:
         # The refusal NAMES the strip (or patch) that broke the ring --
         # the oracle's OWN reason, not the ring resolver's (#120: the
