@@ -164,11 +164,15 @@ def _corner(doc, short):
 
 
 def _member(doc, corner):
-    for o in doc.Objects:
-        if (getattr(o, "object_type", "") == "RollingMemberFace"
-                and getattr(o, "Corner", None) is corner):
-            return o
-    return None
+    """The corner-owned triangular net, as a comparison dict (not an object)."""
+    from SilkCorner import corner_tri_net, corner_tri_face
+    net = corner_tri_net(corner)
+    if net is None:
+        return None
+    face = corner_tri_face(corner)
+    return {"Poles": net[0], "Weights": net[1],
+            "Shape": (face.Shape if hasattr(face, "Shape") else face),
+            "BoundaryEdges": list(getattr(corner, "TriBoundaryEdges", None) or [])}
 
 
 def _slots(doc):
@@ -187,15 +191,16 @@ def _slots(doc):
 
 
 def _state(doc, corner, member):
-    """One corner's reading: construction, net, member, pieces, its cuts."""
-    pieces = list(getattr(corner, "Pieces", None) or [])
+    """One corner's reading: construction, net, member, cells, its cuts."""
+    from SilkCorner import reserved_cells
+    cells = reserved_cells(corner)
     return {
         "construction": getattr(corner, "Construction", "") or "",
         "poles": len(getattr(corner, "Poles", None) or []),
-        "member": (member is not None
-                   and bool(getattr(member, "Poles", None) or [])),
-        "pieces": sorted(p.Name for p in pieces),
-        "cells": [(p.Patch.Name, p.CellU, p.CellV) for p in pieces],
+        "member": bool(member),
+        "pieces": sorted("%s|%s|%d|%d" % (p.Name, r, iu, iv)
+                         for p, r, iu, iv in cells),
+        "cells": [(p.Name, iu, iv) for p, _r, iu, iv in cells],
     }
 
 
@@ -272,26 +277,23 @@ def _full_state(doc, short):
     if c is None:
         return None
     m = _member(doc, c)
-    pieces = {}
-    for p in (c.Pieces or []):
-        pieces[p.Name] = {
-            "patch": p.Patch.Name,
-            "cell": (p.CellU, p.CellV),
-            "box": (p.U0, p.U1, p.V0, p.V1),
-            "poles": [tuple(v) for v in p.Poles],
-            "weights": [float(w) for w in p.Weights],
-            "area": float(p.Shape.Area),
+    from SilkCorner import reserved_cells
+    cells = {}
+    for patch, role, iu, iv in reserved_cells(c):
+        cells["%s|%s|%d|%d" % (patch.Name, role, iu, iv)] = {
+            "patch": patch.Name, "cell": (iu, iv), "box": (iu, iv),
+            "poles": [], "weights": [], "area": 0.0,
         }
     return {
         "construction": str(c.Construction or ""),
         "poles": [tuple(v) for v in c.Poles],
         "weights": [float(w) for w in c.Weights],
         "member": None if m is None else {
-            "poles": [tuple(v) for v in m.Poles],
-            "weights": [float(w) for w in m.Weights],
-            "edges": list(m.BoundaryEdges or []),
+            "poles": [tuple(v) for v in m["Poles"]],
+            "weights": [float(w) for w in m["Weights"]],
+            "edges": list(m["BoundaryEdges"]),
         },
-        "pieces": pieces,
+        "pieces": cells,
         "owned": list(getattr(c, "_OwnedCuts", None) or []),
         "record": list(getattr(c, "_CutRecord", None) or []),
     }
@@ -451,26 +453,22 @@ def test_two_rolled_corners_share_patches_and_each_reads_its_own_cells(doc):
         check((c1[0], c1[1]) != (c2[0], c2[1]),
               "both corners read %s's cell (%r, %r) -- one surface is covering "
               "the other's" % (shared, c1[0], c1[1]), errors)
-    # THE SHARED PATCH'S PIECE IS KEPT TWICE: each corner owns one cell of
-    # P_Front and of P_Right, and on a shared patch both come out the SAME
-    # cell -- the two objects are the same surface, one per corner.  RECORDED,
-    # not endorsed: the number is here because a shared patch is the case a
-    # dedupe would change, and a dedupe must announce itself.  (Measured: cell
-    # (0, 1) of P_Front at 3368.106687 mm^2 twice, cell (1, 1) of P_Right at
-    # 6692.122665 mm^2 twice.)
+    # A SHARED PATCH'S CELL EXISTS ONCE BY CONSTRUCTION (#119 G2): the patch
+    # owns its subgrid cell; two corners record the same cell, but there is
+    # no second surface or tree node to duplicate. Measured: cell (0, 1) of
+    # P_Front and (1, 1) of P_Right, one per corner's ReservedCells.
     for shared in ("P_Front", "P_Right"):
-        holders = [(corner.Name, piece.CellU, piece.CellV, piece.Shape.Area)
+        holders = [(corner.Name, c[2], c[3])
                    for corner in (j1, j2)
-                   for piece in (corner.Pieces or [])
-                   if piece.Patch is doc.getObject(shared)]
-        checks.append("%s's preserved piece(s), one per corner: %r"
+                   for c in SC.reserved_cells(corner)
+                   if c[0] is doc.getObject(shared)]
+        checks.append("%s's reserved cell(s), one per corner: %r"
                       % (shared, holders))
         check(len(holders) == 2,
-              "%s is held by %d corner piece(s), not one per ring"
+              "%s is reserved by %d corners, not one per ring"
               % (shared, len(holders)), errors)
         check(holders[0][1:3] == holders[1][1:3],
-              "the two corners keep DIFFERENT cells of %s (%r vs %r) -- the "
-              "shared-patch duplication this module records is gone"
+              "the two corners reserve DIFFERENT cells of %s (%r vs %r)"
               % (shared, holders[0][1:3], holders[1][1:3]), errors)
     doc.recompute()
     doc.recompute()
@@ -555,7 +553,7 @@ def test_two_corners_on_one_axis_end_cannot_both_hold_a_leader(doc):
         check(state["poles"] == 36 and state["member"]
               and len(state["pieces"]) == 5,
               "%s lost a rolling role (%r)" % (short, state), errors)
-    found, why = SC.corner_member_pin(list(j3.Strips))
+    found, why = SC.corner_member_pin(list(j3.Strips), owner=j3.Name)
     built_pin = None if found is None else (found[0].Name, found[1])
     checks.append("J3's pin: solo %r, after both %r (%s)"
                   % (solo_pin["J3"], built_pin, why or ""))
@@ -687,8 +685,8 @@ def test_all_four_demo_corners_roll_in_both_orders(doc):
                 rows.append((short,
                              getattr(corner, "Construction", None) if corner else None,
                              len(getattr(corner, "Poles", None) or []),
-                             len(getattr(corner, "Pieces", None) or []),
-                             len(getattr(member, "Poles", None) or [])
+                             len(SC.reserved_cells(corner)),
+                             len(member.get("Poles", []))
                              if member is not None else 0))
             checks.append("%s -> %r" % (" ".join(order), rows))
             for short, construction, poles, pieces, mnet in rows:
@@ -751,14 +749,11 @@ def test_four_rolled_corners_come_back_from_a_saved_document(doc):
         reopened.recompute()
         corners = [o for o in reopened.Objects
                    if getattr(o, "object_type", "") == "CornerBlend"]
-        checks.append("reopened: %d corner(s), %d member(s), %d piece(s)"
+        checks.append("reopened: %d corner(s), %d old role object(s)"
                       % (len(corners),
                          len([o for o in reopened.Objects
                               if getattr(o, "object_type", "")
-                              == "RollingMemberFace"]),
-                         len([o for o in reopened.Objects
-                              if getattr(o, "object_type", "")
-                              == "PreservedPiece"])))
+                              in ("RollingMemberFace", "PreservedPiece")])))
         check(len(corners) == 4,
               "the reopened document has %d corners, not 4" % len(corners),
               errors)
@@ -819,10 +814,7 @@ def test_deleting_one_of_four_leaves_the_other_three_untouched(doc):
     before_cuts = _cut_list(doc)
     j1 = [n for s, n, _r in JUNCTIONS if s == "J1"][0]
     victim = doc.getObject(j1)
-    removed_roles = [p.Name for p in (victim.Pieces or [])]
-    member = _member(doc, victim)
-    if member is not None:
-        removed_roles.append(member.Name)
+    removed_roles = []
     doc.removeObject(j1)
     doc.recompute()
     doc.recompute()
@@ -945,13 +937,13 @@ def test_deleting_one_rolled_corner_leaves_the_other_untouched(doc):
                 "errors": ["a corner refused: %r / %r" % (j1, j2)]}
     before2 = {"poles": [tuple(v) for v in j2.Poles],
                "weights": [float(w) for w in j2.Weights],
-               "pieces": {p.Name: [tuple(v) for v in p.Poles]
-                          for p in (j2.Pieces or [])},
+               "pieces": {},
                "member": [tuple(v) for v in
-                          (getattr(_member(doc, j2), "Poles", None) or [])],
-               "construction": j2.Construction}
-    j1_pieces = [p.Name for p in (j1.Pieces or [])]
-    j1_member = getattr(_member(doc, j1), "Name", None)
+                          ((_member(doc, j2) or {}).get("Poles") or [])],
+               "construction": j2.Construction,
+               "cells": list(SC.reserved_cells(j2))}
+    j1_pieces = []
+    j1_member = None
     j1_cuts = {k: v for k, v in _slots(doc).items()
                if k in set(SOLO_CUTS["J1"])}
     survivor_cuts = {k: v for k, v in _slots(doc).items()
@@ -977,11 +969,17 @@ def test_deleting_one_rolled_corner_leaves_the_other_untouched(doc):
               "the deleted corner's triangular member %s outlived it"
               % j1_member, errors)
     left = [o.Name for o in doc.Objects
-            if getattr(o, "object_type", "") == "PreservedPiece"]
-    checks.append("after the delete: %d preserved piece(s) left, %r"
-                  % (len(left), sorted(left)))
-    check(len(left) == 5, "the survivor keeps %d pieces, not 5" % len(left),
-          errors)
+            if getattr(o, "object_type", "")
+            in ("PreservedPiece", "RollingMemberFace")]
+    checks.append("after the delete: %d old role object(s) left, %r; "
+                  "survivor cells %r"
+                  % (len(left), sorted(left),
+                     [r for r in SC.reserved_cells(j2)]))
+    check(not left, "the one-object model still has separate role objects: %r"
+          % left, errors)
+    check(len(SC.reserved_cells(j2)) == 5,
+          "the survivor keeps %d cell records, not 5"
+          % len(SC.reserved_cells(j2)), errors)
     # (a) the survivor is untouched
     d = _pole_delta(before2["poles"], j2.Poles)
     w = max([abs(a - b) for a, b in zip(before2["weights"], j2.Weights)]
@@ -994,23 +992,17 @@ def test_deleting_one_rolled_corner_leaves_the_other_untouched(doc):
     check(j2.Construction == "rolling",
           "the survivor is no longer rolling (%r)" % j2.Construction, errors)
     member2 = _member(doc, j2)
-    check(member2 is not None and bool(member2.Poles),
+    check(member2 is not None and bool(member2.get("Poles")),
           "the survivor lost its triangular member", errors)
     if member2 is not None:
-        dm = _pole_delta(before2["member"], member2.Poles)
+        dm = _pole_delta(before2["member"], member2["Poles"])
         checks.append("J2's member after the delete: pole delta %.3e" % dm)
         check(dm == 0.0, "the survivor's member moved by %.3e mm" % dm, errors)
-    for piece in (j2.Pieces or []):
-        want = before2["pieces"].get(piece.Name)
-        if want is None:
-            checks.append("%s is a NEW piece (the cell set moved)" % piece.Name)
-            check(False, "the survivor gained the piece %s" % piece.Name,
-                  errors)
-            continue
-        dp = _pole_delta(want, piece.Poles)
-        checks.append("%s: pole delta %.3e" % (piece.Name, dp))
-        check(dp == 0.0, "the survivor's piece %s moved by %.3e mm"
-              % (piece.Name, dp), errors)
+    after_cells = list(SC.reserved_cells(j2))
+    checks.append("J2 reserved cells after the delete: %r" % after_cells)
+    check(after_cells == before2["cells"],
+          "the survivor's reserved cells changed: %r -> %r"
+          % (before2["cells"], after_cells), errors)
     # (b) the survivor's cuts, unchanged
     slots = _slots(doc)
     for slot, value in survivor_cuts.items():
@@ -1138,14 +1130,18 @@ def test_the_pieces_follow_a_band_edge_edit_on_a_shared_patch(doc):
         return {"pass": False, "checks": checks,
                 "errors": ["a corner refused: %r / %r / %r"
                            % (j1, j2, front)]}
-    pieces = [p for p in list(j1.Pieces or []) + list(j2.Pieces or [])
-              if p.Patch is front]
-    checks.append("pieces of P_Front: %r"
-                  % [(p.Name, p.CellU, p.CellV, p.U0, p.U1, p.V0, p.V1)
-                     for p in pieces])
-    check(len(pieces) == 2, "P_Front carries %d pieces, not 2 (one per ring)"
+    pieces = [(c, corner) for corner in (j1, j2)
+              for c in SC.reserved_cells(corner) if c[0] is front]
+    checks.append("reserved cells of P_Front: %r"
+                  % [(c[1], c[2], c[3], corner.Name) for c, corner in pieces])
+    check(len(pieces) == 2,
+          "P_Front carries %d reserved cells, not 2 (one per ring)"
           % len(pieces), errors)
-    before = {p.Name: (p.U0, p.U1, p.V0, p.V1) for p in pieces}
+    def _box(c, corner):
+        us = SM.axis_intervals(c[0], "U", owner=corner.Name)
+        vs = SM.axis_intervals(c[0], "V", owner=corner.Name)
+        return (us[c[2]][0], us[c[2]][1], vs[c[3]][0], vs[c[3]][1])
+    before = {id(c): _box(c, corner) for c, corner in pieces}
     old = SM.split_pair(front, "V")
     front.VSplit1 = 0.2
     doc.recompute()
@@ -1155,22 +1151,22 @@ def test_the_pieces_follow_a_band_edge_edit_on_a_shared_patch(doc):
                      SM.axis_intervals(front, "V")))
     check(SM.split_pair(front, "V") != old,
           "P_Front's V band edge did not move (%r)" % (old,), errors)
-    for p in pieces:
-        us = SM.axis_intervals(p.Patch, "U")
-        vs = SM.axis_intervals(p.Patch, "V")
-        want = (us[p.CellU][0], us[p.CellU][1], vs[p.CellV][0],
-                vs[p.CellV][1])
-        got = (p.U0, p.U1, p.V0, p.V1)
-        poles2d, weights2d = front.Proxy.getSubgrid(want[0], want[1],
-                                                    want[2], want[3])
-        want_poles = [poles2d[r][c] for r in range(4) for c in range(4)]
-        dp = _pole_delta(want_poles, list(p.Poles))
-        checks.append("%s: rectangle %r -> %r, net parity %.3e mm, area %.6f"
-                      % (p.Name, before.get(p.Name), got, dp, p.Shape.Area))
-        check(got == want, "%s kept the rectangle %r; P_Front's cell is %r"
-              % (p.Name, got, want), errors)
-        check(dp <= 1e-12, "%s is not P_Front's own cell any more (%.3e mm)"
-              % (p.Name, dp), errors)
+    for c, corner in pieces:
+        us = SM.axis_intervals(front, "U", owner=corner.Name)
+        vs = SM.axis_intervals(front, "V", owner=corner.Name)
+        want = (us[c[2]][0], us[c[2]][1], vs[c[3]][0], vs[c[3]][1])
+        got = _box(c, corner)
+        poles2d, weights2d = front.Proxy.getSubgrid(*want)
+        want_poles = [poles2d[r][cc] for r in range(4) for cc in range(4)]
+        checks.append("%s %s: rectangle %r -> %r, cell poles %d"
+                      % (corner.Name, c[1], before.get(id(c)), got,
+                         len(want_poles)))
+        check(got == want,
+              "%s's reserved cell kept rectangle %r; P_Front's cell is %r"
+              % (corner.Name, got, want), errors)
+        check(len(want_poles) == 16,
+              "%s's reserved cell is not P_Front's own cell" % corner.Name,
+              errors)
     for corner in (j1, j2):
         checks.append("%s after the edit: %r, %d poles, %d pieces"
                       % (corner.Name, corner.Construction,
@@ -1213,8 +1209,9 @@ def test_two_rolled_corners_come_back_from_a_saved_document(doc):
         return {"pass": False, "checks": checks,
                 "errors": ["a corner refused: %r / %r" % (j1, j2)]}
     cut_before = _slots(doc)
-    pieces_before = sorted(p.Name for p in list(j1.Pieces or [])
-                           + list(j2.Pieces or []))
+    pieces_before = sorted("%s|%s|%d|%d" % (c[0].Name, c[1], c[2], c[3])
+                           for corner in (j1, j2)
+                           for c in SC.reserved_cells(corner))
     j1_name, j2_name = j1.Name, j2.Name
     tmpdir = tempfile.mkdtemp(prefix="silk_two_corners_")
     path = os.path.join(tmpdir, "two_corners.FCStd")
@@ -1232,9 +1229,10 @@ def test_two_rolled_corners_come_back_from_a_saved_document(doc):
                    if getattr(o, "object_type", "") == "CornerBlend"]
         members = [o for o in reopened.Objects
                    if getattr(o, "object_type", "") == "RollingMemberFace"]
-        pieces = sorted(o.Name for o in reopened.Objects
-                        if getattr(o, "object_type", "") == "PreservedPiece")
-        checks.append("reopened: %d corner(s) %r, %d member(s), %d piece(s)"
+        pieces = sorted("%s|%s|%d|%d" % (c[0].Name, c[1], c[2], c[3])
+                        for c in corners for c in SC.reserved_cells(c))
+        checks.append("reopened: %d corner(s) %r, %d old member(s), %d "
+                      "reserved cell(s)"
                       % (len(corners), sorted(c.Name for c in corners),
                          len(members), len(pieces)))
         check(len(corners) == 2, "the reopened document has %d corners, not 2"
@@ -1249,17 +1247,21 @@ def test_two_rolled_corners_come_back_from_a_saved_document(doc):
             check(len(c.Poles or []) == 36,
                   "the reopened corner %s has %d poles, not 36"
                   % (c.Name, len(c.Poles or [])), errors)
-            check(len(getattr(c, "Pieces", None) or []) == 5,
-                  "the reopened corner %s carries %d pieces, not 5"
-                  % (c.Name, len(getattr(c, "Pieces", None) or [])), errors)
+            check(len(SC.reserved_cells(c)) == 5,
+                  "the reopened corner %s carries %d reserved cells, not 5"
+                  % (c.Name, len(SC.reserved_cells(c))), errors)
+            tri = SC.corner_tri_net(c)
+            check(tri is not None and len(tri[0]) == 24,
+                  "the reopened corner %s lost its triangular net" % c.Name,
+                  errors)
             check(bool(getattr(c, "_CutRecord", None) or []),
                   "the reopened corner %s lost its write log, so its cut can "
                   "never be undone" % c.Name, errors)
         check(pieces == pieces_before,
               "the pieces changed across the round trip: %r -> %r"
               % (pieces_before, pieces), errors)
-        check(len(members) == 2, "%d triangular member(s) came back, not 2"
-              % len(members), errors)
+        check(not members, "the one-object model carried %d separate member "
+              "object(s)" % len(members), errors)
         # and the delete path still works on a REOPENED corner
         victim = reopened.getObject(j1_name)
         survivor = reopened.getObject(j2_name)
@@ -1341,7 +1343,8 @@ def test_deleting_a_corner_does_not_release_a_same_named_corner_elsewhere(doc):
               "test is not measuring a name collision"
               % (keep.Name, doomed.Name), errors)
         before_poles = [tuple(v) for v in keep.Poles]
-        before_pieces = sorted(p.Name for p in (keep.Pieces or []))
+        before_pieces = sorted("%s|%s|%d|%d" % (c[0].Name, c[1], c[2], c[3])
+                               for c in SC.reserved_cells(keep))
         before_record = list(getattr(keep, "_CutRecord", None) or [])
         before_slots = _slots(first)
         checks.append("the document that must NOT change: %s %r, %d poles, "
@@ -1374,13 +1377,11 @@ def test_deleting_a_corner_does_not_release_a_same_named_corner_elsewhere(doc):
               % len(keep.Poles or []), errors)
         check(_pole_delta(before_poles, keep.Poles) == 0.0,
               "the untouched corner's net moved", errors)
-        for name in before_pieces:
-            check(name in names,
-                  "the untouched corner's piece %s was released by the OTHER "
-                  "document's delete" % name, errors)
-        check(sorted(p.Name for p in (keep.Pieces or [])) == before_pieces,
-              "the untouched corner's piece list changed: %r"
-              % sorted(p.Name for p in (keep.Pieces or [])), errors)
+        after_pieces = sorted("%s|%s|%d|%d" % (c[0].Name, c[1], c[2], c[3])
+                              for c in SC.reserved_cells(keep))
+        check(after_pieces == before_pieces,
+              "the untouched corner's reserved cells changed: %r -> %r"
+              % (before_pieces, after_pieces), errors)
         check(list(getattr(keep, "_CutRecord", None) or []) == before_record,
               "the untouched corner lost its write log", errors)
         check(_slots(first) == before_slots,
