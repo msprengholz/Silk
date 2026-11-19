@@ -69,6 +69,20 @@ import Part
 
 TOL = 1e-6
 
+# P4's self-intersection reading is CALIBRATED, not arbitrary. MeshPart's
+# `hasSelfIntersections` is a tessellation boolean: 0.5 mm false-positives
+# on valid pointed patches, 0.1/0.01 do so on others, and 0.5 misses a real
+# crossed net. P4 samples the EXACT Part surface instead: two parameter
+# samples at least 0.12 apart on BOTH axes whose points fall within 1% of
+# the surface diagonal are a self-intersection. Measured: 0 on all 12 valid
+# flat/corner triple orderings (min separation 6.09..11.48 mm), 31 hits on
+# the known-bad crossed net (closest 0.0346 mm). Raw matrix:
+# Resources/Test_files/_inspect/cut_list_attempts/09_p4_mesh_matrix.txt;
+# known answers: Tests/test_p4_self_intersection.py.
+P4_SELF_SAMPLES = 33
+P4_SELF_SEPARATION = 0.12
+P4_SELF_EPS_FRACTION = 0.01
+
 # A sane boundary edge follows its chord; a looped/mangled one does not.
 # A legitimate 3-corner U-edge (two 90-degree turns) measures 3.36, so the
 # limit must stay above that; looped cubics run an order of magnitude higher.
@@ -258,6 +272,62 @@ def _check_edge(edge):
     return results
 
 
+
+def sampled_self_intersections(face, samples=P4_SELF_SAMPLES,
+                               separation=P4_SELF_SEPARATION,
+                               eps_fraction=P4_SELF_EPS_FRACTION):
+    """Count pairs of EXACT surface samples that coincide away in parameter
+    space -- a mesh-independent self-intersection reading for P4.
+
+    Both parameters must differ by at least `separation`, so adjacent rows
+    and a degenerate collapsed edge cannot report. The distance bar is
+    `eps_fraction` of the face's own diagonal. Returns (count, eps, closest).
+    """
+    import math
+    surf = face.Surface
+    u0, u1, v0, v1 = face.ParameterRange
+    pts = []
+    for i in range(samples):
+        u = u0 + (u1 - u0) * i / float(samples - 1)
+        for j in range(samples):
+            v = v0 + (v1 - v0) * j / float(samples - 1)
+            pts.append((u, v, surf.value(u, v)))
+    xs = [p.x for _u, _v, p in pts]
+    ys = [p.y for _u, _v, p in pts]
+    zs = [p.z for _u, _v, p in pts]
+    diag = math.sqrt((max(xs) - min(xs)) ** 2
+                     + (max(ys) - min(ys)) ** 2
+                     + (max(zs) - min(zs)) ** 2)
+    eps = eps_fraction * max(diag, 1e-9)
+    buckets = {}
+    for k, (_u, _v, p) in enumerate(pts):
+        key = (int(math.floor(p.x / eps)),
+               int(math.floor(p.y / eps)),
+               int(math.floor(p.z / eps)))
+        buckets.setdefault(key, []).append(k)
+    count, closest = 0, float("inf")
+    offsets = (-1, 0, 1)
+    for key, ids in buckets.items():
+        near = set()
+        for a in offsets:
+            for b in offsets:
+                for c in offsets:
+                    near.update(buckets.get((key[0] + a, key[1] + b,
+                                             key[2] + c), ()))
+        for k in ids:
+            u, v, p = pts[k]
+            for m in near:
+                if m <= k:
+                    continue
+                u2, v2, q = pts[m]
+                if min(abs(u - u2), abs(v - v2)) < separation:
+                    continue
+                d = (p - q).Length
+                if d <= eps:
+                    count += 1
+                    closest = min(closest, d)
+    return count, eps, (float("inf") if closest == float("inf") else closest)
+
 def check_edge(edge):
     """Check a SilkEdge object. Returns [(name, ok, detail), ...]; never raises."""
     try:
@@ -446,19 +516,18 @@ def _check_patch_quad(patch, edges):
 
     # P4: surface valid + no self-intersection
     try:
-        import MeshPart
         faces = patch.Shape.Faces
         if not faces:
             results.append(("P4_surface_valid", False, "no face in Shape"))
         else:
             surf = max(faces, key=lambda f: f.Area)
             valid = patch.Shape.isValid()
-            mesh = MeshPart.meshFromShape(
-                Shape=surf, LinearDeflection=0.5, AngularDeflection=0.5, Relative=False)
-            si = mesh.hasSelfIntersections()
+            hits, eps, closest = sampled_self_intersections(surf)
             results.append((
-                "P4_surface_valid", valid and not si,
-                "valid=%s, self-intersections=%s" % (valid, si),
+                "P4_surface_valid", valid and hits == 0,
+                "valid=%s, sampled self-intersections=%d "
+                "(closest %.6g mm, bar %.6g mm)"
+                % (valid, hits, closest, eps),
             ))
     except Exception as e2:
         results.append(("P4_surface_valid", False, "P4 check error: %r" % e2))
@@ -555,19 +624,18 @@ def _check_patch_pointed(patch, edges):
 
     # P4: surface valid + no self-intersection
     try:
-        import MeshPart
         faces = patch.Shape.Faces
         if not faces:
             results.append(("P4_surface_valid", False, "no face in Shape"))
         else:
             surf = max(faces, key=lambda f: f.Area)
             valid = patch.Shape.isValid()
-            mesh = MeshPart.meshFromShape(
-                Shape=surf, LinearDeflection=0.5, AngularDeflection=0.5, Relative=False)
-            si = mesh.hasSelfIntersections()
+            hits, eps, closest = sampled_self_intersections(surf)
             results.append((
-                "P4_surface_valid", valid and not si,
-                "valid=%s, self-intersections=%s" % (valid, si),
+                "P4_surface_valid", valid and hits == 0,
+                "valid=%s, sampled self-intersections=%d "
+                "(closest %.6g mm, bar %.6g mm)"
+                % (valid, hits, closest, eps),
             ))
     except Exception as e2:
         results.append(("P4_surface_valid", False, "P4 check error: %r" % e2))
