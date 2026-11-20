@@ -138,6 +138,48 @@ def test_a_user_band_width_moves_the_derived_placement(doc):
     return {"pass": not errors, "errors": errors, "checks": checks}
 
 
+def test_a_band_too_short_for_the_equalised_side_refuses_by_name(doc):
+    """The derivation never clamps: when one seam's band cannot hold the
+    common length it says how much it can hold, and writes nothing."""
+    import SilkWorkflowOps as OPS
+    errors, checks = [], []
+    strips, _ = _cube(doc)
+    corner = OPS.create_corner_blend(strips, name="Refused")
+    doc.recompute()
+    doc.recompute()
+    patch = _member(corner)
+    reaches = []
+    for sp in corner.Strips:
+        r, why = OPS.seam_cut_reach(sp, patch, ring=strips)
+        if r is not None:
+            reaches.append(dict(r))
+    check(len(reaches) == 2, "the fixture has %d reaches" % len(reaches),
+          errors)
+    if len(reaches) != 2:
+        return {"pass": False, "errors": errors, "checks": checks}
+    before = [(p.Name, prop, getattr(p, prop))
+              for p in (doc.getObject("PatchA"), doc.getObject("PatchB"),
+                        doc.getObject("PatchC"))
+              for prop in ("USplit1", "VSplit1", "ULeader1", "VLeader1")]
+    # one seam's band is almost spent, the other's is wide: the common
+    # geometric-mean side no longer fits the short band
+    reaches[0]["corner_mm"] = 0.05
+    reaches[0]["max_mm"] = 0.01
+    reaches[1]["corner_mm"] = 0.8
+    homes, why = OPS.derived_cut_homes(reaches, strips)
+    checks.append("refusal: %r" % (why,))
+    check(homes is None, "a band too short for the common side was accepted",
+          errors)
+    check(why is not None and "can carry a cut side of at most 0.010000 mm"
+          in why, "the refusal did not name the short band: %r" % why, errors)
+    after = [(p.Name, prop, getattr(p, prop))
+             for p in (doc.getObject("PatchA"), doc.getObject("PatchB"),
+                       doc.getObject("PatchC"))
+             for prop in ("USplit1", "VSplit1", "ULeader1", "VLeader1")]
+    check(before == after, "the refusal wrote a band edge or leader", errors)
+    return {"pass": not errors, "errors": errors, "checks": checks}
+
+
 def test_all_four_demo_junctions_derive_from_their_own_seams(doc):
     """The demo's four junctions have structurally different seams: their
     band widths in mm must differ corner by corner and both cut sides must
