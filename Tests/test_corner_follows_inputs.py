@@ -34,8 +34,8 @@ TWO MODES, and the pair is what these tests measure:
 
 WHY IT CANNOT LOOP, measured rather than argued: each derivation's answer does
 not depend on the value it is about to write (the leader rule seeds from
-`ROLLING_LEADER`'s own parameter, never from the stored cut; the setback rule
-is a restore of two constants).  So the second pass of a document recompute
+the seams' own band widths in mm, never from the stored cut; the setback
+rule is a restore of the recorded pair).  So the second pass of a document recompute
 finds nothing to write -- `test_a_following_corner_settles` is that bar
 (#125): 3 x `doc.recompute()`, nothing Touched, and none of the corner's 36
 poles moving afterwards.

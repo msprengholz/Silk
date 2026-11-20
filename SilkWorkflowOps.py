@@ -1984,9 +1984,9 @@ def apply_corner_choices(strips, pin=None, leaders=None):
 # re-arms the chain, so each branch is a derivation whose answer does not
 # depend on the value it is about to write:
 #
-#   * the leader branch reads the BAND EDGES only (`equal_cut_legs` seeds the
-#     rule from `ROLLING_LEADER`'s own parameter, never from the stored cut),
-#     so its second run places the value the first one placed;
+#   * the leader branch reads the BAND EDGES only (`derived_cut_homes`
+#     equalises their own mm widths, never reading the stored cut), so its
+#     second run places the value the first one placed;
 #   * the setback branch is a RESTORE of the recorded pair, i.e. of two
 #     constants -- neither the band edge nor the cut it is about to write is a
 #     term in it.
