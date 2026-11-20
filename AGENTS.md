@@ -351,18 +351,39 @@ creates them anymore.
   shared patch keeps its piece TWICE (both corners' `beyond_both` is the same
   cell: 3368.106687 mm^2 on P_Front, 6692.122665 on P_Right twice) -- recorded,
   not deduped.
-  **The limit is ONE LEADER PER AXIS END, and it is the owner's decision.** A
-  corner's cut is a claim about a whole axis end of its member patch, so two
-  junctions that share one end cannot both be rolled there: J1 and J3 both
-  carry the tri on P_Top and want `P_Top.ULeader2` (0.643019 vs 0.641844 mm)
-  -- J3 falls back to the shipped corner. Worse, one corner's cut can break
-  another's ring: J2 then J4 -> J4 builds NOTHING (its ring reads the end J2
-  cut), and J3 then J4 -> J4 rolls while J3's net goes EMPTY. The demo's pair
-  matrix (both build orders, `Tests/two_rolled_corners.py` section 3) reads:
-  J1+J2, J1+J4, J2+J3, J4+J1, J4+J2, J3+J2 two rolling; J1+J3 shipped
-  fallback; J2+J4 and J3+J1 nothing; J3+J4 one empty. A LIST of cuts per axis
-  instead of one property per end is what lifting this takes, and it is not
-  implemented.
+  **The scalar slot holds one value, but the OWNED CUT LIST already holds one
+  per corner end (#131/#135).** A corner's cut is a claim about one axis END
+  of its member patch. `SilkMachinery.cut_entries` stores
+  `axis|end|owner|value|original`, and `corner_leader_pair(p, axis, owner)`
+  reads only that corner's value; `set_owned_cut` writes the scalar slot (the
+  FIRST owner's value, so old documents restore byte-identically) and the
+  owner's entry together. The old "one leader per axis end" limit was the
+  RAW SCALAR path: copying Demo 01's setup with bare `setattr` produced
+  `the ring's corner is OPEN on P_Top: its U axis carries a band edge of 0.5
+  and a leader cut of 0.24 (owned cuts: none)` for J1. Replaying the same
+  values through the owned cut list builds all four corners simultaneously
+  with his member placements P_Right[1], P_Right[0], P_Top[2], P_Bottom[2]
+  (`Tests/test_reference_corner_replay.py`, 3/3; `_inspect/reference_replay_verified.txt`).
+  The pair matrix in `Tests/two_rolled_corners.py` still pins the old raw
+  behaviour: it is a reading of that path, not a claim about owned cuts.
+- **His four corner setups can be replayed (#135).** `Tests/demo_reference_corner_setup.py`
+  reads the reference file read-only (projection floor 1e-6 mm; seam arc,
+  64 stations, 1.7e-6 relative) and prints each tri member's patch and exact
+  (u,v) points plus the quad's points on the other ring patches
+  (`_inspect/reference_corner_setup.txt`): J1/J2 P_Right, J3 P_Top,
+  J4 P_Bottom. `Tests/demo_reference_replay.py` writes his band edges on
+  both patches of a seam and asks the stage for his cut positions per seam;
+  where his member has only ONE measured side on an axis (J1/J2 P_Right U,
+  J3 P_Top V, J4 P_Bottom U) the missing side is EQUALISED to the measured
+  side in mm, and that fallback is printed rather than hidden. The full
+  deliverable (`Tests/demo_reference_deliverable.py`) is 33 sketches, 12
+  Edges, 5 Patches, 8 Blends, 4 rolling Corners: quad areas 1311.2 / 610.9 /
+  2237.5 / 1923.0 mm2 against his 1931.0 / 955.6 / 1982.5 / 1532.0
+  (-32.1 / -36.1 / +12.9 / +25.5 %), 36 poles and 2 faces each, 5 reserved
+  cells, 0/630 coincident poles, 0 folds, all oracle checks green,
+  `touched=[]`, reopen byte-identical. It is his SETUP, not his surfaces:
+  the missing sides are equalised and the construction remains ours.
+  File: `_inspect/demo01_replayed_reference.FCStd`.
 - **The corner FOLLOWS its inputs, in two modes (#132).** The owner:
   *"can i already update these and rolling corner will follow?  ideally, the
   patch setback would also recalculate (make it optional though) to make the

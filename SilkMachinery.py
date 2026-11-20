@@ -410,6 +410,21 @@ def add_cut_entry(p, letter, end, owner, value):
     setattr(p, CUT_LIST_PROP, ["|".join(e) for e in kept])
 
 
+def set_owned_cut(p, letter, end, value, owner):
+    """Write ONE corner's cut as both the scalar slot and an owned entry.
+
+    The scalar slot stays the FIRST owner's value, so a later owner on the
+    same axis end cannot move another corner's ring (#131); every owner still
+    reads its own value through `corner_leader_pair(p, letter, owner)`.
+    ``add_cut_entry`` runs first so it records the scalar's original value.
+    """
+    others = [e for e in cut_entries(p)
+              if e[0] == letter and e[1] == int(end) and e[2] != owner]
+    add_cut_entry(p, letter, int(end), owner, value)
+    if not others:
+        setattr(p, leader_cut_prop(letter, int(end)), float(value))
+
+
 def remove_cut_entries(p, owner):
     """Remove every extra cut owned by `owner`; return the entries gone."""
     raw = _cut_raw_entries(p)

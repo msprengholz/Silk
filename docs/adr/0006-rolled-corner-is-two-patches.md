@@ -110,6 +110,29 @@ give two 0.1 mm cut sides). The retired 1/16 + 1/4 default read 0.029978 quad
 / 0.032201 tri (ratio 1.074); that number is dated history, not today's
 placement.
 
+**Replaying the reference corner setup (#135).** The owner asked to copy
+Demo 01's corner setup rather than invent a rule.
+`Tests/demo_reference_corner_setup.py` projects his four triangular members
+and quads onto our patch surfaces (Part.Face.distToShape <= 1e-6 mm, then
+Surface.parameter; seam arcs from `SilkMachinery.seam_length`, 64 stations,
+1.7e-6 relative floor) and saves the raw table to
+`_inspect/reference_corner_setup.txt`. His tri members sit on P_Right (J1 at
+u=0.1, v=0.5/0.625; J2 at u=0.1, v=0.15/0.2), P_Top (J3 at v=0.8,
+u=0.5/0.24) and P_Bottom (J4 at u=0.8, v=0.24/0.5). On each member one of
+the two axes carries only the setback value; that missing side is EQUALISED
+to the measured side in mm, printed by the replay. The values are applied
+through the owner-tagged cut list (`SilkMachinery.set_owned_cut`, the corner
+stage's own `add_cut_entry`) -- raw scalar writes opened J1's ring on P_Top
+with a 0.5 band edge and a 0.24 leader it could not attribute. The full
+rebuild (`Tests/demo_reference_deliverable.py`) has 33 sketches, 12 Edges,
+5 Patches, 8 Blends and four rolling Corners with his member placements;
+quad areas 1311.2 / 610.9 / 2237.5 / 1923.0 mm2 against his 1931.0 / 955.6 /
+1982.5 / 1532.0. All corners have 36 poles, two faces, five reserved cells,
+0/630 coincident poles, 0 folds, green oracles and settle to 0 Touched; save
+and reopen are byte-identical. File:
+`_inspect/demo01_replayed_reference.FCStd`. This reproduces his SETUP, not
+his surfaces or tree.
+
 **The tri-to-quad percentage is a READING, not the acceptance.** Its minimum
 sits **below** the maintainer's 16 % floor on both fixtures (3.51 % on the
 demo, 7.5 % on the cube). That figure is published here so it cannot pass for
