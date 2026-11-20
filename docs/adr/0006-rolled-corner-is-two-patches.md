@@ -50,25 +50,30 @@ the one patch per corner where two different ring corners are correct,
 #127). The other two patches keep one cut per axis end, and **the third blend
 is not cut** -- it is one full-length side of the quad.
 
-**The automatic placement is the demo's own (#133, superseding the G5
-rule).** With nothing typed, a rolling corner places the **setback at 1/16 of
-the patch axis** and the **cut at 1/4 of the axis from the junction corner** --
-his two numbers, read off `Silk_Demo_01` (`Resources/Demo_files/`). Those are
-PARAMETERS, which is what his file stores; the G5 rule sized the cut from the
-third blend's band width and measured 494.7 / 410.9 / 297.3 / 600.1 mm^2 on
-the demo's four quads against his 1931.0 / 955.6 / 1982.5 / 1532.0. The rule
-is applied **only where the band edge is still Silk's untouched blend default
-(0.1 / 0.9)**: a width the user set is never overwritten (#64), and a saved
-corner keeps the cut it stores. The equal-sided rule (#129) remains available
-when asked for, and an explicit `leaders={seam: mm}` still wins: a length
-somebody typed is theirs.
+**The automatic placement is derived from the seam, not a number (#134,
+superseding both #133's 1/16 + 1/4 constants and the G5 third-band rule).**
+The owner: *"we need to determine the setback better in order to make the
+surfaces nicer. there can be no hard rules!"* With nothing typed a rolling
+corner writes NO band edge: the two band widths the ring already carries on
+the member patch, measured in mm on that patch's own seam curve by
+`seam_cut_reach`, ARE the setback. Both cut sides are placed at their
+geometric mean (`equal_cut_length`, #129's rule), so they are equal in mm even
+when the two seams have different lengths. A width the user set is never
+overwritten (#64), a saved corner keeps the cut it stores, and an explicit
+`leaders={seam: mm}` still wins: a length somebody typed is theirs. The demo's
+four derived placements read band widths 4.962/24.944, 4.866/15.130,
+3.265/12.474 and 19.445/10.110 mm, cut sides 11.126, 8.580, 6.381 and 14.021
+mm each, tri/quad ratios 0.2700 / 0.2230 / 0.2172 / 0.3110 and quad areas
+417.1 / 287.5 / 214.6 / 494.5 mm², beside his 1931.0 / 955.6 / 1982.5 /
+1532.0 as a READING (`Tests/corner_niceness.py` ->
+`_inspect/corner_niceness.txt`).
 
 **The cut is a LENGTH where the caller gives one (#129).** `create_corner_blend`
 / `create_rolling_corner_66` take the leader as **mm from the junction
 corner**, per seam (`leaders={seam: mm}`), and a leader that does not clear its
 setback is INERT and refused **by name**, atomically. What the *default* is
-changed in #133: the maintainer's 1/4 of the axis, not the equalised
-geometric mean (which stays reachable when asked for).
+changed in #134: with nothing typed the default is the derived equalised
+length, not a fraction of the axis.
 
 **Whose choice is what.** The owner's choice is **which corner carries the
 tri** (equivalently the patch it sits on, `MemberPatch` / `MemberCorner`),
@@ -96,10 +101,11 @@ setback 0.1): 0/630 coincident pairs, the member keeps its own 15/276, 0/0/0
 flips **without** `smooth_degenerate_cap` (the smoothing is a byte-identical
 no-op there: the built 6x6 IS the raw assembly), seam `k_gap`
 7.8e-15..1.6e-14 /mm exact and 0.0067..0.0093 sampled, the cut's C0
-1.4e-17..5.6e-17 mm, areas 0.046713 / 0.020609 mm2 (the shipped 0.1 setback;
-under the default 1/16 + 1/4 placement the same cube corner reads 0.029978
-quad / 0.032201 tri -- the tri now EXCEEDS the quad, ratio 1.074, because a
-smaller setback widens the tri's cell and narrows the quad's band).
+1.4e-17..5.6e-17 mm, areas 0.046713 / 0.020609 mm2: the shipped 0.1 setback
+and the derived default coincide on this symmetric fixture (two 0.1 mm bands
+give two 0.1 mm cut sides). The retired 1/16 + 1/4 default read 0.029978 quad
+/ 0.032201 tri (ratio 1.074); that number is dated history, not today's
+placement.
 
 **The tri-to-quad percentage is a READING, not the acceptance.** Its minimum
 sits **below** the maintainer's 16 % floor on both fixtures (3.51 % on the

@@ -205,7 +205,7 @@ def test_the_rolling_corner_builds_the_66_the_member_and_the_fill(doc):
         if abs(away - 0.25) > 1e-9:
             errors.append("%s: the band's cut starts %.4g from the junction, "
                           "not the leader 0.25" % (s.Name, away))
-        if 0.0625 not in split_pair(patch, "U") and 0.0625 not in split_pair(
+        if 0.1 not in split_pair(patch, "U") and 0.1 not in split_pair(
                 patch, "V"):
             errors.append("%s: the setback is gone from the member patch's "
                           "band edges" % patch.Name)
@@ -310,21 +310,22 @@ def test_the_default_corner_is_the_rolling_one(doc):
     checks.append("the cut: PatchA band edges %r %r, leader cuts %r %r"
                   % (split_pair(p, "U"), split_pair(p, "V"),
                      leader_pair(p, "U"), leader_pair(p, "V")))
-    # THE DEMO'S OWN PLACEMENT (#133): the corner cuts at 1/4 of the axis and
-    # puts the setback at 1/16, so on this 1 mm fixture the leader reads 0.25
-    # and the band edges 0.0625 / 0.9375.
+    # THE DERIVED PLACEMENT: each seam's own 0.1 band is the setback and the
+    # two cut sides are equalised at 0.1 mm, so on this 1 mm fixture the
+    # leaders read 0.2 and the band edges stay 0.1 / 0.9 (no constant is
+    # written: the band edges are the user's, #64).
     for letter in ("U", "V"):
-        near = [v for v in leader_pair(p, letter) if abs(v - 0.25) <= 1e-9]
+        near = [v for v in leader_pair(p, letter) if abs(v - 0.2) <= 1e-9]
         if not near:
-            errors.append("the default corner did not cut the member patch's "
-                          "%s leader (leader cuts %r)"
+            errors.append("the default corner did not derive its %s cut from "
+                          "the seam's 0.1 band (leader cuts %r)"
                           % (letter, leader_pair(p, letter)))
     for name in ("PatchA", "PatchB", "PatchC"):
         q = doc.getObject(name)
-        if abs(q.USplit1 - 0.0625) > 1e-12 \
-                or abs(q.VSplit1 - 0.0625) > 1e-12:
-            errors.append("the rolling construction did not place the 1/16 "
-                          "setback on %s (%r / %r)"
+        if abs(q.USplit1 - 0.1) > 1e-12 \
+                or abs(q.VSplit1 - 0.1) > 1e-12:
+            errors.append("the rolling construction moved the user's band "
+                          "edge on %s (%r / %r)"
                           % (name, split_pair(q, "U"), split_pair(q, "V")))
     # and it is NOT the shipped corner
     same = all((a - b).Length < 1e-12 for a, b in
@@ -440,23 +441,19 @@ def test_a_leader_outside_the_seam_is_refused_by_name(doc):
 
 
 
-def test_the_default_cut_is_a_quarter_of_the_axis(doc):
-    """#133: with nothing typed the corner cuts at 1/4 and sets back 1/16.
+def test_the_default_cut_is_derived_from_the_seams_own_band(doc):
+    """With nothing typed the corner consumes each seam's own band width:
+    setback 0.1 (unchanged), cut side 0.1 mm, leader 0.2 on this 1 mm cube.
 
-    The maintainer's own placement (ADR 0006), replacing the G5 rule that
-    sized the cut by the third blend's band width. Both are PARAMETERS of the
-    patch axis, which is what his file stores; on this 1 mm fixture they read
-    0.25 and 0.0625 exactly.
-
-    WOULD BE RED IF: the cut came from the third band again (the G5 rule), the
-    setback stayed at Silk's blend default 0.1, or widening the third blend
+    WOULD BE RED IF: the cut came from the third band again (the G5 rule), a
+    global 1/16 / 1/4 constant were written, or widening the third blend
     moved the cut.
     """
     import SilkWorkflowOps as OPS
     errors, checks = [], []
     _fixture(doc)
     strips = _strips(doc)
-    corner = create_corner_blend(*strips, name="Quarter")
+    corner = create_corner_blend(*strips, name="Derived")
     doc.recompute()
     doc.recompute()
     pin, _why = SC_MEMBER_PIN(strips)
@@ -467,12 +464,11 @@ def test_the_default_cut_is_a_quarter_of_the_axis(doc):
                   % (patch.Name, cuts, splits))
     for letter in ("U", "V"):
         values = [v for v in cuts[letter] if 0.0 < v < 1.0]
-        check(any(abs(v - 0.25) <= 1e-9 for v in values),
-              "the %s axis is not cut at 1/4 of the axis (%r)"
+        check(any(abs(v - 0.2) <= 1e-9 for v in values),
+              "the %s cut was not derived from the 0.1 band (%r)"
               % (letter, cuts[letter]), errors)
-        check(any(abs(v - 0.0625) <= 1e-9 for v in splits[letter])
-              or any(abs(v - 0.9375) <= 1e-9 for v in splits[letter]),
-              "the %s axis does not carry the 1/16 setback (%r)"
+        check(any(abs(v - 0.1) <= 1e-9 for v in splits[letter]),
+              "the %s band edge was rewritten (%r)"
               % (letter, splits[letter]), errors)
     # the third blend's band is NOT the lever any more
     from SilkBlend import side_and_end, band_edge_prop
@@ -494,7 +490,7 @@ def test_the_default_cut_is_a_quarter_of_the_axis(doc):
               and all(abs(a - b) <= 1e-9
                       for a, b in zip(before_v, after_v)),
               "the %s cut followed the third blend's band (%r -> %r) -- "
-              "the placement is 1/4 of the axis, not the band width"
+              "the placement reads this patch's own two seams"
               % (letter, cuts[letter], after[letter]), errors)
     return {"pass": not errors, "errors": errors, "checks": checks}
 
@@ -556,7 +552,7 @@ def test_the_g1_fill_gap_on_the_curved_demo_corner(doc):
 ALL_TESTS = [
     test_the_rolling_corner_builds_the_66_the_member_and_the_fill,
     test_the_default_corner_is_the_rolling_one,
-    test_the_default_cut_is_a_quarter_of_the_axis,
+    test_the_default_cut_is_derived_from_the_seams_own_band,
     test_the_g1_fill_gap_on_the_curved_demo_corner,
     test_the_leader_is_measured_from_the_junction_corner,
     test_a_leader_outside_the_seam_is_refused_by_name,

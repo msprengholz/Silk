@@ -225,47 +225,33 @@ def test_the_cut_follows_the_band_edges_in_auto_mode(doc):
                 "errors": ["the carrying patch reports %d cut side(s) after "
                            "the edit: %s" % (len(after), after)],
                 "checks": checks}
-    # #133: THE PLACEMENT IS 1/4 OF THE AXIS, so a band edge that moves does
-    # NOT move the cut -- the cut SIDE shrinks by exactly the setback's move.
-    # (Before #133 this test asked for equal sides, which was the G5 rule's
-    # own consequence, not the demo's placement.)
-    drifted = {k: (leaders_before[k], v) for k, v in leaders_after.items()
-               if abs(leaders_before[k] - v) > 1e-12}
-    checks.append("leader cuts before %r, after %r"
-                  % ({k: round(v, 9) for k, v in leaders_before.items()},
-                     {k: round(v, 9) for k, v in leaders_after.items()}))
-    if drifted:
-        errors.append("the cut moved with the band edge (%r) -- it is 1/4 of "
-                      "the axis, not a fixed side" % (drifted,))
-    delta = moved - cur
-    moved_axis = prop[0]
-    for seam, side in after.items():
-        if side is None:
+    # THE DERIVED PLACEMENT: the follower re-reads the two seams' own band
+    # widths in mm and puts both cut sides at their geometric mean. A band
+    # edge that moves therefore moves the cut -- and leaves the band alone.
+    widths = []
+    for sp in strips:
+        if patch not in (getattr(sp, "PatchA", None),
+                         getattr(sp, "PatchB", None)):
             continue
-        # only the edited axis's side changes, and by exactly the setback move
-        pass
-    checks.append("setback %s.%s moved %g -> %g (%.9f), sides %r"
-                  % (patch.Name, prop, cur, moved, delta,
+        reach, why = seam_cut_reach(sp, patch, ring=strips)
+        if reach is not None:
+            widths.append(reach["corner_mm"])
+    target = (widths[0] * widths[1]) ** 0.5 if len(widths) == 2 else None
+    checks.append("band widths %r mm -> target %.9f mm; sides %r"
+                  % ([round(w, 9) for w in widths], target or float('nan'),
                      {k: round(v, 9) for k, v in after.items()}))
-
-    # WHAT "FOLLOWS ITS INPUTS" MEANS UNDER #133: the cut is 1/4 of the axis,
-    # so the follower's job is to KEEP it there and to leave the user's
-    # setback alone. (The earlier version of this test also compared against a
-    # second build whose setback edit landed on a different patch, which made
-    # the comparison measure its own setup.)
+    check(len(widths) == 2,
+          "the member patch reports %d reaches" % len(widths), errors)
+    if target is not None:
+        check(all(v is not None and abs(v - target) <= 1e-6
+                  for v in after.values()),
+              "the cut sides are not the equalised band widths: %r"
+              % ({k: round(v, 9) for k, v in after.items()},), errors)
     split_after = SM_SPLIT(patch, prop[0])
-    lead_after = SM_LEADER(patch, prop[0])
-    checks.append("after the edit: %s=%r, leader=%r"
-                  % (prop, split_after, lead_after))
     check(any(abs(v - moved) <= 1e-12 for v in split_after),
           "the follower overwrote the user's setback %s=%g (%r)"
           % (prop, moved, split_after), errors)
-    check(any(abs(v - 0.25) <= 1e-9 for v in lead_after),
-          "the cut is not at 1/4 of the axis after the edit (%r)"
-          % (lead_after,), errors)
     return {"pass": not errors, "errors": errors, "checks": checks}
-
-
 # ---------------------------------------------------------------------------
 # 2. fixed: the stored cut is kept -- the behaviour of before this ticket
 # ---------------------------------------------------------------------------
@@ -693,11 +679,24 @@ def test_the_panel_flips_each_mode_and_the_corner_obeys(doc):
                       "sides %s" % (lead_now,
                                     {k: round(v, 9)
                                      for k, v in auto_sides.items()}))
-        # #133: the cut is 1/4 of the axis, so "auto" means the cut RETURNS to
-        # 1/4 -- not that the two sides are equal (that was the G5 rule).
-        if not any(abs(v - 0.25) <= 1e-9 for v in lead_now):
-            errors.append("with Cut: auto the cut is not back at 1/4 of the "
-                          "axis (%r)" % (lead_now,))
+        # "auto" means the cut is re-derived from the CURRENT band widths:
+        # both sides at their geometric mean (mm), not a typed fraction.
+        _ws = []
+        for sp in strips:
+            if patch not in (getattr(sp, "PatchA", None),
+                             getattr(sp, "PatchB", None)):
+                continue
+            _r, _e = seam_cut_reach(sp, patch, ring=strips)
+            if _r is not None:
+                _ws.append(_r["corner_mm"])
+        _target = (_ws[0] * _ws[1]) ** 0.5 if len(_ws) == 2 else None
+        _legs = [v for v in auto_sides.values() if v is not None]
+        checks.append("bands %r mm -> target %r, sides %r"
+                      % ([round(w, 9) for w in _ws], _target, _legs))
+        if _target is None or len(_legs) != 2 \
+                or any(abs(v - _target) > 1e-6 for v in _legs):
+            errors.append("with Cut: auto the cut was not re-derived from the "
+                          "bands (%r, target %r)" % (auto_sides, _target))
 
         # (3) setback: auto -- the band edge and the cut side are put back
         # where the corner placed them

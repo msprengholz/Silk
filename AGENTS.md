@@ -161,13 +161,10 @@ creates them anymore.
   `k_gap` 7.8e-15..1.6e-14 /mm exact and 0.0067..0.0093 sampled (floor 0), the
   cut C0 1.4e-17..5.6e-17 mm, the document settles (0 Touched, 0.0001 s a
   pass, poles move 0.000e+00), areas 66 0.046713 mm² / tri 0.020609 mm² under
-  the shipped 0.1 setback. **Under the DEFAULT 1/16 setback + 1/4 cut (ADR 0006's
-  automatic placement) the same cube corner reads quad 0.029978 / tri 0.032201
-  mm² — ratio 1.074, the TRI now the larger patch**, on every demo junction too
-  (1.048..1.434). A smaller setback widens the tri's cell [setback, cut] and
-  narrows the quad's band, so the ratio is a consequence of the placement, not
-  a defect of the assembly: 0/630 coincident poles, no collapsed 6x6 side, 0
-  normal-field flips. The
+  the shipped 0.1 setback, which is also what the DERIVED default places on
+  this cube (equal 0.1 mm bands => two 0.1 mm cut sides => 0.2 leader). The
+  retired 1/16 + 1/4 default read quad 0.029978 / tri 0.032201 mm² (ratio
+  1.074, the TRI bigger than the quad) and is kept only as dated history. The
   tri's interior reads **7.5 %..53.5 %** of the corner's extent from the 66
   (his 16..62 %): the minimum is BELOW his floor, so that percentage is a
   READING and the acceptance is non-overlap, one shared curve and no fold —
@@ -187,7 +184,7 @@ creates them anymore.
   name (`the rolling leader cannot cut the member's cell: its V axis carries
   no leader cut that clears the setback`), atomically, and the fallback is the
   shipped corner. That is also why the default leader is **0.25**, the video's
-  number, and not 1/16: at the default 0.1 band a 1/16 leader has nothing to
+  number, and not the band edge: at the default 0.1 band a 0.1 leader has nothing to
   cut. A 4-valent ring refuses the rolling construction outright — it has no
   third, uncut seam and no triangular remainder.
 - A `Surface::Filling` whose boundary lives on a Silk object needs that
@@ -213,18 +210,26 @@ creates them anymore.
   only; the SHIPPED construction still writes the band edge (that is where
   the construction of before #119 cut), and a corner that carries no recorded
   construction reads as shipped.
-- **The automatic placement is the DEMO'S OWN (#133): setback 1/16, cut 1/4.**
-  With nothing typed a rolling corner puts the band edge at **1/16** of the
-  patch axis and the cut at **1/4 of the axis from the junction corner** --
-  his numbers, read off `Resources/Demo_files/Silk_Demo_01.FCStd`. Both are
-  PARAMETERS (his file stores parameters). The G5 rule that sized the cut by
-  the third blend's band width is superseded: on the demo's four quads it read
-  494.7 / 410.9 / 297.3 / 600.1 mm^2 against his 1931.0 / 955.6 / 1982.5 /
-  1532.0. The 1/16 is written **only where the band edge is still Silk's
-  untouched 0.1 / 0.9** (a width the user set stays his, #64); a saved corner
-  keeps its stored cut; an explicit `leaders={seam: mm}` still wins; the
-  equal-sided #129 rule stays available when asked for. Measured comparison:
-  `Tests/demo_corner_match.py` -> `_inspect/demo_corner_match.txt`.
+- **The automatic placement is DERIVED, not a number (#134).** The owner:
+  *"we need to determine the setback better in order to make the surfaces
+  nicer. there can be no hard rules!"* With nothing typed a rolling corner
+  writes **no band edge at all**: the two band widths the ring already put on
+  the member patch (`seam_cut_reach()["corner_mm"]`, in mm on that patch's own
+  seam curve) ARE the setback. Both cut sides are then placed at their
+  **geometric mean** (`equal_cut_length`, the #129 rule), so they come out
+  equal in mm even when the two seams have different lengths. The 1/16 + 1/4
+  constants of #133 are retired, as is the G5 third-band rule; a saved corner
+  keeps its stored cut and an explicit `leaders={seam: mm}` still wins.
+  Pinned by `Tests/test_derived_corner_placement.py` (RED before the change:
+  0.1 -> 0.0625 setback, 11.262 / 41.703 mm sides on J1 against a 6.914 mm
+  geometric mean). The demo's four derived placements, with band widths (mm),
+  equalised cut sides (mm), tri/quad ratio and quad area (mm²): J1 4.962 /
+  24.944 -> 11.126 / 11.126, 0.2700, 417.1; J2 4.866 / 15.130 -> 8.580 /
+  8.580, 0.2230, 287.5; J3 3.265 / 12.474 -> 6.381 / 6.381, 0.2172, 214.6;
+  J4 19.445 / 10.110 -> 14.021 / 14.021, 0.3110, 494.5. His quad areas
+  1931.0 / 955.6 / 1982.5 / 1532.0 are a **reading**, not a bar. Raw table:
+  `Tests/corner_niceness.py` -> `_inspect/corner_niceness.txt`; the earlier
+  constant-rule sweep is kept at `_inspect/demo_setback_sweep.txt`.
 - **A corner hides its whole JUNCTION-END BLOCK, not one cell.**
   `SilkMachinery.corner_cell_block` names the cells from the corner cell to
   the patch edge on BOTH axes; the corner's own cuts subdivide the square it

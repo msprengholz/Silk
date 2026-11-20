@@ -293,8 +293,9 @@ CORNER_LEADER_TIP = (
     "seam.\n"
     "At 'equal' (the default) the stage's EQUAL-SIDING rule places the cut "
     "instead: the two cuts that bound the triangular member are made the "
-    "same length in mm, which is what makes the triangle roughly "
-    "equal-sided. Type a number to place this seam's cut yourself; after "
+    "same length in mm -- the geometric mean of the two seams' OWN band "
+    "widths (no global setback or cut fraction). Type a number to place "
+    "this seam's cut yourself; after "
     "the corner exists the editor shows the length each seam carries.")
 
 
@@ -317,8 +318,9 @@ CORNER_LEADER_TIP = (
 CORNER_FOLLOW_TIP_AUTO_LEADER = (
     "The cut follows the band edges: when a band edge of the ring changes, "
     "the corner re-derives where the band is cut back, exactly as a fresh "
-    "build with no length typed would (the equalising rule, so the "
-    "triangle's two sides come out the same length at the NEW geometry).")
+    "build with no length typed would (the seams' own band widths are "
+    "equalised in mm, so the triangle's two sides come out the same "
+    "length at the NEW geometry).")
 CORNER_FOLLOW_TIP_FIXED_LEADER = (
     "The stored cut is kept when the band edges move -- the behaviour before "
     "the corner could follow its inputs. A build or an Apply that TYPES a "

@@ -1433,67 +1433,45 @@ def seam_cut_at_leg(strip, patch, leg_mm, tol=None, ring=None):
             None)
 
 
-# THE DEMO'S OWN PROPORTIONS (ADR 0006). A rolling corner's automatic
-# placement is the maintainer's: the SETBACK is 1/16 of the patch axis and the
-# CUT sits at 1/4 of the seam from the junction corner. Our blend default
-# (0.1 parameter at the 0 end) is a *parameter*, which on the demo's
-# anisotropic patches lands at 4.9..24.9 mm -- 1.6x to 4x his setback -- and
-# the G5 rule sized the cut by the third blend's band width, which put the
-# quad in a thin strip beside the corner instead of across it. Measured on
-# `Silk_Demo_01.FCStd`: his four corner quads are 1931.0 / 955.6 / 1982.5 /
-# 1532.0 mm^2; with the old defaults ours were 494.7 / 410.9 / 297.3 /
-# 600.1 mm^2, and with these numbers 1090.8 / 715.8 / 800.8 / 238.9 mm^2.
-ROLLING_SETBACK = 1.0 / 16.0
-ROLLING_CUT_FRACTION = 0.25
-# Silk's untouched blend default per end: the corner may replace THESE, and
-# nothing else (#64: a width the user set is his).
-BLEND_DEFAULT_SETBACK = {0: 0.1, 1: 0.9}
+# THE PLACEMENT IS DERIVED, NOT A NUMBER (the owner, 2026-11-23: *"we need
+# to determine the setback better in order to make the surfaces nicer. there
+# can be no hard rules!"*). A corner consumes the band width each of its two
+# seams ALREADY carries on the member patch (`reach["corner_mm"]`, measured in
+# mm on that patch's own seam curve); it writes no setback at all, because a
+# band edge is the user's (#64). The two cut sides that bound the triangle
+# are then equalised to the GEOMETRIC MEAN of those two widths (#129's
+# `equal_cut_length`), so a seam twice as long does not hand its triangle
+# twice the side. The retired 1/16 + 1/4 constants measured 11.26 / 41.70 mm
+# on the demo's J1 against band widths of 3.00 / 15.92 mm; the derived rule
+# places both sides at 6.914 mm.
 
 
-def default_cut_home(reach):
-    """`(property, parameter)` -- where the corner's own default cuts.
+def derived_cut_homes(reaches, strips, tol=None):
+    """`({seam Name: (property, parameter, leg_mm)}, None)` or `(None, why)`.
 
-    THE CUT SITS AT 1/4 OF THE PATCH AXIS from the junction corner: the
-    maintainer's own `0.25` (ADR 0006), a PARAMETER, like the 1/16 setback it
-    pairs with. Expressing it as a length (mm) was #129's unit and it does not
-    reproduce this construction: on the demo it moved every cut and shrank the
-    quad to ~45 % of his. The pair (1/16, 1/4) is the demo's own cell.
+    One figure for the whole corner: the geometric mean (mm) of the two
+    members' own seam band widths. That figure is placed on BOTH seams by
+    `seam_cut_at_leg`, so the read-back length is the same walk on the same
+    curve and the two sides are equal to the length instrument's floor.
+    Refused by name and atomically when the band a seam carries is too short
+    to hold it -- never clamped to a number.
     """
-    from SilkMachinery import leader_cut_prop
-    value = (ROLLING_CUT_FRACTION if reach["corner_end"] == 0
-             else 1.0 - ROLLING_CUT_FRACTION)
-    return leader_cut_prop(reach["along"], reach["corner_end"]), value
-
-
-def default_setback_writes(strips, tol=None):
-    """`[(patch, prop, cur, want)]` -- 1/16 at each ring seam's junction end,
-    only where the band edge is still Silk's untouched blend default."""
-    from SilkBlend import side_and_end, band_edge_prop
-    from SilkMachinery import band_extent, seam_axis_roles
-    out = []
-    for s in strips:
-        for p in (getattr(s, "PatchA", None), getattr(s, "PatchB", None)):
-            if p is None:
-                continue
-            e, ss = side_and_end(s, p, tol)
-            if not e:
-                continue
-            end, _why = seam_junction_end(s, p, strips, tol)
-            if end is None:
-                continue
-            ext = band_extent(p, e, ss, end)
-            if ext[0] is None:
-                continue
-            along, _band = seam_axis_roles(e)
-            prop = band_edge_prop(along, ext[2])
-            default = BLEND_DEFAULT_SETBACK[ext[2]]
-            cur = float(getattr(p, prop, default) or default)
-            if abs(cur - default) > 1e-12:
-                continue                 # the user's own width
-            want = (ROLLING_SETBACK if ext[2] == 0
-                    else 1.0 - ROLLING_SETBACK)
-            out.append((p, prop, cur, want))
-    return out
+    if not reaches:
+        return None, "the ring carries no seam of the member patch"
+    target = equal_cut_length([r["corner_mm"] for r in reaches])
+    homes = {}
+    for r in reaches:
+        if target > r["max_mm"] + CUT_LENGTH_TOL:
+            return None, (
+                "seam %s's band can carry a cut side of at most %.6f mm; the "
+                "two band widths ask for %.6f mm"
+                % (r["seam"].Name, r["max_mm"], target))
+        prop, value, why = seam_cut_at_leg(r["seam"], r["patch"], target,
+                                          tol, strips)
+        if prop is None:
+            return None, ("seam %s: %s" % (r["seam"].Name, why))
+        homes[r["seam"].Name] = (prop, value, target)
+    return homes, None
 
 
 def equal_cut_length(cuts):
@@ -1579,23 +1557,16 @@ def third_band_widths(strips, patch, tol=None):
             "target": equal_cut_length(widths)}, None
 
 def equal_cut_legs(reaches, patch, strips):
-    """`(target, leg, None)` -- the cut side the EQUALISING rule places on
-    the seams that carry no leader of their own.
+    """`(target, leg, None)` -- the RETIRED G5 cut side: the width of the
+    THIRD, uncut blend of a 3-valent ring (`third_band_widths`, the geometric
+    mean of its two patch-side widths in mm), capped to what the shortest band
+    can carry.
 
-    `target` is the width of the THIRD, uncut blend of this 3-valent ring
-    (`third_band_widths`: the geometric mean of its two patch-side widths in
-    mm); `leg` is that figure capped to the longest side the SHORTEST band can
-    carry, which is what actually gets placed. One figure for the whole
-    corner, so the cuts beside the triangular member are the same length and
-    the triangle's depth matches the opposite blend's width.
-
-    Shared by the two places that place a cut with no length asked for -- the
-    corner stage's own build (`create_rolling_corner_66`) and the panel's
-    Apply (`apply_corner_choices`) -- so a corner BUILT with no leader and a
-    corner whose member has just been moved onto seams nothing has cut yet
-    come out the same way. No band edge is changed to make the match; a user
-    width stays the user's (#64). Returns `(None, None, why)` when a seam
-    cannot be measured."""
+    Kept as a reader for callers that still ask for it; the automatic path
+    since #134 uses `derived_cut_homes` instead, which equalises the member
+    patch's OWN two seam band widths (no hard number and no dependency on the
+    third blend). No band edge is written here; a user width stays the user's.
+    Returns `(None, None, why)` when a seam cannot be measured."""
     info, why = third_band_widths(strips, patch)
     if info is None:
         return None, None, why
@@ -1695,13 +1666,12 @@ def seam_leader(strip, patch, tol=None, construction=None, ring=None,
 
 
 def seam_default_leader(strip, patch, tol=None, ring=None):
-    """`(mm, None)` or `(None, why)`: the length from the junction corner
-    the corner stage's own parameter DEFAULT (`ROLLING_LEADER`) lands at on
-    this seam.
+    """`(mm, None)` or `(None, why)`: the length the LEGACY `ROLLING_LEADER`
+    parameter (0.25 of the axis) lands at on this seam.
 
-    That is the seed a panel shows for a seam nothing has cut yet, and the
-    size the equalising rule keeps (`equal_cut_length`): the corner's size
-    before #129, expressed in the unit #129 places in."""
+    Kept for the instruments that calibrate that parameter's read-back; since
+    #134 the corner stage's own default is the DERIVED, equalised cut in
+    `derived_cut_homes`, not this number."""
     from SilkMachinery import leader_cut_prop, seam_length
     reach, why = seam_cut_reach(strip, patch, tol, ring)
     if reach is None:
@@ -1886,21 +1856,21 @@ def apply_corner_choices(strips, pin=None, leaders=None):
                 if reach is None:
                     return None, ("seam %s: %s" % (s.Name, why))
                 reaches.append(reach)
+            homes, why = derived_cut_homes(reaches, ordered)
+            if homes is None:
+                return None, why
             for reach in reaches:
                 if reach["seam"].Name in named:
                     continue
-                prop, write = default_cut_home(reach)
-                if prop is None:
-                    return None, ("seam %s: %s" % (reach["seam"].Name, why))
+                prop, write, leg = homes[reach["seam"].Name]
                 if abs(float(getattr(member_patch, prop, 0.0) or 0.0)
                        - write) < 1e-12:
                     continue
                 plan.append((member_patch, prop, write))
                 # the length from the junction corner the cut lands at, for
-                # the message below: 1/4 of the axis under the new placement
+                # the message below: the seam's own band width plus the leg
                 seam_writes.append((reach["seam"].Name,
-                                    ROLLING_CUT_FRACTION
-                                    * reach["max_corner_mm"]))
+                                    reach["corner_mm"] + leg))
         # The same condition the corner stage refuses on, decided BEFORE the
         # first write: a leader that does not cut the member's cell back on
         # both axes leaves a 6x6 with coincident poles (or a refusal deeper
@@ -2218,10 +2188,10 @@ def _follow_leader_plan(strips, member_patch, owner=None):
     """`([(patch, prop, before, after)], None)` for `LeaderMode = "auto"`,
     or `(None, why)` when the rule cannot be placed.
 
-    THE RULE: `equal_cut_legs`, the exact placement a fresh build with no
-    length asked for makes -- the two cuts that bound the triangular member
-    come out the same absolute length (the owner's #129 rule), at whatever
-    the band edges are NOW."""
+    THE RULE: the exact placement a fresh build with no length asked for
+    makes -- the two cuts that bound the triangular member come out the same
+    absolute length, the geometric mean of the two seams' own band widths
+    (the owner's #129 rule), at whatever the band edges are NOW."""
     reaches = []
     for s in strips:
         if member_patch not in (getattr(s, "PatchA", None),
@@ -2233,11 +2203,12 @@ def _follow_leader_plan(strips, member_patch, owner=None):
         reaches.append(reach)
     if not reaches:
         return None, ("the ring carries no seam of %s" % member_patch.Name)
+    homes, why = derived_cut_homes(reaches, strips)
+    if homes is None:
+        return None, why
     plan = []
     for reach in reaches:
-        prop, value = default_cut_home(reach)
-        if prop is None:
-            return None, why
+        prop, value, _leg = homes[reach["seam"].Name]
         cur = _own_value(member_patch, prop, owner)
         if abs(cur - value) < 1e-12:
             continue
@@ -2732,23 +2703,9 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
     #    leaves the user's model exactly as it was -- the corner stage
     #    falls back to the shipped construction, and that fallback must
     #    be the shipped corner, byte for byte.
-    # THE SETBACK FIRST: the reach of every cut is measured FROM it, so the
-    # demo's 1/16 has to be in place before a length is placed. Only edges
-    # still holding Silk's blend default are touched.
-    setbacks = default_setback_writes(strips)
-    if setbacks:
-        from SilkMachinery import follow_deferred
-        with follow_deferred():
-            for p, prop, cur, want in setbacks:
-                setattr(p, prop, want)
-            if FreeCAD.ActiveDocument is not None:
-                FreeCAD.ActiveDocument.recompute()
-                FreeCAD.ActiveDocument.recompute()
-        for p, prop, cur, want in setbacks:
-            FreeCAD.Console.PrintMessage(
-                "Silk: the rolling corner places the setback %s.%s %g -> %g "
-                "(1/16 of the axis, the demo's own proportion)\n"
-                % (p.Name, prop, cur, want))
+    # NO SETBACK IS WRITTEN. The band edges the ring already carries ARE the
+    # setback: they are the seam's own width in mm, measured below. A band
+    # edge is the user's (#64), and there is no constant left to place.
     reaches = []
     for s in roll:
         if patch not in (getattr(s, "PatchA", None),
@@ -2787,12 +2744,21 @@ def create_rolling_corner_66(strips, patch, leader=None, seams=None,
                 % (asked, reach["seam"].Name, reach["corner_mm"]))
             return None
         asks.append((reach, leg))
-    # a seam nobody asked a length for is cut at the corner's own 1/4 of the
-    # patch axis (the demo's placement), not at a length
+    # A seam nobody asked a length for takes the DERIVED cut: both sides at
+    # the geometric mean of the two seams' own band widths (mm).
+    defaulted = [r for r, leg in asks if leg is None]
+    homes = {}
+    if defaulted:
+        homes, why = derived_cut_homes(defaulted, strips)
+        if homes is None:
+            FreeCAD.Console.PrintError(
+                "Silk: the rolling leader cannot be placed: %s. The rolling "
+                "construction was not built.\n" % why)
+            return None
     planned = []
     for reach, leg in asks:
         if leg is None:
-            prop, value = default_cut_home(reach)
+            prop, value, _target = homes[reach["seam"].Name]
         else:
             prop, value, why = seam_cut_at_leg(reach["seam"], patch, leg,
                                                ring=strips)
