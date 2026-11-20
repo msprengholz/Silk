@@ -65,7 +65,10 @@ four derived placements read band widths 4.962/24.944, 4.866/15.130,
 3.265/12.474 and 19.445/10.110 mm, cut sides 11.126, 8.580, 6.381 and 14.021
 mm each, tri/quad ratios 0.2700 / 0.2230 / 0.2172 / 0.3110 and quad areas
 417.1 / 287.5 / 214.6 / 494.5 mm², beside his 1931.0 / 955.6 / 1982.5 /
-1532.0 as a READING (`Tests/corner_niceness.py` ->
+1532.0 as a READING. The same six-side instrument reads the spread before
+and after the derivation (the retired rule rebuilt in a scratch document):
+J1 40.579 -> 18.424 mm, J2 25.013 -> 13.639, J3 21.507 -> 13.483,
+J4 28.647 -> 13.849 (`Tests/corner_niceness.py` ->
 `_inspect/corner_niceness.txt`).
 
 **The cut is a LENGTH where the caller gives one (#129).** `create_corner_blend`

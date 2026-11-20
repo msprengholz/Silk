@@ -38,6 +38,82 @@ def _faces(corner):
     return quad, tri
 
 
+def _retired_spread(OPS, SM, SC, FM):
+    """Six-side spread under the RETIRED 1/16 + 1/4 rule, per junction.
+
+    The old rule wrote a 1/16 band edge on every untouched end and cut at
+    0.25 of the axis (in parameter, hence the seam's arc length at 0.25 or
+    0.75). Rebuilt in a scratch document with the same pin, then read with
+    exactly the same Part-edge instrument as the derived corner."""
+    import FreeCAD
+    doc = FreeCAD.newDocument("Retired")
+    FreeCAD.setActiveDocument(doc.Name)
+    result = {}
+    try:
+        pins = {}
+        derived = FreeCAD.newDocument("Pins")
+        FreeCAD.setActiveDocument(derived.Name)
+        FM.build(derived)
+        derived.recompute()
+        for c in [o for o in derived.Objects
+                  if getattr(o, "object_type", "") == "CornerBlend"]:
+            pin = SC.recorded_member_pin(c)
+            pins[c.Name] = ((pin[0].Name, int(pin[1])) if pin else None)
+        FreeCAD.closeDocument(derived.Name)
+        FreeCAD.setActiveDocument(doc.Name)
+        FM.build(doc, corners=False)
+        for o in doc.Objects:
+            if getattr(o, "object_type", "") != "Patch":
+                continue
+            for prop in ("USplit1", "VSplit1"):
+                if abs(float(getattr(o, prop)) - 0.1) <= 1e-9:
+                    setattr(o, prop, 1.0 / 16.0)
+            for prop in ("USplit2", "VSplit2"):
+                if abs(float(getattr(o, prop)) - 0.9) <= 1e-9:
+                    setattr(o, prop, 15.0 / 16.0)
+        doc.recompute()
+        doc.recompute()
+        for name, ring, _pt in FM.CORNERS:
+            strips = [doc.getObject(b) for b in ring]
+            raw = pins.get(name)
+            pin = ((doc.getObject(raw[0]), raw[1]) if raw else None)
+            patch = pin[0] if pin else None
+            leaders = {}
+            if patch is not None:
+                for sp in strips:
+                    r, why = OPS.seam_cut_reach(sp, patch, ring=strips)
+                    if r is None:
+                        continue
+                    old_t = 0.25 if r["corner_end"] == 0 else 0.75
+                    length = SM.seam_length(patch, r["side"], r["t_corner"],
+                                            old_t)
+                    if length is not None:
+                        leaders[sp.Name] = length
+            corner = OPS.create_corner_blend(strips, name=name, pin=pin,
+                                             leaders=leaders or None)
+            doc.recompute()
+            doc.recompute()
+            if corner is None:
+                continue
+            quad, tri = _faces(corner)
+            if quad is None or tri is None:
+                continue
+            shared = {tuple(sorted(tuple(round(v, 4) for v in vt.Point)
+                                   for vt in e.Vertexes if vt is not None))
+                      for e in quad.Edges}
+            sides = [e.Length for e in quad.Edges]
+            sides += [e.Length for e in tri.Edges
+                      if e.Length > TOL
+                      and tuple(sorted(tuple(round(v, 4) for v in vt.Point)
+                                       for vt in e.Vertexes if vt is not None))
+                      not in shared]
+            result[name] = sides
+    finally:
+        if doc.Name in FreeCAD.listDocuments():
+            FreeCAD.closeDocument(doc.Name)
+    return result
+
+
 def measure():
     import FreeCAD
     for m in list(sys.modules.keys()):
@@ -52,6 +128,9 @@ def measure():
     import SilkCorner as SC
     from Tests import demo01_fixture_model as FM
 
+    # BEFORE: the retired 1/16 + 1/4 rule, rebuilt in its own document so the
+    # derived reading below is not disturbed. Same six-side instrument.
+    before_spread = _retired_spread(OPS, SM, SC, FM)
     out = []
     emit = out.append
     doc = FreeCAD.newDocument("Niceness")
@@ -112,9 +191,14 @@ def measure():
              % [round(v, 4) for v in q_sides])
         emit("  tri free sides (mm, shared excluded) %r"
              % [round(v, 4) for v in t_sides])
-        emit("  side spread (six, mm)          %.6f .. %.6f = %.6f"
+        emit("  side spread (six, mm)          %.6f .. %.6f = %.6f  [after]"
              % (min(all_sides), max(all_sides),
                 max(all_sides) - min(all_sides)))
+        before = before_spread.get(c.Name)
+        if before is not None:
+            emit("  side spread BEFORE (six, mm)  %.6f .. %.6f = %.6f  "
+                 "[retired 1/16 + 1/4]"
+                 % (min(before), max(before), max(before) - min(before)))
         emit("  quad / tri areas (mm^2)        %.4f / %.4f  ratio %.6f"
              % (quad.Area, tri.Area, tri.Area / quad.Area))
         emit("  reference quad / tri/quad      %.1f / %.4f  (delta %+.1f %%)"

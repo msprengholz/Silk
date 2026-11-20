@@ -9,10 +9,10 @@ RUN INSIDE FREECAD (never spawns one):
 
     flock /tmp/silk_rpc.lock -c "python3 Tests/demo_corner_match.py"
 
-Exit code 0 when every corner is within its share of the reference, 1 otherwise.
-The instrument asserts nothing about surfaces or tree parity: the reference's
-corners are `CubicSurface_66` objects and ours are `CornerBlend`s -- this is
-construction and proportion, not bytes.
+#134 retired the +-25 % area bar: the table is a READING (his patches span a
+different region), not a pass/fail. The instrument asserts nothing about
+surfaces or tree parity: the reference's corners are `CubicSurface_66`
+objects and ours are `CornerBlend`s -- construction and proportion, not bytes.
 """
 
 import os
@@ -51,7 +51,7 @@ import demo_corner_match as M
 _r = M.measure()
 _ok, _text = (_r if isinstance(_r, tuple) else (bool(_r == 0), str(_r)))
 print(_text)
-print("VERDICT:", "GREEN" if _ok else "OUT-OF-TOLERANCE")
+print("VERDICT: READING (area bar retired in #134; no pass/fail)")
 '''
 
 

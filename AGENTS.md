@@ -227,8 +227,13 @@ creates them anymore.
   24.944 -> 11.126 / 11.126, 0.2700, 417.1; J2 4.866 / 15.130 -> 8.580 /
   8.580, 0.2230, 287.5; J3 3.265 / 12.474 -> 6.381 / 6.381, 0.2172, 214.6;
   J4 19.445 / 10.110 -> 14.021 / 14.021, 0.3110, 494.5. His quad areas
-  1931.0 / 955.6 / 1982.5 / 1532.0 are a **reading**, not a bar. Raw table:
-  `Tests/corner_niceness.py` -> `_inspect/corner_niceness.txt`; the earlier
+  1931.0 / 955.6 / 1982.5 / 1532.0 are a **reading**, not a bar. The same
+  instrument reads the SIX-side spread before/after the derivation, rebuilt
+  on the retired 1/16 + 1/4 rule in a scratch document: J1 40.579 -> 18.424
+  mm, J2 25.013 -> 13.639, J3 21.507 -> 13.483, J4 28.647 -> 13.849 -- the
+  evenness reading that chose the placement. Raw table:
+  `Tests/corner_niceness.py` -> `_inspect/corner_niceness.txt`; his areas and
+  extents beside ours are in `_inspect/demo_corner_match.txt`, and the earlier
   constant-rule sweep is kept at `_inspect/demo_setback_sweep.txt`.
 - **A corner hides its whole JUNCTION-END BLOCK, not one cell.**
   `SilkMachinery.corner_cell_block` names the cells from the corner cell to
