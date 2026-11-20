@@ -69,6 +69,9 @@ def measure():
     def sides(face):
         return sorted(round(e.Length, 1) for e in face.Edges)
 
+    emit("instrument: Part.Shape.Area, BoundBox extents and Edge.Length on "
+         "the two open FCStd documents (mm / mm2); no surface or tree parity "
+         "is asserted; #134 retired the area bar -- READING only")
     emit("HIS corner fills (Resources/Demo_files/Silk_Demo_01.FCStd):")
     his = None
     path = os.path.join(REPO, "Resources", "Demo_files", "Silk_Demo_01.FCStd")
